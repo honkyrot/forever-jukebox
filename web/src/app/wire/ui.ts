@@ -149,6 +149,8 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.maxProbInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.thresholdInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.rampInput.addEventListener("change", tuningHandlers.handleTuningApply);
+
+  // elements.thresholdInput.addEventListener("input", tuningHandlers.handleTuningApply);
   // checkboxes
   elements.justLongInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.justBackwardsInput.addEventListener("change", tuningHandlers.handleTuningApply);
@@ -156,6 +158,8 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.removeSeqInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.bpmBarToggle.addEventListener("change", playbackHandlers.bpmBarToggler);
   elements.volumeButton.addEventListener("click", playbackHandlers.handleVolumeButtonClick);
+  elements.beatGradientToggle.addEventListener("change", playbackHandlers.handleBeatGradientToggle);
+  elements.beatJumpGradientToggle.addEventListener("change", playbackHandlers.handleBeatJumpGradientToggle);
   //
   elements.tuningReset.addEventListener("click", tuningHandlers.handleTuningReset);
   elements.playButton.addEventListener("click", playbackHandlers.handlePlayClick);

@@ -2,9 +2,12 @@
 This fork was created to add a couple of features I wanted, eg. extra information
 
 Changes:
-- Some adjustments to UI elements (personal preference!!!).
+- Some adjustments to UI elements (personal preference).
 - Added a "Branch Chance" display to show the current probability of branching at the next beat.
 - bpm visualizer
+- random stuff i liked
+
+have fun
 
 # The Forever Jukebox
 

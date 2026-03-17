@@ -345,6 +345,14 @@ class CanvasViz {
       }
       const geometry = this.getEdgeGeometry(edge);
       if (geometry?.bend && geometry.control) {
+        // use gradient between two nodes if option is checked
+        if (localStorage.getItem("beatJumpGradient") === "true") {
+          var gradient = this.baseCtx.createLinearGradient(from.x, from.y, to.x, to.y);
+          gradient.addColorStop(0, `hsla(${(edge.src.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
+          gradient.addColorStop(1, `hsla(${(edge.dest.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
+          this.baseCtx.strokeStyle = gradient;
+        }
+
         this.baseCtx.beginPath();
         this.baseCtx.moveTo(from.x, from.y);
         this.baseCtx.quadraticCurveTo(
@@ -374,6 +382,11 @@ class CanvasViz {
 
     this.baseCtx.fillStyle = this.theme.beatFill;
     for (let i = 0; i < this.positions.length; i += 1) {
+      // use gradient if option is checked
+      if (localStorage.getItem("beatGradient") === "true") {
+        this.baseCtx.fillStyle = `hsl(${(i / this.positions.length) * 360}, 100%, 65%)`;
+      }
+
       const p = this.positions[i];
       this.baseCtx.beginPath();
       this.baseCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
@@ -402,7 +415,13 @@ class CanvasViz {
     }
     const current = this.positions[this.currentIndex];
     if (current) {
-      this.overlayCtx.fillStyle = this.theme.beatHighlight;
+      // use gradient if option is checked
+      if (localStorage.getItem("beatGradient") === "true") {
+        var progress = this.currentIndex / this.positions.length;
+        this.overlayCtx.fillStyle = `hsl(${progress * 360}, 100%, 70%)`;
+      } else {
+        this.overlayCtx.fillStyle = this.theme.beatHighlight;
+      }
       this.overlayCtx.beginPath();
       this.overlayCtx.arc(current.x, current.y, 10, 0, Math.PI * 2);
       this.overlayCtx.fill();

@@ -231,13 +231,6 @@
                 >delete</span
               >
             </button>
-            <button id="setting" class="settings-toggle" aria-label="Settings">
-              <span
-                class="material-symbols-outlined settings-icon"
-                aria-hidden="true"
-                >settings</span
-              >
-            </button>
             <button id="tuning" class="tune-toggle" aria-label="Tune">
               <span
                 class="material-symbols-outlined tune-icon"
@@ -352,9 +345,6 @@
                     <span id="viz-branch-chance-divider" class="viz-divider">·</span>
                     <span id="viz-branch-chance-label">Branch Chance:</span>
                     <span id="viz-branch-chance">0%</span>
-                    <span id="viz-beats-divider" class="viz-divider">·</span>
-                    <span id="viz-beats-label">Total Beats:</span>
-                    <span id="beats-played">0</span>
                     <span
                       id="bring-home-fullscreen-label"
                       class="bring-home-fullscreen-note is-hidden"
@@ -532,7 +522,7 @@
                 id="threshold"
                 type="range"
                 min="2"
-                max="80"
+                max="100"
                 step="1"
                 value="2"
               />
@@ -617,6 +607,11 @@
                 <label>
                   <input id="bpm-bar-toggle" type="checkbox" checked/> Show BPM bar
                 </label>
+                <label>
+                  <input id="beat-gradient" type="checkbox"/> Use gradient on beats
+                </label>
+                <label>
+                  <input id="beat-jump-gradient" type="checkbox"/> Use gradient on jump lines
               </div>
             </div>
           </div>

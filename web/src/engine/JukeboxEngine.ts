@@ -16,7 +16,7 @@ import {
 
 const DEFAULT_CONFIG: JukeboxConfig = {
   maxBranches: 4,
-  maxBranchThreshold: 80,
+  maxBranchThreshold: 100,
   currentThreshold: 0,
   justBackwards: false,
   justLongBranches: false,

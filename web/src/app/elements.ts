@@ -423,6 +423,14 @@ export function getElements() {
     document.querySelector<HTMLDivElement>("#volume-control-panel"),
     "#volume-control-panel"
   );
+  const beatGradientToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#beat-gradient"),
+    "#beat-gradient"
+  );
+  const beatJumpGradientToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#beat-jump-gradient"),
+    "#beat-jump-gradient"
+  );
   //
   return {
     listenTimeEl,
@@ -529,6 +537,8 @@ export function getElements() {
     bpmBarToggle,
     volumeButton,
     volumeControlPanel,
+    beatGradientToggle,
+    beatJumpGradientToggle,
     //
   };
 }

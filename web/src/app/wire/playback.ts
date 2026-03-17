@@ -160,6 +160,9 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     engine.onBeat(() => {
       onBeat();
     });
+
+    elements.beatGradientToggle.checked = localStorage.getItem("beatGradient") === "true";
+    elements.beatJumpGradientToggle.checked = localStorage.getItem("beatJumpGradient") === "true";
   }
 
   var bpmBarVisible = true;
@@ -487,6 +490,26 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     syncBringItHomeLabel();
   }
 
+  function handleBeatGradientToggle(event: Event) {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input) {
+      return;
+    }
+    const enabled = input.checked;
+    localStorage.setItem("beatGradient", String(enabled));
+    jukebox.refresh();
+  }
+
+  function handleBeatJumpGradientToggle(event: Event) {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input) {
+      return;
+    }
+    const enabled = input.checked;
+    localStorage.setItem("beatJumpGradient", String(enabled));
+    jukebox.refresh();
+  }
+
   return {
     initializePlayback,
     handlePlayClick,
@@ -504,5 +527,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     updateVizVisibility: () => updateVizVisibility(context),
     bpmBarToggler,
     handleVolumeButtonClick,
+    handleBeatGradientToggle,
+    handleBeatJumpGradientToggle,
   };
 }
