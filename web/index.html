@@ -238,6 +238,13 @@
                 >tune</span
               >
             </button>
+            <button id="autocanonizer-tuning" class="tune-toggle" aria-label="Tune">
+              <span
+                class="material-symbols-outlined tune-icon"
+                aria-hidden="true"
+                >tune</span
+              >
+            </button>
             <button id="track-info" class="info-toggle" aria-label="Info">
               <span
                 class="material-symbols-outlined info-icon"
@@ -588,22 +595,22 @@
             </div>
             <div class="model-right-half">
               <div class="checkbox-row">
-                <label
-                  ><input id="just-backwards" type="checkbox" /> Allow only
+                <label>
+                  <input id="just-backwards" type="checkbox" /> Allow only
                   reverse branches</label
                 >
-                <label
-                  ><input id="just-long" type="checkbox" /> Allow only long
+                <label>
+                  <input id="just-long" type="checkbox" /> Allow only long
                   branches</label
                 >
-                <label
-                  ><input id="remove-seq" type="checkbox" /> Remove sequential
-                  branches</label
-                >
-                <label
-                  ><input id="highlight-anchor-branch" type="checkbox" />
-                  Highlight forced anchor jump</label
-                >
+                <label>
+                  <input id="remove-seq" type="checkbox" /> Remove sequential
+                  branches
+                </label>
+                <label>
+                  <input id="highlight-anchor-branch" type="checkbox" />
+                  Highlight forced anchor jump
+                </label>
                 <label>
                   <input id="bpm-bar-toggle" type="checkbox" checked/> Show BPM bar
                 </label>
@@ -615,9 +622,77 @@
               </div>
             </div>
           </div>
+         
           <div class="modal-footer tuning-footer">
             <button id="tuning-reset">Reset</button>
             <button id="tuning-apply" class="is-hidden">Apply</button>
+          </div>
+        </div>
+      </div>
+      <!-- autocanonizer tuning -->
+      <div id="autocanonizer-tuning-modal" class="modal">
+        <div class="modal-panel">
+          <div class="modal-header">
+            <h2>Autocanonizer Tuning</h2>
+            <button id="autocanonizer-tuning-close" class="modal-close" aria-label="Close">
+              <span
+                class="material-symbols-outlined modal-close-icon"
+                aria-hidden="true"
+                >close</span
+              >
+            </button>
+          </div>
+          <div class="modal-body autocanonizer-tuning-body">
+            Best if you have headphones!
+              <label>
+                <div class="label-line">
+                  Blue Audio Channel Balance:
+                  <span id="blue-audio-channel-balance-val">0</span>
+                </div>
+                <div style="display: flex;">
+                  <div class="channel-label">
+                    L
+                  </div>
+                  <input
+                    style="width: 700px;"
+                    id="blue-audio-channel-balance"
+                    type="range"
+                    min="-100"
+                    max="100"
+                    step="1"
+                    value="0"
+                  />
+                  <div class="channel-label">
+                    R
+                  </div>
+                </div>
+              </label>
+              <label>
+                <div class="label-line">
+                  Green Audio Channel Balance:
+                  <span id="green-audio-channel-balance-val">0</span>
+                </div>
+                <div style="display: flex;">
+                  <div class="channel-label">
+                    L
+                  </div>
+                  <input
+                    style="width: 700px;"
+                    id="green-audio-channel-balance"
+                    type="range"
+                    min="-100"
+                    max="100"
+                    step="1"
+                    value="0"
+                  />
+                  <div class="channel-label">
+                    R
+                  </div>  
+                </div>
+              </label>
+          </div>
+          <div class="modal-footer tuning-footer">
+            <button id="autocanonizer-tuning-reset">Reset</button>
           </div>
         </div>
       </div>

@@ -14,6 +14,7 @@ type TuningDeps = {
   closeInfo: (context: AppContext) => void;
   applyTuningChanges: (context: AppContext) => void;
   resetTuningDefaults: (context: AppContext) => void;
+  toggleAutocanonizerTuning: (context: AppContext) => void;
 };
 
 export type TuningHandlers = ReturnType<typeof createTuningHandlers>;
@@ -30,6 +31,7 @@ export function createTuningHandlers(deps: TuningDeps) {
     closeInfo,
     applyTuningChanges,
     resetTuningDefaults,
+    toggleAutocanonizerTuning,
   } = deps;
 
   function handleThresholdInput() {
@@ -55,6 +57,19 @@ export function createTuningHandlers(deps: TuningDeps) {
     autocanonizer.setVolume(volume);
   }
 
+  // audio streams fun!!!
+  function handleBlueAudioBalanceChange() {
+    context.state.audioBalance.blue = Number(elements.blueAudioBalanceInput.value);
+    elements.blueAudioBalanceLabel.textContent = `${context.state.audioBalance.blue}`;
+    autocanonizer.setBalance(context.state.audioBalance.blue, context.state.audioBalance.green);
+  }
+
+  function handleGreenAudioBalanceChange() {
+    context.state.audioBalance.green = Number(elements.greenAudioBalanceInput.value);
+    elements.greenAudioBalanceLabel.textContent = `${context.state.audioBalance.green}`;
+    autocanonizer.setBalance(context.state.audioBalance.blue, context.state.audioBalance.green);
+  }
+
   function handleOpenTuning() {
     openTuning(context);
   }
@@ -69,6 +84,10 @@ export function createTuningHandlers(deps: TuningDeps) {
 
   function handleCloseInfo() {
     closeInfo(context);
+  }
+
+  function handleAutocanonizerTuning() {
+    toggleAutocanonizerTuning(context);
   }
 
   function syncInfoButton() {
@@ -86,17 +105,17 @@ export function createTuningHandlers(deps: TuningDeps) {
     elements.shortUrlButton.setAttribute("aria-label", "Copy URL");
   }
 
-  function handleTuningModalClick(event: MouseEvent) {
-    if (event.target === elements.tuningModal) {
-      closeTuning(context);
-    }
-  }
+  // function handleTuningModalClick(event: MouseEvent) {
+    // if (event.target === elements.tuningModal) {
+    //   closeTuning(context);
+    // }
+  // }
 
-  function handleInfoModalClick(event: MouseEvent) {
-    if (event.target === elements.infoModal) {
-      closeInfo(context);
-    }
-  }
+  // function handleInfoModalClick(event: MouseEvent) {
+    // if (event.target === elements.infoModal) {
+    //   closeInfo(context);
+    // }
+  // }
 
   function handleTuningApply() {
     applyTuningChanges(context);
@@ -120,9 +139,13 @@ export function createTuningHandlers(deps: TuningDeps) {
     syncInfoButton,
     syncTuneButton,
     syncCopyButton,
-    handleTuningModalClick,
-    handleInfoModalClick,
+    // handleTuningModalClick,
+    // handleInfoModalClick,
     handleTuningApply,
     handleTuningReset,
+    // forks
+    handleAutocanonizerTuning,
+    handleBlueAudioBalanceChange,
+    handleGreenAudioBalanceChange,
   };
 }

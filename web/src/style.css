@@ -534,6 +534,11 @@ button:hover {
   flex-direction: row;
 }
 
+.autocanonizer-tuning-body {
+  display: flex;
+  flex-direction: column;
+}
+
 .info-body {
   gap: 10px;
 }
@@ -825,6 +830,7 @@ button:hover {
 
 .volume-control-panel {
   position: absolute;
+  transform: translateX(50%);
   bottom: 100%;
 }
 
@@ -1399,4 +1405,8 @@ button:hover {
     flex-wrap: wrap;
     gap: 8px;
   }
+}
+
+.channel-label {
+  text-align: center;
 }

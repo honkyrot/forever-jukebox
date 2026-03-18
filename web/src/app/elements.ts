@@ -431,6 +431,30 @@ export function getElements() {
     document.querySelector<HTMLInputElement>("#beat-jump-gradient"),
     "#beat-jump-gradient"
   );
+  const autocanonizerTuningButton = requireElement(
+    document.querySelector<HTMLButtonElement>("#autocanonizer-tuning"),
+    "#autocanonizer-tuning"
+  );
+  const autocanonizerTuningModal = requireElement(
+    document.querySelector<HTMLDivElement>("#autocanonizer-tuning-modal"),
+    "#autocanonizer-tuning-modal"
+  );
+  const blueAudioBalanceInput = requireElement(
+    document.querySelector<HTMLInputElement>("#blue-audio-channel-balance"),
+    "#blue-audio-channel-balance"
+  );
+  const blueAudioBalanceLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#blue-audio-channel-balance-val"),
+    "#blue-audio-channel-balance-val"
+  );
+  const greenAudioBalanceInput = requireElement(
+    document.querySelector<HTMLInputElement>("#green-audio-channel-balance"),
+    "#green-audio-channel-balance"
+  );
+  const greenAudioBalanceLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#green-audio-channel-balance-val"),
+    "#green-audio-channel-balance-val"
+  );
   //
   return {
     listenTimeEl,
@@ -539,6 +563,12 @@ export function getElements() {
     volumeControlPanel,
     beatGradientToggle,
     beatJumpGradientToggle,
+    autocanonizerTuningButton,
+    autocanonizerTuningModal,
+    blueAudioBalanceInput,
+    blueAudioBalanceLabel,
+    greenAudioBalanceInput,
+    greenAudioBalanceLabel,
     //
   };
 }

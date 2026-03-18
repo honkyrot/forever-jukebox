@@ -197,6 +197,17 @@ export function closeTuning(context: AppContext) {
   context.elements.tuningModal.classList.remove("open");
 }
 
+//
+export function toggleAutocanonizerTuning(context: AppContext) {
+  syncTuningUI(context);
+  if (!context.elements.autocanonizerTuningModal.classList.contains("open")) {
+    context.elements.autocanonizerTuningModal.classList.add("open");
+  } else {
+    context.elements.autocanonizerTuningModal.classList.remove("open");
+  }
+}
+//
+
 export function openInfo(context: AppContext) {
   updateTrackInfo(context);
   //context.elements.infoModal.classList.add("open");
@@ -243,6 +254,9 @@ export function syncTuningUI(context: AppContext) {
     (graph ? Math.round(graph.currentThreshold) : null);
   elements.computedThresholdEl.textContent =
     computedValue === null ? "-" : `${computedValue}`;
+  
+  elements.blueAudioBalanceInput.value = `${state.audioBalance.blue}`;
+  elements.greenAudioBalanceInput.value = `${state.audioBalance.green}`;
 }
 
 export function applyTuningChanges(context: AppContext) {
@@ -529,6 +543,9 @@ export function resetForNewTrack(
   }
   if (elements.infoModal.classList.contains("open")) {
     elements.infoModal.classList.remove("open");
+  }
+  if (elements.autocanonizerTuningModal.classList.contains("open")) {
+    elements.autocanonizerTuningModal.classList.remove("open");
   }
   if (state.isRunning) {
     stopPlayback(context);

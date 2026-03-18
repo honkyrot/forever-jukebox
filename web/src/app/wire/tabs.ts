@@ -105,6 +105,8 @@ export function createTabsHandlers(deps: TabsDeps) {
     elements.tuningModal.classList.remove("open");
     elements.infoModal.classList.add("hidden");
     elements.infoModal.classList.remove("open");
+    elements.autocanonizerTuningModal.classList.add("hidden");
+    elements.autocanonizerTuningModal.classList.remove("open");
   }
 
   return {

@@ -50,6 +50,7 @@ import {
   togglePlayback,
   updateTrackInfo,
   updateVizVisibility,
+  toggleAutocanonizerTuning,
 } from "./playback";
 import { runSearch } from "./search";
 import { DEFAULT_VISUALIZATION_INDEX, TOP_SONGS_LIMIT } from "./constants";
@@ -150,6 +151,10 @@ export function bootstrap() {
     tuningParams: null,
     deletedEdgeIds: [],
     highlightAnchorBranch,
+    audioBalance: {
+      blue: 0,
+      green: 0,
+    },
   };
   const context: AppContext = {
     elements,
@@ -352,6 +357,7 @@ export function bootstrap() {
     closeInfo,
     applyTuningChanges,
     resetTuningDefaults,
+    toggleAutocanonizerTuning,
   });
   const fullscreenHandlers = createFullscreenHandlers({
     context,

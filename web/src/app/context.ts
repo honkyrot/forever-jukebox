@@ -52,6 +52,10 @@ export type AppState = {
   tuningParams: string | null;
   deletedEdgeIds: number[];
   highlightAnchorBranch: boolean;
+  audioBalance: {
+    blue: number;
+    green: number;
+  };
 };
 
 export type AppContext = {

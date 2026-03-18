@@ -1,5 +1,5 @@
 ### Local modifications
-This fork was created to add a couple of features I wanted, eg. extra information
+This fork was created to add a couple of features I wanted
 
 Changes:
 - Some adjustments to UI elements (personal preference).

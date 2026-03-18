@@ -129,11 +129,11 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   );
   elements.tuningClose.addEventListener("click", tuningHandlers.handleCloseTuning);
   elements.infoClose.addEventListener("click", tuningHandlers.handleCloseInfo);
-  elements.tuningModal.addEventListener(
-    "click",
-    tuningHandlers.handleTuningModalClick,
-  );
-  elements.infoModal.addEventListener("click", tuningHandlers.handleInfoModalClick);
+  // elements.tuningModal.addEventListener(
+  //   "click",
+  //   tuningHandlers.handleTuningModalClick,
+  // );
+  // elements.infoModal.addEventListener("click", tuningHandlers.handleInfoModalClick);
   elements.favoritesSyncEnterModal.addEventListener(
     "click",
     favoritesHandlers.handleFavoritesSyncEnterModalClick,
@@ -150,6 +150,15 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.thresholdInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.rampInput.addEventListener("change", tuningHandlers.handleTuningApply);
 
+  elements.blueAudioBalanceInput.addEventListener(
+    "input",
+    tuningHandlers.handleBlueAudioBalanceChange,
+  );
+  elements.greenAudioBalanceInput.addEventListener(
+    "input",
+    tuningHandlers.handleGreenAudioBalanceChange,
+  );
+
   // elements.thresholdInput.addEventListener("input", tuningHandlers.handleTuningApply);
   // checkboxes
   elements.justLongInput.addEventListener("change", tuningHandlers.handleTuningApply);
@@ -160,6 +169,12 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.volumeButton.addEventListener("click", playbackHandlers.handleVolumeButtonClick);
   elements.beatGradientToggle.addEventListener("change", playbackHandlers.handleBeatGradientToggle);
   elements.beatJumpGradientToggle.addEventListener("change", playbackHandlers.handleBeatJumpGradientToggle);
+  // buttons
+  elements.autocanonizerTuningButton.addEventListener(
+    "click",
+    tuningHandlers.handleAutocanonizerTuning,
+  );
+  
   //
   elements.tuningReset.addEventListener("click", tuningHandlers.handleTuningReset);
   elements.playButton.addEventListener("click", playbackHandlers.handlePlayClick);

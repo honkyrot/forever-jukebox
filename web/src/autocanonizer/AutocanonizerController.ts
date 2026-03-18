@@ -24,6 +24,8 @@ class AutocanonizerPlayer {
   private buffer: AudioBuffer;
   private mainGain: GainNode;
   private otherGain: GainNode;
+  private mainPanner: StereoPannerNode;
+  private otherPanner: StereoPannerNode;
   private masterBlend: number;
   private baseVolume = 1;
 
@@ -39,11 +41,24 @@ class AutocanonizerPlayer {
     this.context = context;
     this.buffer = buffer;
     this.masterBlend = masterBlend;
+    // this.mainGain.connect(this.context.destination);
+    // this.otherGain.connect(this.context.destination);
     this.mainGain = this.context.createGain();
     this.otherGain = this.context.createGain();
-    this.mainGain.connect(this.context.destination);
-    this.otherGain.connect(this.context.destination);
+    this.mainPanner = this.context.createStereoPanner();
+    this.otherPanner = this.context.createStereoPanner();
+    this.mainGain.connect(this.mainPanner);
+    this.otherGain.connect(this.otherPanner);
+    this.mainPanner.connect(this.context.destination);
+    this.otherPanner.connect(this.context.destination);
     this.applyGains();
+  }
+
+  // balance is a value from -100 (L) to 100 (R) with 0 being centered
+  // blue is main, green is other
+  setBalance(blue: number, green: number) {
+    this.mainPanner.pan.value = Math.max(-1, Math.min(1, blue / 100));
+    this.otherPanner.pan.value = Math.max(-1, Math.min(1, green / 100));
   }
 
   setBuffer(buffer: AudioBuffer) {
@@ -224,6 +239,14 @@ export class AutocanonizerController {
       this.player.setVolume(volume);
     }
   }
+
+  // f
+  setBalance(blue: number, green: number) {
+    if (this.player) {
+      this.player.setBalance(blue, green);
+    }
+  }
+  //
 
   setAudio(buffer: AudioBuffer | null, context: AudioContext | null) {
     if (buffer && context) {

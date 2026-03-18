@@ -163,6 +163,13 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
 
     elements.beatGradientToggle.checked = localStorage.getItem("beatGradient") === "true";
     elements.beatJumpGradientToggle.checked = localStorage.getItem("beatJumpGradient") === "true";
+  
+    elements.autocanonizerTuningButton.classList.toggle(
+      "is-hidden",
+      state.playMode === "jukebox",
+    );
+
+
   }
 
   var bpmBarVisible = true;
@@ -459,6 +466,15 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
       "is-hidden",
       mode === "autocanonizer",
     );
+    elements.autocanonizerTuningButton.disabled = mode === "jukebox";
+    elements.autocanonizerTuningButton.classList.toggle(
+      "is-hidden",
+      mode === "jukebox",
+    );
+
+    // close tuning elements
+    context.elements.tuningModal.classList.remove("open");
+    context.elements.autocanonizerTuningModal.classList.remove("open");
     // fork end
     autocanonizer.setVisible(mode === "autocanonizer");
     jukebox.setVisible(mode === "jukebox");

@@ -349,6 +349,7 @@ class CanvasViz {
         if (localStorage.getItem("beatJumpGradient") === "true") {
           var gradient = this.baseCtx.createLinearGradient(from.x, from.y, to.x, to.y);
           gradient.addColorStop(0, `hsla(${(edge.src.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
+          gradient.addColorStop(0.5, `hsla(${((edge.src.which + edge.dest.which) / 2 / this.positions.length) * 360}, 100%, 65%, 0.6)`);
           gradient.addColorStop(1, `hsla(${(edge.dest.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
           this.baseCtx.strokeStyle = gradient;
         }
