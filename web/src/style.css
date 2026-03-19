@@ -1164,9 +1164,9 @@ button:hover {
 
 .viz-bottom {
   position: absolute;
-  bottom: 0px;
-  left: 0px;
-  right: 0px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1175,7 +1175,7 @@ button:hover {
   z-index: 3;
   color: var(--text);
   padding: 10px 12px;
-  /* border-radius: 12px; */
+  border-radius: 0 0 12px;
   background: var(--viz-overlay);
   backdrop-filter: blur(8px);
 }
