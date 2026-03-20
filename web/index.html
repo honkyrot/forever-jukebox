@@ -360,8 +360,9 @@
                   </div>
                 </div>
               </div>
+            </div>
               <div>
-              <div class="volume-control-panel is-hidden" id="volume-control-panel">
+                <div class="volume-control-panel is-hidden" id="volume-control-panel">
                 <label>
                   <input
                     class="volume-slider"
@@ -377,19 +378,18 @@
                   </div>
                 </label>
               </div>
-              <button
-                id="volume-button"
-                class="volume-control"
-                aria-label="Volume"
-              >
+                <button
+                  id="volume-button"
+                  class="volume-button"
+                  aria-label="Volume"
+                >
                 <span
                   class="material-symbols-outlined volume-icon"
                   aria-hidden="true"
                   >volume_up</span
                 >
-              </button>
+                </button>
               </div>
-              
               <button
                 id="fullscreen"
                 class="fullscreen-toggle"
@@ -576,53 +576,39 @@
                 value="50"
               />
             </label>
-            <!-- disabled since it's handled by the volume control button -->
-            <!-- <label class="is-hidden">
+            <label>
               <div class="label-line">
-                Volume:
-                <span id="volume-val">50</span>
+                Branch Ramp Speed:
+                <span id="ramp-val">10%</span>
               </div>
               <input
-                id="volume"
+                id="ramp"
                 type="range"
                 min="0"
                 max="100"
-                step="1"
-                value="50"
+                step="2"
+                value="10"
               />
-            </label> -->
-            <!-- xX_winningTicketXx -->
-            </div>
-            <div class="model-right-half">
-              <div class="checkbox-row">
-                <label>
-                  <input id="just-backwards" type="checkbox" /> Allow only
-                  reverse branches</label
-                >
-                <label>
-                  <input id="just-long" type="checkbox" /> Allow only long
-                  branches</label
-                >
-                <label>
-                  <input id="remove-seq" type="checkbox" /> Remove sequential
-                  branches
-                </label>
-                <label>
-                  <input id="highlight-anchor-branch" type="checkbox" />
-                  Highlight forced anchor jump
-                </label>
-                <label>
-                  <input id="bpm-bar-toggle" type="checkbox" checked/> Show BPM bar
-                </label>
-                <label>
-                  <input id="beat-gradient" type="checkbox"/> Use gradient on beats
-                </label>
-                <label>
-                  <input id="beat-jump-gradient" type="checkbox"/> Use gradient on jump lines
-              </div>
+            </label>
+            <div class="checkbox-row">
+              <label
+                ><input id="just-backwards" type="checkbox" /> Allow only
+                reverse branches</label
+              >
+              <label
+                ><input id="just-long" type="checkbox" /> Allow only long
+                branches</label
+              >
+              <label
+                ><input id="remove-seq" type="checkbox" /> Remove sequential
+                branches</label
+              >
+              <label
+                ><input id="highlight-anchor-branch" type="checkbox" />
+                Highlight forced anchor jump</label
+              >
             </div>
           </div>
-         
           <div class="modal-footer tuning-footer">
             <button id="tuning-reset">Reset</button>
             <button id="tuning-apply" class="is-hidden">Apply</button>

@@ -394,10 +394,7 @@ export function getElements() {
     "#cached-audio-clear"
   );
   
-  const vizStats = requireElement(
-    document.querySelector<HTMLDivElement>("#viz-stats"),
-    "#viz-stats"
-  );
+  const vizStats = document.querySelector<HTMLDivElement>("#viz-stats");
   //fork additions
   const branchChanceLabel = requireElement(
     document.querySelector<HTMLSpanElement>("#viz-branch-chance-label"),
@@ -554,13 +551,13 @@ export function getElements() {
     toast,
     cachedAudioClearButton,
     vizStats,
-    //fork additions
+    volumeButton,
+    volumeControlPanel,
+     //fork additions
     branchChanceLabel,
     branchChance,
     branchChanceDivider,
     bpmBarToggle,
-    volumeButton,
-    volumeControlPanel,
     beatGradientToggle,
     beatJumpGradientToggle,
     autocanonizerTuningButton,
