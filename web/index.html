@@ -360,7 +360,6 @@
                   </div>
                 </div>
               </div>
-            </div>
               <div>
                 <div class="volume-control-panel is-hidden" id="volume-control-panel">
                 <label>
@@ -576,37 +575,34 @@
                 value="50"
               />
             </label>
-            <label>
-              <div class="label-line">
-                Branch Ramp Speed:
-                <span id="ramp-val">10%</span>
+            </div>
+            <div class="model-right-half">
+              <div class="checkbox-row">
+                <label>
+                  <input id="just-backwards" type="checkbox" /> Allow only
+                  reverse branches</label
+                >
+                <label>
+                  <input id="just-long" type="checkbox" /> Allow only long
+                  branches</label
+                >
+                <label>
+                  <input id="remove-seq" type="checkbox" /> Remove sequential
+                  branches
+                </label>
+                <label>
+                  <input id="highlight-anchor-branch" type="checkbox" />
+                  Highlight forced anchor jump
+                </label>
+                <label>
+                  <input id="bpm-bar-toggle" type="checkbox" checked/> Show BPM bar
+                </label>
+                <label>
+                  <input id="beat-gradient" type="checkbox"/> Use gradient on beats
+                </label>
+                <label>
+                  <input id="beat-jump-gradient" type="checkbox"/> Use gradient on jump lines
               </div>
-              <input
-                id="ramp"
-                type="range"
-                min="0"
-                max="100"
-                step="2"
-                value="10"
-              />
-            </label>
-            <div class="checkbox-row">
-              <label
-                ><input id="just-backwards" type="checkbox" /> Allow only
-                reverse branches</label
-              >
-              <label
-                ><input id="just-long" type="checkbox" /> Allow only long
-                branches</label
-              >
-              <label
-                ><input id="remove-seq" type="checkbox" /> Remove sequential
-                branches</label
-              >
-              <label
-                ><input id="highlight-anchor-branch" type="checkbox" />
-                Highlight forced anchor jump</label
-              >
             </div>
           </div>
           <div class="modal-footer tuning-footer">

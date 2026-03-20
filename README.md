@@ -7,6 +7,7 @@ Changes:
 - bpm visualizer
 - random stuff i liked
 
+i dunno how to modify PWA or Android versions<br>
 have fun
 
 # The Forever Jukebox

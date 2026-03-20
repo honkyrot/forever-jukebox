@@ -166,7 +166,7 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.highlightAnchorBranchInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.removeSeqInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.bpmBarToggle.addEventListener("change", playbackHandlers.bpmBarToggler);
-  elements.volumeButton.addEventListener("click", playbackHandlers.handleVolumeButtonClick);
+  elements.volumeButton.addEventListener("click", tuningHandlers.handleVolumeButtonClick);
   elements.beatGradientToggle.addEventListener("change", playbackHandlers.handleBeatGradientToggle);
   elements.beatJumpGradientToggle.addEventListener("change", playbackHandlers.handleBeatJumpGradientToggle);
   // buttons

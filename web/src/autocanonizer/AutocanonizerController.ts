@@ -45,12 +45,16 @@ class AutocanonizerPlayer {
     // this.otherGain.connect(this.context.destination);
     this.mainGain = this.context.createGain();
     this.otherGain = this.context.createGain();
+
     this.mainPanner = this.context.createStereoPanner();
     this.otherPanner = this.context.createStereoPanner();
+
     this.mainGain.connect(this.mainPanner);
     this.otherGain.connect(this.otherPanner);
+
     this.mainPanner.connect(this.context.destination);
     this.otherPanner.connect(this.context.destination);
+    
     this.applyGains();
   }
 
