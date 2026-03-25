@@ -122,6 +122,7 @@ export function bootstrap() {
     lastBeatIndex: null,
     vizData: null,
     isRunning: false,
+    isPaused: false,
     audioLoaded: false,
     analysisLoaded: false,
     audioLoadInFlight: false,
