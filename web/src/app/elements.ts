@@ -483,6 +483,22 @@ export function getElements() {
     document.querySelector<HTMLSpanElement>("#green-audio-channel-balance-val"),
     "#green-audio-channel-balance-val"
   );
+  const allTimeSongsList = requireElement(
+    document.querySelector<HTMLOListElement>("#all-time-songs"),
+    "#all-time-songs"
+  );
+  const allTimeLoadMoreContainer = requireElement(
+    document.querySelector<HTMLDivElement>("#all-time-load-more-container"),
+    "#all-time-load-more-container"
+  );
+  const allTimeLoadMoreButton = requireElement(
+    document.querySelector<HTMLButtonElement>("#all-time-load-more"),
+    "#all-time-load-more"
+  );
+  const allTimeSortSelect = requireElement(
+    document.querySelector<HTMLSelectElement>("#all-time-sort-select"),
+    "#all-time-sort-select"
+  );
   //
   return {
     listenTimeEl,
@@ -604,6 +620,10 @@ export function getElements() {
     blueAudioBalanceLabel,
     greenAudioBalanceInput,
     greenAudioBalanceLabel,
+    allTimeSongsList,
+    allTimeLoadMoreContainer,
+    allTimeLoadMoreButton,
+    allTimeSortSelect,
     //
   };
 }

@@ -3,6 +3,7 @@ import type { JukeboxController } from "../../jukebox/JukeboxController";
 import type { FavoritesHandlers } from "./favorites";
 import type { TabsHandlers } from "./tabs";
 import type { SearchHandlers } from "./search";
+import type { TopSongsHandlers } from "./top-songs";
 import type { TuningHandlers } from "./tuning";
 import type { PlaybackUiHandlers } from "./playback";
 import type { FullscreenHandlers } from "./fullscreen";
@@ -16,6 +17,7 @@ type UiBindingsDeps = {
   favoritesHandlers: FavoritesHandlers;
   tabsHandlers: TabsHandlers;
   searchHandlers: SearchHandlers;
+  topSongsHandlers: TopSongsHandlers;
   tuningHandlers: TuningHandlers;
   playbackHandlers: PlaybackUiHandlers;
   fullscreenHandlers: FullscreenHandlers;
@@ -30,6 +32,7 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
     jukebox,
     favoritesHandlers,
     tabsHandlers,
+    topSongsHandlers,
     searchHandlers,
     tuningHandlers,
     playbackHandlers,
@@ -44,6 +47,12 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   });
   elements.topSongsTabs.forEach((button) => {
     button.addEventListener("click", tabsHandlers.handleTopSongsTabClick);
+  });
+  elements.allTimeSortSelect.addEventListener("change", () => {
+    topSongsHandlers.fetchAllTimeSongsList();
+  });
+  elements.allTimeLoadMoreButton.addEventListener("click", () => {
+    topSongsHandlers.handleLoadMoreAllTime();
   });
   elements.searchButton.addEventListener("click", searchHandlers.handleSearchClick);
   elements.searchInput.addEventListener(

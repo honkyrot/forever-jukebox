@@ -11,7 +11,7 @@ type TabsDeps = {
     tabId: TabId,
     options?: { replace?: boolean; youtubeId?: string | null },
   ) => void;
-  onTopSongsTabChange?: (tabId: "top" | "trending" | "recent" | "favorites") => void;
+  onTopSongsTabChange?: (tabId: "top" | "trending" | "all-time" | "recent" | "favorites") => void;
   onFaqOpen?: () => void;
 };
 
@@ -26,16 +26,22 @@ export function createTabsHandlers(deps: TabsDeps) {
     onFaqOpen,
   } = deps;
 
-  function setTopSongsTab(tabId: "top" | "trending" | "recent" | "favorites") {
+  function setTopSongsTab(tabId: "top" | "trending" | "all-time" | "recent" | "favorites") {
     state.topSongsTab = tabId;
     elements.topSongsTabs.forEach((button) => {
       button.classList.toggle("active", button.dataset.topSubtab === tabId);
     });
     elements.topSongsList.classList.toggle("hidden", tabId !== "top");
     elements.trendingSongsList.classList.toggle("hidden", tabId !== "trending");
+    elements.allTimeSongsList.classList.toggle("hidden", tabId !== "all-time");
     elements.recentSongsList.classList.toggle("hidden", tabId !== "recent");
     elements.favoritesList.classList.toggle("hidden", tabId !== "favorites");
+    elements.allTimeSortSelect.classList.toggle("hidden", tabId !== "all-time");
+    if (tabId !== "all-time") {
+      elements.allTimeLoadMoreContainer.classList.add("hidden");
+    }
     elements.topListTitle.textContent =
+      tabId === "all-time" ? "All Time" :
       tabId === "top"
         ? `Top ${TOP_SONGS_LIMIT}`
         : tabId === "trending"
@@ -64,6 +70,7 @@ export function createTabsHandlers(deps: TabsDeps) {
     const tabId = button?.dataset.topSubtab as
       | "top"
       | "trending"
+      | "all-time"
       | "recent"
       | "favorites"
       | undefined;

@@ -70,9 +70,10 @@
       <section class="panel tab-panel" data-tab-panel="top">
         <div class="subtabs" id="top-subtabs">
           <button class="subtab-btn active" data-top-subtab="top">
-            All Time
+            Top 25
           </button>
           <button class="subtab-btn" data-top-subtab="trending">Trending</button>
+          <button class="subtab-btn" data-top-subtab="all-time">All Time</button>
           <button class="subtab-btn" data-top-subtab="recent">Recents</button>
           <span class="subtab-spacer" aria-hidden="true"></span>
           <button class="subtab-btn" data-top-subtab="favorites">
@@ -80,7 +81,15 @@
           </button>
         </div>
         <div class="panel-title panel-title-row">
-          <span id="top-list-title">Top Songs</span>
+          <div class="top-list-title-container">
+            <span id="top-list-title">Top Songs</span>
+            <select id="all-time-sort-select" class="sort-select hidden">
+              <option value="play_count">Most Played</option>
+              <option value="newest">Newest</option>
+              <option value="title">Title (A-Z)</option>
+              <option value="artist">Artist (A-Z)</option>
+            </select>
+          </div>
           <div class="favorites-sync">
             <button
               id="favorites-sync-button"
@@ -131,6 +140,12 @@
         <ol class="top-list hidden" id="trending-songs">
           Loading trending songs…
         </ol>
+        <ol class="top-list hidden" id="all-time-songs">
+          Loading all time top songs…
+        </ol>
+        <div id="all-time-load-more-container" class="hidden" style="text-align: center; margin-top: 1rem; margin-bottom: 2rem;">
+          <button id="all-time-load-more">Load More</button>
+        </div>
         <ol class="top-list hidden" id="recent-songs">
           Loading recent plays…
         </ol>

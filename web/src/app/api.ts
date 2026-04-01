@@ -61,6 +61,7 @@ export type TopSongItem = {
   title?: string;
   artist?: string;
   youtube_id?: string;
+  play_count?: number;
 };
 
 export type RecentSongItem = TopSongItem;
@@ -310,8 +311,12 @@ export async function searchYoutube(query: string, duration: number) {
   return Array.isArray(data?.items) ? (data.items as YoutubeSearchItem[]) : [];
 }
 
-export async function fetchTopSongs(limit: number) {
-  const data = await fetchJson(`/api/top?limit=${encodeURIComponent(limit)}`);
+export async function fetchTopSongs(limit: number, sortBy?: string, offset: number = 0) {
+  let url = `/api/top?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`;
+  if (sortBy) {
+    url += `&sort_by=${encodeURIComponent(sortBy)}`;
+  }
+  const data = await fetchJson(url);
   return Array.isArray(data?.items) ? (data.items as TopSongItem[]) : [];
 }
 

@@ -138,6 +138,7 @@ export function bootstrap() {
     topSongsRefreshTimer: null,
     topSongsLoaded: false,
     trendingSongsLoaded: false,
+    allTimeSongsLoaded: false,
     recentSongsLoaded: false,
     trackDurationSec: null,
     trackTitle: null,
@@ -306,6 +307,19 @@ export function bootstrap() {
             console.warn(`Trending songs load failed: ${String(err)}`);
           });
       }
+      if (tabId === "all-time") {
+        if (state.allTimeSongsLoaded) {
+          return;
+        }
+        topSongsHandlers
+          .fetchAllTimeSongsList()
+          .then(() => {
+            state.allTimeSongsLoaded = true;
+          })
+          .catch((err) => {
+            console.warn(`All time songs load failed: ${String(err)}`);
+          });
+      }
       if (tabId === "recent") {
         if (state.recentSongsLoaded) {
           return;
@@ -457,6 +471,7 @@ export function bootstrap() {
     jukebox,
     favoritesHandlers,
     tabsHandlers,
+    topSongsHandlers,
     searchHandlers,
     tuningHandlers,
     playbackHandlers,

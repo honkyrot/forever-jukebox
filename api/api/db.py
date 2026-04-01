@@ -264,8 +264,10 @@ def update_job_track_metadata(
 def get_top_tracks(
     db_path: Path,
     limit: int = 10,
+    offset: int = 0,
     touched_within_days: int | None = None,
     exclude_top_n: int | None = None,
+    sort_by: str | None = None,
 ) -> list[dict]:
     cutoff: str | None = None
     if touched_within_days is not None:
@@ -320,12 +322,20 @@ def get_top_tracks(
               ) DESC,
               play_count DESC,
               updated_at DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """
         )
     else:
-        query += "\n            ORDER BY play_count DESC, updated_at DESC\n            LIMIT ?"
+        if sort_by == "newest":
+            query += "\n            ORDER BY created_at DESC\n            LIMIT ? OFFSET ?"
+        elif sort_by == "title":
+            query += "\n            ORDER BY track_title COLLATE NOCASE ASC, play_count DESC\n            LIMIT ? OFFSET ?"
+        elif sort_by == "artist":
+            query += "\n            ORDER BY track_artist COLLATE NOCASE ASC, track_title COLLATE NOCASE ASC\n            LIMIT ? OFFSET ?"
+        else:
+            query += "\n            ORDER BY play_count DESC, updated_at DESC\n            LIMIT ? OFFSET ?"
     params.append(limit)
+    params.append(offset)
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(query, tuple(params)).fetchall()

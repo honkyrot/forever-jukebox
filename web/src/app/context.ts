@@ -15,7 +15,7 @@ export type AppState = {
   activeTabId: TabId;
   activeVizIndex: number;
   playMode: "jukebox" | "autocanonizer";
-  topSongsTab: "top" | "trending" | "recent" | "favorites";
+  topSongsTab: "top" | "trending" | "all-time" | "recent" | "favorites";
   searchTab: "search" | "upload";
   favorites: FavoriteTrack[];
   favoritesSyncCode: string | null;
@@ -40,6 +40,7 @@ export type AppState = {
   topSongsRefreshTimer: number | null;
   topSongsLoaded: boolean;
   trendingSongsLoaded: boolean;
+  allTimeSongsLoaded: boolean;
   recentSongsLoaded: boolean;
   trackDurationSec: number | null;
   trackTitle: string | null;

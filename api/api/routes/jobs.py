@@ -741,7 +741,9 @@ def set_play_count(
 
 @router.get("/api/top")
 def get_top_songs(
-    limit: int = Query(10, ge=1, le=50),
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    sort_by: str | None = Query(None, description="Sort field for all-time tracks"),
     days: int | None = Query(
         None,
         ge=1,
@@ -760,8 +762,10 @@ def get_top_songs(
     items = get_top_tracks(
         DB_PATH,
         limit=limit,
+        offset=offset,
         touched_within_days=days,
         exclude_top_n=exclude_top_n,
+        sort_by=sort_by,
     )
     payload = TopSongsResponse(items=items)
     headers: dict[str, str] | None = None
