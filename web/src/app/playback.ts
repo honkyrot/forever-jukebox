@@ -587,6 +587,7 @@ export function resetForNewTrack(
   elements.bringHomeFullscreenLabel.classList.add("is-hidden");
   state.selectedEdge = null;
   jukebox.setSelectedEdge(null);
+  elements.extrasPopup.classList.add("hidden");
   engine.clearDeletedEdges();
   state.deletedEdgeIds = [];
   state.audioLoaded = false;
@@ -724,6 +725,7 @@ export function applyAnalysisResult(
   }
   state.selectedEdge = null;
   jukebox.setSelectedEdge(null);
+  elements.extrasPopup.classList.add("hidden");
   syncDeletedEdgeState(context);
   state.analysisLoaded = true;
   updateVizVisibility(context);
