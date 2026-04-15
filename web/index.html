@@ -19,7 +19,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Tilt+Neon&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Tilt+Neon&display=swap"
       rel="stylesheet"
     />
     <link
@@ -31,39 +31,91 @@
     <div id="app">
       <header class="hero">
         <div class="hero-actions">
-          <a
-            class="offline-banner"
-            href="/offline/"
-            target="_blank"
-            rel="noopener noreferrer"
-            ><span
-              class="material-symbols-outlined offline-banner-icon"
-              aria-hidden="true"
-              >download</span
-            ><span>try the offline app</span></a
-          >
+          <span class="hero-socials" aria-label="Community links">
+            <a
+              class="hero-social-link"
+              href="https://www.reddit.com/r/infinitejukebox/"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Reddit community"
+              title="Reddit"
+            >
+              <svg
+                class="hero-social-icon"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  fill="currentColor"
+                  d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12a12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547l-.8 3.747c1.824.07 3.48.632 4.674 1.488c.308-.309.73-.491 1.207-.491c.968 0 1.754.786 1.754 1.754c0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87c-3.874 0-7.004-2.176-7.004-4.87c0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754c.463 0 .898.196 1.207.49c1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197a.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248c.687 0 1.248-.561 1.248-1.249c0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25c0 .687.561 1.248 1.249 1.248c.688 0 1.249-.561 1.249-1.249c0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094a.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913c.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463a.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73c-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"
+                />
+              </svg>
+            </a>
+            <a
+              class="hero-social-link"
+              href="https://discord.com/invite/KWN5BfD"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Discord server"
+              title="Discord"
+            >
+              <svg
+                class="hero-social-icon"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path
+                  fill="currentColor"
+                  d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515a.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0a12.64 12.64 0 0 0-.617-1.25a.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057a19.9 19.9 0 0 0 5.993 3.03a.078.078 0 0 0 .084-.028a14.09 14.09 0 0 0 1.226-1.994a.076.076 0 0 0-.041-.106a13.107 13.107 0 0 1-1.872-.892a.077.077 0 0 1-.008-.128a10.2 10.2 0 0 0 .372-.292a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127a12.299 12.299 0 0 1-1.873.892a.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028a19.839 19.839 0 0 0 6.002-3.03a.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.956-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419c0-1.333.955-2.419 2.157-2.419c1.21 0 2.176 1.096 2.157 2.42c0 1.333-.946 2.418-2.157 2.418Z"
+                />
+              </svg>
+            </a>
+          </span>
           <div class="theme-toggle" id="theme-toggle">
-            <span>Theme:</span>
             <button type="button" class="theme-link" data-theme="light">
               Light
             </button>
-            <span class="theme-sep">|</span>
+            <span class="theme-sep" aria-hidden="true"></span>
             <button type="button" class="theme-link" data-theme="dark">
               Dark
             </button>
           </div>
         </div>
         <div class="hero-main">
-          <div class="hero-title">
-            <h1 class="hero-title-neon">THE FOREVER JUKEBOX</h1>
-          </div>
+          <button
+            id="hero-title-home"
+            class="hero-title"
+            type="button"
+            aria-label="Go to Top Songs"
+          >
+            <h1 class="hero-title-neon">
+              THE FOREVER <span class="hero-title-jukebox">JUKEBOX</span>
+            </h1>
+          </button>
           <nav class="tabs" aria-label="Primary">
             <button class="tab-btn active" data-tab-button="top">
-              Top Songs
+              <span class="tab-label-top-full">Top Songs</span>
+              <span class="tab-label-top-short">Top</span>
             </button>
             <button class="tab-btn" data-tab-button="search">Search</button>
             <button class="tab-btn" data-tab-button="play">Listen</button>
             <button class="tab-btn" data-tab-button="faq">FAQ</button>
+            <a
+              class="tab-btn tab-link"
+              href="/offline/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span
+                class="material-symbols-outlined tab-link-icon"
+                aria-hidden="true"
+                >download</span
+              >
+              <span class="tab-label-offline-full">Offline App</span>
+              <span class="tab-label-offline-short">App</span>
+            </a>
           </nav>
         </div>
       </header>
@@ -77,7 +129,12 @@
           <button class="subtab-btn" data-top-subtab="recent">Recents</button>
           <span class="subtab-spacer" aria-hidden="true"></span>
           <button class="subtab-btn" data-top-subtab="favorites">
-            Favorites
+            <span
+              class="material-symbols-outlined subtab-icon subtab-icon-filled"
+              aria-hidden="true"
+              >star</span
+            >
+            <span>Favorites</span>
           </button>
         </div>
         <div class="panel-title panel-title-row">
@@ -230,17 +287,9 @@
             </div>
           </div>
         </div>
-        <div class="play-title" id="play-title"></div>
         <div class="menu-bar hidden" id="play-menu">
           <div class="menu-left">
-            <button id="play" class="play-toggle hidden" aria-label="Play">
-              <span
-                class="material-symbols-outlined play-icon"
-                aria-hidden="true"
-                >play_arrow</span
-              >
-              <span class="play-text">Play</span>
-            </button>
+            <div class="play-title" id="play-title"></div>
             <span id="bring-home-label" class="bring-home-note is-hidden">
               Bringing it on home
             </span>
@@ -455,8 +504,15 @@
         </div>
       </section>
       <section class="panel tab-panel hidden" data-tab-panel="faq">
-        <div class="panel-title">FAQ</div>
-        <div class="faq">
+        <div class="subtabs" id="faq-subtabs">
+          <button class="subtab-btn active" data-faq-subtab="faq">FAQ</button>
+          <span class="subtab-spacer" aria-hidden="true"></span>
+          <button class="subtab-btn" data-faq-subtab="whats-new">
+            What's New
+          </button>
+        </div>
+        <div class="panel-title" id="faq-panel-title">FAQ</div>
+        <div class="faq" id="faq-panel">
           <h4>What the what?</h4>
           <p>
             The Forever Jukebox is an open-source modernization of Paul Lamere's
@@ -549,6 +605,71 @@
 
           <h4>CACHED AUDIO</h4>
           <button id="cached-audio-clear" type="button">Clear 0MB</button>
+        </div>
+        <div class="faq faq-updates hidden" id="faq-whats-new-panel">
+          <h4>April 2026</h4>
+          <ul>
+            <li>Layout tweaks, a new light theme and added a <strong>What's New</strong> section - (you are here)!</li>
+          </ul>
+
+          <h4>March 2026</h4>
+          <ul>
+            <li>
+              <strong>Extras mode</strong> added new ways to explore branches,
+              including branch stats and keyboard-based branch cycling.
+            </li>
+            <li>
+              <strong>Bring It Home mode</strong> was added for a more linear
+              playback option that finishes the song cleanly.
+            </li>
+            <li>
+              Playback behavior was refined to improve jump consistency.
+            </li>
+            <li>
+              The backend moved to <strong>madmom-beats-lite</strong>,
+              improving progress reporting and memory footprint, while
+              providing the same analysis quality.
+            </li>
+            <li>
+              The Offline App (PWA) gained better cached-analysis management,
+              including the ability to view and delete saved analyses.
+            </li>
+          </ul>
+
+          <h4>February 2026</h4>
+          <ul>
+            <li>
+              The <strong>Offline App</strong> (PWA) launched, making it
+              possible to analyze and play tracks directly in the browser
+              without an internet connection.
+            </li>
+            <li><strong>Recently Played</strong> and <strong>Trending</strong> discovery lists were added.</li>
+            <li>A new <strong>Arc visualization</strong> replaced the Spiral view.</li>
+            <li>
+              Loop optimization and playback reliability continued to improve.
+            </li>
+          </ul>
+
+          <h4>January 2026</h4>
+          <ul>
+            <li>
+              <strong>Favorites</strong> launched, followed shortly by
+              <strong>Favorites Sync</strong> so saved tracks could travel
+              between sessions/devices.
+            </li>
+            <li>
+              Support was added for <strong>user uploads</strong> and
+              <strong>user-supplied YouTube jobs</strong>.
+            </li>
+            <li>
+              Playback timing and jump scheduling were improved for smoother,
+              more reliable transitions.
+            </li>
+            <li>
+              <strong>Autocanonizer mode</strong> was added as a new playback
+              option.
+            </li>
+          </ul>
         </div>
       </section>
       <div id="tuning-modal" class="modal">

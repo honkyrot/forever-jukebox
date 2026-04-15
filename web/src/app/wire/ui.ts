@@ -62,6 +62,9 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.searchSubtabButtons.forEach((button) => {
     button.addEventListener("click", tabsHandlers.handleSearchSubtabClick);
   });
+  elements.faqSubtabButtons.forEach((button) => {
+    button.addEventListener("click", tabsHandlers.handleFaqSubtabClick);
+  });
   elements.favoritesSyncButton.addEventListener(
     "click",
     favoritesHandlers.handleFavoritesSyncToggle,
@@ -187,10 +190,12 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   //
   elements.tuningReset.addEventListener("click", tuningHandlers.handleTuningReset);
   elements.playButton.addEventListener("click", playbackHandlers.handlePlayClick);
-  elements.vizPlayButton.addEventListener(
-    "click",
-    playbackHandlers.handlePlayClick,
-  );
+  if (elements.vizPlayButton !== elements.playButton) {
+    elements.vizPlayButton.addEventListener(
+      "click",
+      playbackHandlers.handlePlayClick,
+    );
+  }
   elements.shortUrlButton.addEventListener(
     "click",
     playbackHandlers.handleShortUrlClick,

@@ -1,4 +1,4 @@
-import type { AppContext } from "./context";
+import type { AppContext, TabId } from "./context";
 import {
   ANALYSIS_POLL_INTERVAL_MS,
   LISTEN_TIMER_INTERVAL_MS,
@@ -9,10 +9,7 @@ import {
   fetchAudio,
   fetchJobByYoutube,
   recordPlay,
-  repairJob,
   type AnalysisComplete,
-  type AnalysisFailed,
-  type AnalysisInProgress,
   type AnalysisResponse,
 } from "./api";
 import { readCachedTrack, updateCachedTrack } from "./cache";
@@ -24,10 +21,18 @@ import {
   writeTuningParamsToUrl,
 } from "./tuning";
 import { storeAnchorHighlight } from "./anchorHighlight";
+import { setAutoMarqueeText } from "./marquee";
+import {
+  isAnalysisComplete,
+  isAnalysisFailed,
+  isAnalysisInProgress,
+} from "./analysisStatus";
 
 const DEFAULT_VOLUME = 0.5;
 const MAX_RANDOM_BRANCH_DELTA = 0.2;
 const RANDOM_BRANCH_DELTA_PERCENT_SCALE = 100 / MAX_RANDOM_BRANCH_DELTA;
+const GENERIC_LOAD_ERROR_MESSAGE =
+  "ERROR: Something went wrong. Please try again or report an issue on GitHub.";
 
 function getDeletedEdgeIdsFromGraph(
   graph: ReturnType<AppContext["engine"]["getGraphState"]>,
@@ -80,9 +85,9 @@ export function syncDeletedEdgeState(context: AppContext) {
 }
 
 export type PlaybackDeps = {
-  setActiveTab: (tabId: "top" | "search" | "play" | "faq") => void;
+  setActiveTab: (tabId: TabId) => void;
   navigateToTab: (
-    tabId: "top" | "search" | "play" | "faq",
+    tabId: TabId,
     options?: { replace?: boolean; youtubeId?: string | null },
   ) => void;
   updateTrackUrl: (youtubeId: string, replace?: boolean) => void;
@@ -508,6 +513,10 @@ export function startJukeboxFromBeat(context: AppContext, index: number) {
     if (document.fullscreenElement) {
       requestWakeLock(context);
     }
+    return;
+  }
+  if (!player.isPlaying()) {
+    engine.play();
   }
 }
 
@@ -555,18 +564,16 @@ function updatePlayButton(context: AppContext) {
   const label = isRunning ? "Pause" : state.isPaused ? "Resume" : "Play";
   const updateButton = (button: HTMLButtonElement) => {
     const icon = button.querySelector<HTMLSpanElement>(".play-icon");
-    const text = button.querySelector<HTMLSpanElement>(".play-text");
     if (icon) {
       icon.textContent = isRunning ? "pause" : "play_arrow";
-    }
-    if (text) {
-      text.textContent = label;
     }
     button.title = label;
     button.setAttribute("aria-label", label);
   };
   updateButton(context.elements.playButton);
-  updateButton(context.elements.vizPlayButton);
+  if (context.elements.vizPlayButton !== context.elements.playButton) {
+    updateButton(context.elements.vizPlayButton);
+  }
   const shouldPulse = isRunning && context.state.activeTabId !== "play";
   context.elements.playTabButton.classList.toggle("is-playing", shouldPulse);
 }
@@ -602,7 +609,7 @@ export function resetForNewTrack(
   state.lastBeatIndex = null;
   updateListenTimeDisplay(context);
   elements.beatsPlayedEl.textContent = "0";
-  elements.vizNowPlayingEl.textContent = "The Forever Jukebox";
+  setAutoMarqueeText(elements.vizNowPlayingEl, "The Forever Jukebox");
   if (elements.tuningModal.classList.contains("open")) {
     elements.tuningModal.classList.remove("open");
   }
@@ -624,7 +631,7 @@ export function resetForNewTrack(
   elements.computedThresholdEl.textContent = "-";
   engine.updateConfig({ ...defaultConfig });
   syncTuningUI(context);
-  elements.playTitle.textContent = "";
+  setAutoMarqueeText(elements.playTitle, "");
   elements.analysisStatus.textContent = "No song selected.";
   elements.analysisSpinner.classList.add("hidden");
   elements.analysisProgress.textContent = "";
@@ -665,39 +672,9 @@ export async function loadAudioFromJob(context: AppContext, jobId: string) {
     }
     return true;
   } catch (err) {
-    const status = (err as Error & { status?: number }).status;
-    if (status === 404) {
-      try {
-        await repairJob(jobId);
-      } catch (repairErr) {
-        console.warn(`Repair failed: ${String(repairErr)}`);
-      }
-    }
     state.audioLoadInFlight = false;
     return false;
   }
-}
-
-function isAnalysisComplete(
-  response: AnalysisResponse | null,
-): response is AnalysisComplete {
-  return response?.status === "complete";
-}
-
-function isAnalysisFailed(
-  response: AnalysisResponse | null,
-): response is AnalysisFailed {
-  return response?.status === "failed";
-}
-
-function isAnalysisInProgress(
-  response: AnalysisResponse | null,
-): response is AnalysisInProgress {
-  return (
-    response?.status === "downloading" ||
-    response?.status === "queued" ||
-    response?.status === "processing"
-  );
 }
 
 export function applyAnalysisResult(
@@ -746,11 +723,11 @@ export function applyAnalysisResult(
         ? `${baseTitle} (autocanonized)`
         : baseTitle;
     const displayTitle = artist ? `${withSuffix} — ${artist}` : withSuffix;
-    elements.playTitle.textContent = displayTitle;
-    elements.vizNowPlayingEl.textContent = displayTitle;
+    setAutoMarqueeText(elements.playTitle, displayTitle);
+    setAutoMarqueeText(elements.vizNowPlayingEl, displayTitle);
   } else {
-    elements.playTitle.textContent = "";
-    elements.vizNowPlayingEl.textContent = "The Forever Jukebox";
+    setAutoMarqueeText(elements.playTitle, "");
+    setAutoMarqueeText(elements.vizNowPlayingEl, "The Forever Jukebox");
   }
   updateTrackInfo(context);
   onAnalysisLoaded?.(response);
@@ -796,10 +773,7 @@ export async function pollAnalysis(
       }
       const response = await fetchAnalysis(jobId, controller.signal);
       if (!response) {
-        deps.setAnalysisStatus(
-          "ERROR: Something went wrong. Please try again or report an issue on GitHub.",
-          false,
-        );
+        deps.setAnalysisStatus(GENERIC_LOAD_ERROR_MESSAGE, false);
         return;
       }
       maybeUpdateDeleteEligibility(context, response, jobId);
@@ -816,14 +790,6 @@ export async function pollAnalysis(
           await loadAudioFromJob(context, jobId);
         }
       } else if (isAnalysisFailed(response)) {
-        if (response.error_code === "analysis_missing" && response.id) {
-          try {
-            await repairJob(response.id);
-            continue;
-          } catch (err) {
-            console.warn(`Repair failed: ${String(err)}`);
-          }
-        }
         deps.setAnalysisStatus(response.error || "Loading failed.", false);
         return;
       } else if (isAnalysisComplete(response)) {
@@ -852,57 +818,73 @@ export async function pollAnalysis(
   }
 }
 
-export async function loadTrackByYouTubeId(
+async function continueTrackLoadWithResponse(
   context: AppContext,
   deps: PlaybackDeps,
-  youtubeId: string,
+  response: AnalysisResponse | null,
+) {
+  if (!response || !response.id) {
+    deps.setAnalysisStatus(GENERIC_LOAD_ERROR_MESSAGE, false);
+    return;
+  }
+  maybeUpdateDeleteEligibility(context, response, response.id);
+  context.state.lastJobId = response.id;
+  if (isAnalysisInProgress(response)) {
+    await pollAnalysis(context, deps, response.id);
+    return;
+  }
+  if (isAnalysisComplete(response)) {
+    if (!context.state.audioLoaded) {
+      const audioLoaded = await loadAudioFromJob(context, response.id);
+      if (!audioLoaded) {
+        await pollAnalysis(context, deps, response.id);
+        return;
+      }
+    }
+    applyAnalysisResult(context, response, deps.onAnalysisLoaded);
+    deps.setActiveTab("play");
+    return;
+  }
+  await pollAnalysis(context, deps, response.id);
+}
+
+async function loadTrack(
+  context: AppContext,
+  deps: PlaybackDeps,
+  source: { type: "youtube"; id: string } | { type: "job"; id: string },
   options?: { preserveUrlTuning?: boolean },
 ) {
   const shouldClear = !options?.preserveUrlTuning;
   resetForNewTrack(context, { clearTuning: shouldClear });
   deps.setActiveTab("play");
   deps.setLoadingProgress(null, "Fetching audio");
-  context.state.lastYouTubeId = youtubeId;
-  deps.onTrackChange?.(youtubeId);
-  await tryLoadCachedAudio(context, youtubeId);
+  if (source.type === "youtube") {
+    context.state.lastYouTubeId = source.id;
+    deps.onTrackChange?.(source.id);
+  } else {
+    context.state.lastJobId = source.id;
+    context.state.lastYouTubeId = null;
+    deps.onTrackChange?.(null);
+  }
+  await tryLoadCachedAudio(context, source.id);
   try {
-    const response = await fetchJobByYoutube(youtubeId);
-    if (!response || !response.id) {
-      deps.setAnalysisStatus(
-        "ERROR: Something went wrong. Please try again or report an issue on GitHub.",
-        false,
-      );
-      return;
-    }
-    maybeUpdateDeleteEligibility(context, response, response.id);
-    context.state.lastJobId = response.id;
-    if (isAnalysisInProgress(response)) {
-      await pollAnalysis(context, deps, response.id);
-      return;
-    }
-    if (isAnalysisComplete(response) && response.id) {
-      if (!context.state.audioLoaded) {
-        const audioLoaded = await loadAudioFromJob(context, response.id);
-        if (!audioLoaded) {
-          await pollAnalysis(context, deps, response.id);
-          return;
-        }
-      }
-      applyAnalysisResult(context, response, deps.onAnalysisLoaded);
-      deps.setActiveTab("play");
-      return;
-    }
-    if (response.id) {
-      await pollAnalysis(context, deps, response.id);
-      return;
-    }
-    deps.setAnalysisStatus(
-      "ERROR: Something went wrong. Please try again or report an issue on GitHub.",
-      false,
-    );
+    const response =
+      source.type === "youtube"
+        ? await fetchJobByYoutube(source.id)
+        : await fetchAnalysis(source.id);
+    await continueTrackLoadWithResponse(context, deps, response);
   } catch (err) {
     deps.setAnalysisStatus(`Load failed: ${String(err)}`, false);
   }
+}
+
+export async function loadTrackByYouTubeId(
+  context: AppContext,
+  deps: PlaybackDeps,
+  youtubeId: string,
+  options?: { preserveUrlTuning?: boolean },
+) {
+  await loadTrack(context, deps, { type: "youtube", id: youtubeId }, options);
 }
 
 export async function loadTrackByJobId(
@@ -911,55 +893,14 @@ export async function loadTrackByJobId(
   jobId: string,
   options?: { preserveUrlTuning?: boolean },
 ) {
-  const shouldClear = !options?.preserveUrlTuning;
-  resetForNewTrack(context, { clearTuning: shouldClear });
-  deps.setActiveTab("play");
-  deps.setLoadingProgress(null, "Fetching audio");
-  context.state.lastJobId = jobId;
-  context.state.lastYouTubeId = null;
-  deps.onTrackChange?.(null);
-  await tryLoadCachedAudio(context, jobId);
-  try {
-    const response = await fetchAnalysis(jobId);
-    if (!response || !response.id) {
-      deps.setAnalysisStatus(
-        "ERROR: Something went wrong. Please try again or report an issue on GitHub.",
-        false,
-      );
-      return;
-    }
-    maybeUpdateDeleteEligibility(context, response, response.id);
-    if (isAnalysisInProgress(response)) {
-      await pollAnalysis(context, deps, response.id);
-      return;
-    }
-    if (isAnalysisComplete(response)) {
-      if (!context.state.audioLoaded) {
-        const audioLoaded = await loadAudioFromJob(context, response.id);
-        if (!audioLoaded) {
-          await pollAnalysis(context, deps, response.id);
-          return;
-        }
-      }
-      applyAnalysisResult(context, response, deps.onAnalysisLoaded);
-      deps.setActiveTab("play");
-      return;
-    }
-    if (response.id) {
-      await pollAnalysis(context, deps, response.id);
-      return;
-    }
-    deps.setAnalysisStatus(
-      "ERROR: Something went wrong. Please try again or report an issue on GitHub.",
-      false,
-    );
-  } catch (err) {
-    deps.setAnalysisStatus(`Load failed: ${String(err)}`, false);
-  }
+  await loadTrack(context, deps, { type: "job", id: jobId }, options);
 }
 
 export function requestWakeLock(context: AppContext) {
   if (!("wakeLock" in navigator)) {
+    return;
+  }
+  if (context.state.wakeLock || !document.fullscreenElement) {
     return;
   }
   navigator.wakeLock
@@ -967,9 +908,11 @@ export function requestWakeLock(context: AppContext) {
     .then((lock) => {
       context.state.wakeLock = lock;
       function onRelease() {
-        handleWakeLockRelease(context);
+        if (context.state.wakeLock === lock) {
+          handleWakeLockRelease(context);
+        }
       }
-      context.state.wakeLock.addEventListener("release", onRelease);
+      lock.addEventListener("release", onRelease);
     })
     .catch(() => {
       console.warn("Wake lock unavailable");
@@ -981,13 +924,14 @@ function handleWakeLockRelease(context: AppContext) {
 }
 
 export function releaseWakeLock(context: AppContext) {
-  if (!context.state.wakeLock) {
+  const lock = context.state.wakeLock;
+  if (!lock) {
     return;
   }
-  context.state.wakeLock.release().catch(() => {
+  context.state.wakeLock = null;
+  lock.release().catch(() => {
     console.warn("Failed to release wake lock");
   });
-  context.state.wakeLock = null;
 }
 
 export function cancelPoll(context: AppContext) {

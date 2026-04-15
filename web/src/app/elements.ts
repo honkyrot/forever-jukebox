@@ -83,10 +83,12 @@ export function getElements() {
     document.querySelector<HTMLDivElement>("#analysis-progress"),
     "#analysis-progress"
   );
-  const playButton = requireElement(
-    document.querySelector<HTMLButtonElement>("#play"),
-    "#play"
-  );
+  const playButton =
+    document.querySelector<HTMLButtonElement>("#play") ??
+    requireElement(
+      document.querySelector<HTMLButtonElement>("#viz-play"),
+      "#viz-play"
+    );
   const bringHomeLabel = requireElement(
     document.querySelector<HTMLSpanElement>("#bring-home-label"),
     "#bring-home-label"
@@ -296,6 +298,26 @@ export function getElements() {
   const searchPanelTitle = requireElement(
     document.querySelector<HTMLDivElement>("#search-panel-title"),
     "#search-panel-title"
+  );
+  const faqSubtabs = requireElement(
+    document.querySelector<HTMLDivElement>("#faq-subtabs"),
+    "#faq-subtabs"
+  );
+  const faqSubtabButtons = requireNonEmpty(
+    Array.from(document.querySelectorAll<HTMLButtonElement>("[data-faq-subtab]")),
+    "[data-faq-subtab]"
+  );
+  const faqPanelTitle = requireElement(
+    document.querySelector<HTMLDivElement>("#faq-panel-title"),
+    "#faq-panel-title"
+  );
+  const faqPanel = requireElement(
+    document.querySelector<HTMLDivElement>("#faq-panel"),
+    "#faq-panel"
+  );
+  const faqWhatsNewPanel = requireElement(
+    document.querySelector<HTMLDivElement>("#faq-whats-new-panel"),
+    "#faq-whats-new-panel"
   );
   const searchPanel = requireElement(
     document.querySelector<HTMLDivElement>("#search-panel"),
@@ -574,6 +596,11 @@ export function getElements() {
     searchSubtabs,
     searchSubtabButtons,
     searchPanelTitle,
+    faqSubtabs,
+    faqSubtabButtons,
+    faqPanelTitle,
+    faqPanel,
+    faqWhatsNewPanel,
     searchPanel,
     uploadPanel,
     uploadFileSection,
