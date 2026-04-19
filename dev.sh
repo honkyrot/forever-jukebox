@@ -13,10 +13,14 @@ PYTHON_VERSION=""
 UPDATE_YTDLP=false
 UPDATE_DENO=false
 UPDATE_MADMOM_BEATS_LITE=false
+SKIP_CHECKS=false
 
 for arg in "$@"; do
   if [[ "$arg" == "--host" ]]; then
     VITE_HOST_FLAG="VITE_LAN=1"
+  fi
+  if [[ "$arg" == "--skip" ]]; then
+    SKIP_CHECKS=true
   fi
 done
 
@@ -392,11 +396,13 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-ensure_python
-ensure_command npm
-ensure_api_env
-ensure_engine_env
-ensure_web_deps
+if ! is_true "$SKIP_CHECKS"; then
+  ensure_python
+  ensure_command npm
+  ensure_api_env
+  ensure_engine_env
+  ensure_web_deps
+fi
 
 start_api
 start_worker

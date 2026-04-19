@@ -1,17 +1,22 @@
 import type { Elements } from "../elements";
 import type { TabId } from "../context";
+
+type TopSongItem = {
+  id?: string;
+  title?: string;
+  artist?: string;
+  source_id?: string;
+  source_provider?: string;
+  play_count?: number;
+};
+
 type TopSongsDeps = {
   elements: Elements;
-  fetchTopSongs: (limit: number, sortBy?: string, offset?: number) => Promise<
-    Array<{ title?: string; artist?: string; youtube_id?: string; play_count?: number }>
-  >;
-  fetchTrendingSongs: () => Promise<
-    Array<{ title?: string; artist?: string; youtube_id?: string; play_count?: number }>
-  >;
-  fetchRecentSongs: (limit: number) => Promise<
-    Array<{ title?: string; artist?: string; youtube_id?: string; play_count?: number }>
-  >;
-  loadTrackByYouTubeId: (youtubeId: string) => void;
+  fetchTopSongs: (limit: number, sortBy?: string, offset?: number) => Promise<TopSongItem[]>;
+  fetchTrendingSongs: () => Promise<TopSongItem[]>;
+  fetchRecentSongs: (limit: number) => Promise<TopSongItem[]>;
+  loadTrackBySourceId: (sourceId: string, sourceProvider?: string) => void;
+  loadTrackByJobId: (jobId: string) => void;
   navigateToTabWithState: (
     tabId: TabId,
     options?: { replace?: boolean; youtubeId?: string | null },
@@ -27,7 +32,8 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
     fetchTopSongs,
     fetchTrendingSongs,
     fetchRecentSongs,
-    loadTrackByYouTubeId,
+    loadTrackBySourceId,
+    loadTrackByJobId,
     navigateToTabWithState,
     limit,
   } = deps;
@@ -35,11 +41,13 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
   let allTimeOffset = 0;
   const ALL_TIME_LIMIT = 50;
 
+  function isLikelyJobId(value: string) {
+    return /^[a-f0-9]{32}$/.test(value);
+  }
+
   async function renderSongList(options: {
     listEl: HTMLOListElement;
-    fetchItems: () => Promise<
-      Array<{ title?: string; artist?: string; youtube_id?: string; play_count?: number }>
-    >;
+    fetchItems: () => Promise<TopSongItem[]>;
     loadingText: string;
     emptyText: string;
     errorPrefix: string;
@@ -75,8 +83,11 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
       for (const item of renderItems) {
         const title = typeof item.title === "string" ? item.title : "Untitled";
         const artist = typeof item.artist === "string" ? item.artist : "";
-        const youtubeId =
-          typeof item.youtube_id === "string" ? item.youtube_id : "";
+        const sourceId = typeof item.source_id === "string" ? item.source_id : "";
+        const jobId = typeof item.id === "string" ? item.id : "";
+        const sourceProvider = typeof item.source_provider === "string" ? item.source_provider : "";
+        const listenId = sourceProvider === "youtube" && sourceId ? sourceId : (jobId || sourceId);
+        
         const li = document.createElement("li");
         
         const container = document.createElement("span");
@@ -87,11 +98,14 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
 
         const textSpan = document.createElement("span");
         
-        if (youtubeId) {
+        if (listenId) {
           const link = document.createElement("a");
-          link.href = `/listen/${encodeURIComponent(youtubeId)}`;
+          link.href = `/listen/${encodeURIComponent(listenId)}`;
           link.textContent = artist ? `${title} — ${artist}` : title;
-          link.dataset.youtubeId = youtubeId;
+          link.dataset.trackId = listenId;
+          if (sourceProvider) {
+            link.dataset.sourceProvider = sourceProvider;
+          }
           link.style.textDecoration = "none";
           link.addEventListener("click", handleTopSongClick);
           textSpan.appendChild(link);
@@ -103,13 +117,6 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
 
         if (typeof item.play_count === "number") {
           container.title = `${item.play_count} plays`;
-          // const countSpan = document.createElement("span");
-          // countSpan.textContent = `${item.play_count} plays`;
-          // countSpan.style.opacity = "0.7";
-          // countSpan.style.fontSize = "0.85em";
-          // countSpan.style.whiteSpace = "nowrap";
-          // countSpan.style.marginLeft = "8px";
-          // container.appendChild(countSpan);
         }
 
         li.appendChild(container);
@@ -186,12 +193,17 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
   function handleTopSongClick(event: Event) {
     event.preventDefault();
     const target = event.currentTarget as HTMLAnchorElement | null;
-    const youtubeId = target?.dataset.youtubeId;
-    if (!youtubeId) {
+    const trackId = target?.dataset.trackId;
+    const sourceProvider = target?.dataset.sourceProvider;
+    if (!trackId) {
       return;
     }
-    navigateToTabWithState("play", { youtubeId });
-    loadTrackByYouTubeId(youtubeId);
+    navigateToTabWithState("play", { youtubeId: trackId });
+    if (isLikelyJobId(trackId)) {
+      loadTrackByJobId(trackId);
+      return;
+    }
+    loadTrackBySourceId(trackId, sourceProvider);
   }
 
   return {

@@ -23,8 +23,8 @@ import {
   fetchTrendingSongs,
   fetchRecentSongs,
   createFavoritesSync,
+  startUrlAnalysis,
   updateFavoritesSync,
-  startYoutubeAnalysis,
   uploadAudio,
 } from "./api";
 import { deleteCachedTrack, loadAppConfig, saveAppConfig } from "./cache";
@@ -129,6 +129,7 @@ export function bootstrap() {
     autoComputedThreshold: null,
     lastJobId: null,
     lastYouTubeId: null,
+    lastSourceProvider: null,
     pendingAutoFavoriteId: null,
     lastPlayCountedJobId: null,
     shiftBranching: false,
@@ -230,9 +231,10 @@ export function bootstrap() {
     createFavoritesSync,
     updateFavoritesSync,
     navigateToTabWithState: navigationHandlers.navigateToTabWithState,
-    loadTrackByYouTubeId: (youtubeId) =>
+    loadTrackByYouTubeId: (youtubeId, sourceProvider) =>
       loadTrackByYouTubeId(context, playbackDeps, youtubeId, {
         preserveUrlTuning: true,
+        sourceProvider,
       }),
     loadTrackByJobId: (jobId) =>
       loadTrackByJobId(context, playbackDeps, jobId, {
@@ -276,8 +278,10 @@ export function bootstrap() {
     fetchTrendingSongs,
     fetchRecentSongs,
     limit: TOP_SONGS_LIMIT,
-    loadTrackByYouTubeId: (youtubeId: string) =>
-      loadTrackByYouTubeId(context, playbackDeps, youtubeId),
+    loadTrackBySourceId: (sourceId: string, sourceProvider?: string) =>
+      loadTrackByYouTubeId(context, playbackDeps, sourceId, { sourceProvider }),
+    loadTrackByJobId: (jobId: string) =>
+      loadTrackByJobId(context, playbackDeps, jobId),
     navigateToTabWithState: navigationHandlers.navigateToTabWithState,
   });
   const topSongsTabLoaders = {
@@ -296,6 +300,14 @@ export function bootstrap() {
       },
       fetch: () => topSongsHandlers.fetchTrendingSongsList(),
       errorLabel: "Trending songs",
+    },
+    "all-time": {
+      loaded: () => state.allTimeSongsLoaded,
+      markLoaded: () => {
+        state.allTimeSongsLoaded = true;
+      },
+      fetch: () => topSongsHandlers.fetchAllTimeSongsList(),
+      errorLabel: "All time songs",
     },
     recent: {
       loaded: () => state.recentSongsLoaded,
@@ -324,32 +336,6 @@ export function bootstrap() {
       if (loader.loaded()) {
         return;
       }
-      if (tabId === "all-time") {
-        if (state.allTimeSongsLoaded) {
-          return;
-        }
-        topSongsHandlers
-          .fetchAllTimeSongsList()
-          .then(() => {
-            state.allTimeSongsLoaded = true;
-          })
-          .catch((err) => {
-            console.warn(`All time songs load failed: ${String(err)}`);
-          });
-      }
-      if (tabId === "recent") {
-        if (state.recentSongsLoaded) {
-          return;
-        }
-        topSongsHandlers
-          .fetchRecentSongsList()
-          .then(() => {
-            state.recentSongsLoaded = true;
-          })
-          .catch((err) => {
-            console.warn(`Recent songs load failed: ${String(err)}`);
-          });
-      }
       loader.fetch().then(loader.markLoaded).catch((err) => {
         console.warn(`${loader.errorLabel} load failed: ${String(err)}`);
       });
@@ -370,7 +356,7 @@ export function bootstrap() {
     runSearch,
     showToast,
     uploadAudio,
-    startYoutubeAnalysis,
+    startUrlAnalysis,
     resetForNewTrack,
     setActiveTabWithRefresh: navigationHandlers.setActiveTabWithRefresh,
     setLoadingProgress,

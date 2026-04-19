@@ -635,7 +635,7 @@ button.is-loading::after {
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 12, 16, 0.75);
+  background: rgba(10, 12, 16, 0);
   z-index: 20;
 }
 
