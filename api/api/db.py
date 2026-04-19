@@ -607,7 +607,7 @@ def get_top_tracks(
             params.extend(excluded_refs)
 
         query = (
-            '''
+            """
             SELECT
               (
                 SELECT j.id
@@ -623,25 +623,25 @@ def get_top_tracks(
               s.play_count
             FROM sources s
             WHERE
-            '''
+            """
             + "\n              AND ".join(where_parts)
         )
 
         if cutoff is not None:
             query += (
-                '''
+                """
                 ORDER BY
                   (s.play_count * 1.0) / (
-                    1.0 + MAX(0.0, (julianday('now') - julianday('''
+                    1.0 + MAX(0.0, (julianday('now') - julianday("""
                 + activity_expr
-                + ''')) * 24.0)
+                + """)) * 24.0)
                   ) DESC,
                   s.play_count DESC,
-                  '''
+                  """
                 + activity_expr
-                + ''' DESC
+                + """ DESC
                 LIMIT ? OFFSET ?
-                '''
+                """
             )
         else:
             if sort_by == "newest":
@@ -652,12 +652,12 @@ def get_top_tracks(
                 query += f"\n            ORDER BY s.track_artist COLLATE NOCASE ASC, s.track_title COLLATE NOCASE ASC\n            LIMIT ? OFFSET ?"
             else:
                 query += (
-                    '''
-                    ORDER BY s.play_count DESC, '''
+                    """
+                    ORDER BY s.play_count DESC, """
                     + activity_expr
-                    + ''' DESC
+                    + """ DESC
                     LIMIT ? OFFSET ?
-                    '''
+                    """
                 )
         params.append(limit)
         params.append(offset)
