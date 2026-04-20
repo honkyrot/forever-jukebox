@@ -397,6 +397,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 if ! is_true "$SKIP_CHECKS"; then
+  echo "Running environment checks..."
   ensure_python
   ensure_command npm
   ensure_api_env
