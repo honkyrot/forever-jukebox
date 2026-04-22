@@ -501,6 +501,15 @@ a:focus-visible {
   display: none;
 }
 
+/* hidden squared */
+.mega-hidden {
+  display: none !important;
+}
+
+.mega-visible {
+  display: block !important;
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;
