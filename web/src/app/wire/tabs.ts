@@ -1,6 +1,7 @@
 import type { AppState, TabId } from "../context";
 import { TOP_SONGS_LIMIT } from "../constants";
 import type { Elements } from "../elements";
+import { navigateToFaqSubtab, type FaqSubtabId } from "../tabs";
 import type { FavoritesHandlers } from "./favorites";
 
 type TabsDeps = {
@@ -65,7 +66,7 @@ export function createTabsHandlers(deps: TabsDeps) {
       tabId === "search" ? "Search" : "Upload";
   }
 
-  function setFaqTab(tabId: "faq" | "whats-new") {
+  function setFaqTab(tabId: FaqSubtabId) {
     elements.faqSubtabButtons.forEach((button) => {
       button.classList.toggle("active", button.dataset.faqSubtab === tabId);
     });
@@ -103,11 +104,13 @@ export function createTabsHandlers(deps: TabsDeps) {
 
   function handleFaqSubtabClick(event: Event) {
     const button = event.currentTarget as HTMLButtonElement | null;
-    const tabId = button?.dataset.faqSubtab as "faq" | "whats-new" | undefined;
+    const tabId = button?.dataset.faqSubtab as FaqSubtabId | undefined;
     if (!tabId) {
       return;
     }
     setFaqTab(tabId);
+    navigateToFaqSubtab(tabId);
+    onFaqOpen?.();
   }
 
   function handleTabClick(event: Event) {

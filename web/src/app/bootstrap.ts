@@ -6,13 +6,14 @@ import { AutocanonizerController } from "../autocanonizer/AutocanonizerControlle
 import { JukeboxController } from "../jukebox/JukeboxController";
 import { applyTheme, applyThemeVariables, resolveStoredTheme } from "./theme";
 import { resolveStoredAnchorHighlight } from "./anchorHighlight";
+import { resolveStoredBranchStatsEnabled } from "./extrasMode";
 import {
   setAnalysisStatus,
   setLoadingProgress,
   isEditableTarget,
   showToast,
 } from "./ui";
-import { navigateToTab, updateTrackUrl } from "./tabs";
+import { navigateToTab, type FaqSubtabId, updateTrackUrl } from "./tabs";
 import { handleRouteChange } from "./routing";
 import { initBackgroundTimer } from "../shared/backgroundTimer";
 import {
@@ -31,12 +32,15 @@ import { deleteCachedTrack, loadAppConfig, saveAppConfig } from "./cache";
 import {
   applyAnalysisResult,
   applyTuningChanges,
+  applyExtrasChanges,
+  resetExtrasDefaults,
   closeInfo,
   closeTuning,
   resetTuningDefaults,
   loadAudioFromJob,
   loadTrackByJobId,
   loadTrackByYouTubeId,
+  openExtras,
   openInfo,
   openTuning,
   pollAnalysis,
@@ -47,6 +51,10 @@ import {
   startAutocanonizerPlayback,
   startJukeboxFromBeat,
   stopPlayback,
+  syncExtrasUI,
+  syncTuningTabsUI,
+  setActiveTuningTab,
+  getActiveTuningTab,
   togglePlayback,
   updateTrackInfo,
   updateVizVisibility,
@@ -108,6 +116,7 @@ export function bootstrap() {
   const autocanonizer = new AutocanonizerController(elements.canonizerLayer);
   const jukebox = new JukeboxController(elements.vizLayer);
   const highlightAnchorBranch = resolveStoredAnchorHighlight();
+  const branchStatsEnabled = resolveStoredBranchStatsEnabled();
   jukebox.setAnchorHighlightEnabled(highlightAnchorBranch);
   const defaultConfig = engine.getConfig();
   const state: AppState = {
@@ -134,7 +143,8 @@ export function bootstrap() {
     lastPlayCountedJobId: null,
     shiftBranching: false,
     bringItHomeMode: false,
-    extrasMode: false,
+    branchStatsEnabled,
+    jukeboxAudioMode: "off",
     selectedEdge: null,
     topSongsRefreshTimer: null,
     topSongsLoaded: false,
@@ -190,6 +200,8 @@ export function bootstrap() {
     updateTrackUrl,
     navigateToTab,
     updateVizVisibility,
+    openExtras,
+    syncTuningTabsUI,
     getTuningParamsFromEngine,
     writeTuningParamsToUrl,
     syncDeletedEdgeState,
@@ -342,6 +354,23 @@ export function bootstrap() {
     },
     onFaqOpen: refreshCacheSafely,
   });
+  const getFaqSubtabFromPath = (pathname: string): FaqSubtabId | null => {
+    if (pathname.startsWith("/whats-new")) {
+      return "whats-new";
+    }
+    if (pathname.startsWith("/faq")) {
+      return "faq";
+    }
+    return null;
+  };
+  const applyFaqRouteState = (pathname: string) => {
+    const faqSubtab = getFaqSubtabFromPath(pathname);
+    if (!faqSubtab) {
+      return;
+    }
+    tabsHandlers.setFaqTab(faqSubtab);
+    refreshCacheSafely();
+  };
   const appConfigHandlers = createAppConfigHandlers({
     elements,
     state,
@@ -376,6 +405,12 @@ export function bootstrap() {
     applyTuningChanges,
     resetTuningDefaults,
     toggleAutocanonizerTuning,
+    applyExtrasChanges,
+    resetExtrasDefaults,
+    syncExtrasUI,
+    syncTuningTabsUI,
+    setActiveTuningTab,
+    getActiveTuningTab,
   });
   const fullscreenHandlers = createFullscreenHandlers({
     context,
@@ -407,7 +442,10 @@ export function bootstrap() {
     playbackHandlers,
     handleRouteChange,
     playbackDeps,
-    onFaqOpen: refreshCacheSafely,
+    onFaqRoute: (subtabId) => {
+      tabsHandlers.setFaqTab(subtabId);
+      refreshCacheSafely();
+    },
   });
   const heroTitleHomeButton = document.querySelector<HTMLButtonElement>(
     "#hero-title-home",
@@ -448,14 +486,13 @@ export function bootstrap() {
   favoritesHandlers.syncFavoriteButton();
 
   playbackHandlers.applyModeFromUrl();
-  handleRouteChange(context, playbackDeps, window.location.pathname).catch(
-    (err) => {
+  handleRouteChange(context, playbackDeps, window.location.pathname)
+    .then(() => {
+      applyFaqRouteState(window.location.pathname);
+    })
+    .catch((err) => {
       console.warn(`Route load failed: ${String(err)}`);
-    },
-  );
-  if (window.location.pathname.startsWith("/faq")) {
-    refreshCacheSafely();
-  }
+    });
 
   window.addEventListener("popstate", routingHandlers.handlePopState);
   heroTitleHomeButton?.addEventListener("click", () => {
