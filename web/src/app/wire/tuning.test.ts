@@ -60,6 +60,7 @@ function createDeps(activeTab: "tuning" | "extras" = "tuning") {
   const syncTuningTabsUI = vi.fn();
   const setActiveTuningTab = vi.fn();
   const getActiveTuningTab = vi.fn(() => activeTab);
+  const toggleAutocanonizerTuning = vi.fn();
 
   const handlers = createTuningHandlers({
     context,
@@ -78,6 +79,7 @@ function createDeps(activeTab: "tuning" | "extras" = "tuning") {
     syncTuningTabsUI,
     setActiveTuningTab,
     getActiveTuningTab,
+    toggleAutocanonizerTuning,
   });
 
   return {
