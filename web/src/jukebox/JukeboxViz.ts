@@ -348,9 +348,18 @@ class CanvasViz {
         // use gradient between two nodes if option is checked
         if (localStorage.getItem("beatJumpGradient") === "true") {
           var gradient = this.baseCtx.createLinearGradient(from.x, from.y, to.x, to.y);
-          gradient.addColorStop(0, `hsla(${(edge.src.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
-          gradient.addColorStop(0.5, `hsla(${((edge.src.which + edge.dest.which) / 2 / this.positions.length) * 360}, 100%, 65%, 0.6)`);
-          gradient.addColorStop(1, `hsla(${(edge.dest.which / this.positions.length) * 360}, 100%, 65%, 0.6)`);
+          let hue1 = (edge.src.which / this.positions.length) * 360;
+          let hue2 = (edge.dest.which / this.positions.length) * 360;
+
+          if (Math.abs(hue1 - hue2) > 180) {
+            if (hue1 < hue2) hue1 += 360;
+            else hue2 += 360;
+          }
+
+          gradient.addColorStop(0, `hsla(${hue1 % 360}, 100%, 65%, 0.6)`);
+          gradient.addColorStop(0.5, `hsla(${((hue1 + hue2) / 2) % 360}, 100%, 65%, 0.6)`);
+          gradient.addColorStop(1, `hsla(${hue2 % 360}, 100%, 65%, 0.6)`);
+          
           this.baseCtx.strokeStyle = gradient;
         }
 
