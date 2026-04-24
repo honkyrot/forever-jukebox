@@ -1,3 +1,7 @@
+# FORKER'S NOTE:
+I don't add additions here as I do not touch the PWA code.
+So don't expect parity between the web and PWA versions.
+
 # Forever Jukebox PWA
 
 Standalone, offline PWA for local audio analysis and playback.

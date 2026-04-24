@@ -333,6 +333,17 @@ class CanvasViz {
         : 1;
 
     this.baseCtx.strokeStyle = this.theme.edgeStroke;
+
+    // for visual effect 2 variables
+    let maxDistance = 0;
+    if (localStorage.getItem("visualEffectMode") === "2") {
+      for (const e of edges) {
+        if (!e.deleted && e.distance > maxDistance) {
+          maxDistance = e.distance;
+        }
+      }
+    }
+
     for (let i = 0; i < edges.length; i += step) {
       const edge = edges[i];
       if (edge.deleted) {
@@ -345,8 +356,10 @@ class CanvasViz {
       }
       const geometry = this.getEdgeGeometry(edge);
       if (geometry?.bend && geometry.control) {
+        // console.log(edge);
+        // branch
         // use gradient between two nodes if option is checked
-        if (localStorage.getItem("beatJumpGradient") === "true") {
+        if (localStorage.getItem("visualEffectMode") === "1") {
           var gradient = this.baseCtx.createLinearGradient(from.x, from.y, to.x, to.y);
           let hue1 = (edge.src.which / this.positions.length) * 360;
           let hue2 = (edge.dest.which / this.positions.length) * 360;
@@ -361,7 +374,34 @@ class CanvasViz {
           gradient.addColorStop(1, `hsla(${hue2 % 360}, 100%, 65%, 0.6)`);
           
           this.baseCtx.strokeStyle = gradient;
+        } else if (localStorage.getItem("visualEffectMode") === "2") {
+          // gradient colors
+          const similarity = maxDistance > 0 ? 1 - (edge.distance / maxDistance) : 1;
+          const hue = similarity * 140; // red to green
+
+          this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
+        } else if (localStorage.getItem("visualEffectMode") === "3") {
+          // engine colors
+          if (edge.src.oseg && edge.src.oseg.pitches) {
+            // Calculate a circular mean of the pitches for smooth continuity
+            let vectorX = 0;
+            let vectorY = 0;
+
+            for (let j = 0; j < edge.src.oseg.pitches.length; j++) {
+              const angle = (j / edge.src.oseg.pitches.length) * Math.PI * 2;
+              vectorX += edge.src.oseg.pitches[j] * Math.cos(angle);
+              vectorY += edge.src.oseg.pitches[j] * Math.sin(angle);
+            }
+
+            let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
+            if (hue < 0) hue += 360;
+
+            this.baseCtx.strokeStyle = `hsla(${hue}, 75%, 65%, 0.6)`;
+          } else {
+            this.baseCtx.strokeStyle = this.theme.edgeStroke;
+          }
         }
+          
 
         this.baseCtx.beginPath();
         this.baseCtx.moveTo(from.x, from.y);
@@ -392,15 +432,57 @@ class CanvasViz {
 
     this.baseCtx.fillStyle = this.theme.beatFill;
     for (let i = 0; i < this.positions.length; i += 1) {
+      // beats
       // use gradient if option is checked
-      if (localStorage.getItem("beatGradient") === "true") {
+      if (localStorage.getItem("visualEffectMode") === "1") {
         this.baseCtx.fillStyle = `hsl(${(i / this.positions.length) * 360}, 100%, 65%)`;
+      } else if (localStorage.getItem("visualEffectMode") === "2") {
+        // branch similarity colors
+        let bestDistance = maxDistance;
+        for (const e of edges) {
+          if (!e.deleted && e.src.which === i && e.distance < bestDistance) {
+            bestDistance = e.distance;
+          }
+        }
+        const similarity = maxDistance > 0 ? 1 - (bestDistance / maxDistance) : 1;
+        const hue = similarity * 140; // red to green
+        this.baseCtx.fillStyle = `hsla(${hue}, 100%, 65%, 0.8)`;
+      } else if (localStorage.getItem("visualEffectMode") === "3") {
+        // engine colors
+        const beat = this.data.beats[i];
+        if (beat && beat.oseg && beat.oseg.pitches) {
+          let vectorX = 0;
+          let vectorY = 0;
+          for (let j = 0; j < beat.oseg.pitches.length; j++) {
+            const angle = (j / beat.oseg.pitches.length) * Math.PI * 2;
+            vectorX += beat.oseg.pitches[j] * Math.cos(angle);
+            vectorY += beat.oseg.pitches[j] * Math.sin(angle);
+          }
+          let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
+          if (hue < 0) hue += 360;
+
+          this.baseCtx.fillStyle = `hsla(${hue}, 75%, 65%, 0.8)`;
+        } else {
+          this.baseCtx.fillStyle = this.theme.beatFill;
+        }
       }
 
       const p = this.positions[i];
       this.baseCtx.beginPath();
-      this.baseCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-      this.baseCtx.fill();
+      
+      if (localStorage.getItem("useSquareBeats") === "true") {
+        this.baseCtx.save();
+        this.baseCtx.translate(p.x, p.y);
+
+        const angle = Math.atan2(p.y - this.center.y, p.x - this.center.x);
+
+        this.baseCtx.rotate(angle);
+        this.baseCtx.fillRect(-2, -2, 4, 4);
+        this.baseCtx.restore();
+      } else {
+        this.baseCtx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+        this.baseCtx.fill();
+      }
     }
     this.baseCtx.restore();
   }
@@ -425,16 +507,52 @@ class CanvasViz {
     }
     const current = this.positions[this.currentIndex];
     if (current) {
-      // use gradient if option is checked
-      if (localStorage.getItem("beatGradient") === "true") {
+      // progress seek whatever-you-call-it indicator
+      if (localStorage.getItem("visualEffectMode") === "1") {
+        // gradient
         var progress = this.currentIndex / this.positions.length;
         this.overlayCtx.fillStyle = `hsl(${progress * 360}, 100%, 70%)`;
+
+      } else if (localStorage.getItem("visualEffectMode") === "3") {
+        // uses pitch coloring via circular mean
+        const beat = this.data.beats[this.currentIndex];
+
+        if (beat && beat.oseg && beat.oseg.pitches) {
+          let vectorX = 0;
+          let vectorY = 0;
+          for (let j = 0; j < beat.oseg.pitches.length; j++) {
+            const angle = (j / beat.oseg.pitches.length) * Math.PI * 2;
+            vectorX += beat.oseg.pitches[j] * Math.cos(angle);
+            vectorY += beat.oseg.pitches[j] * Math.sin(angle);
+          }
+          let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
+          if (hue < 0) hue += 360;
+
+          this.overlayCtx.fillStyle = `hsl(${hue}, 100%, 75%)`;
+        } else {
+          this.overlayCtx.fillStyle = this.theme.beatHighlight;
+        }
       } else {
         this.overlayCtx.fillStyle = this.theme.beatHighlight;
       }
       this.overlayCtx.beginPath();
-      this.overlayCtx.arc(current.x, current.y, 10, 0, Math.PI * 2);
-      this.overlayCtx.fill();
+
+      if (localStorage.getItem("useAltSeekShape") === "true") {
+        // retangle seek that looks at next beat to determine angle
+        const nextIndex = this.currentIndex + 1 < this.positions.length ? this.currentIndex + 1 : this.currentIndex;
+        const next = this.positions[nextIndex];
+        const angle = Math.atan2(next.y - current.y, next.x - current.x);
+
+        this.overlayCtx.save();
+        this.overlayCtx.translate(current.x, current.y);
+        this.overlayCtx.rotate(angle);
+        this.overlayCtx.fillRect(-2, -10, 4, 20);
+        this.overlayCtx.restore();
+      } else {
+        // default circle
+        this.overlayCtx.arc(current.x, current.y, 10, 0, Math.PI * 2);
+        this.overlayCtx.fill();
+      }
     }
     if (this.jumpLine) {
       const age = performance.now() - this.jumpLine.at;

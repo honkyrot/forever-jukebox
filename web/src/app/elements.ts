@@ -537,13 +537,21 @@ export function getElements() {
     document.querySelector<HTMLDivElement>("#volume-control-panel"),
     "#volume-control-panel"
   );
-  const beatGradientToggle = requireElement(
-    document.querySelector<HTMLInputElement>("#beat-gradient"),
-    "#beat-gradient"
+  const visualEffectDefaultToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#visual-effect-default"),
+    "#visual-effect-default"
   );
-  const beatJumpGradientToggle = requireElement(
-    document.querySelector<HTMLInputElement>("#beat-jump-gradient"),
-    "#beat-jump-gradient"
+  const useRGBGradientToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#use-RGB-gradient"),
+    "#use-RGB-gradient"
+  );
+  const useSimilarityColorsToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#use-similarity-colors"),
+    "#use-similarity-colors"
+  );
+  const useEngineColorsToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#use-engine-colors"),
+    "#use-engine-colors"
   );
   const autocanonizerTuningButton = requireElement(
     document.querySelector<HTMLButtonElement>("#autocanonizer-tuning"),
@@ -584,6 +592,34 @@ export function getElements() {
   const allTimeSortSelect = requireElement(
     document.querySelector<HTMLSelectElement>("#all-time-sort-select"),
     "#all-time-sort-select"
+  );
+  const useSquareBeatsToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#use-square-beats"),
+    "#use-square-beats"
+  );
+  const useAltSeekShapeToggle = requireElement(
+    document.querySelector<HTMLInputElement>("#use-alt-seek-shape"),
+    "#use-alt-seek-shape"
+  );
+  const songTimestampLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#viz-timestamp"),
+    "#viz-timestamp"
+  );
+  const songGreenTimestampLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#autocanonizer-green-timestamp"),
+    "#autocanonizer-green-timestamp"
+  );
+  const songGreenLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#autocanonizer-green-label"),
+    "#autocanonizer-green-label"
+  );
+  const songDurationDivider = requireElement(
+    document.querySelector<HTMLSpanElement>("#viz-duration-divider"),
+    "#viz-duration-divider"
+  );
+  const songDurationLabel = requireElement(
+    document.querySelector<HTMLSpanElement>("#viz-duration"),
+    "#viz-duration"
   );
   //
   return {
@@ -719,8 +755,10 @@ export function getElements() {
     branchChance,
     branchChanceDivider,
     bpmBarToggle,
-    beatGradientToggle,
-    beatJumpGradientToggle,
+    visualEffectDefaultToggle,
+    useRGBGradientToggle,
+    useSimilarityColorsToggle,
+    useEngineColorsToggle,
     autocanonizerTuningButton,
     autocanonizerTuningModal,
     blueAudioBalanceInput,
@@ -731,6 +769,13 @@ export function getElements() {
     allTimeLoadMoreContainer,
     allTimeLoadMoreButton,
     allTimeSortSelect,
+    useSquareBeatsToggle,
+    useAltSeekShapeToggle,
+    songTimestampLabel,
+    songGreenTimestampLabel,
+    songGreenLabel,
+    songDurationDivider,
+    songDurationLabel,
     //
   };
 }

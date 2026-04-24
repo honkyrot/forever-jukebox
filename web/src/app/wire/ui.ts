@@ -178,10 +178,22 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.justBackwardsInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.highlightAnchorBranchInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.removeSeqInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.extrasEnabledInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeOffInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeNightcoreInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeDaycoreInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeVaporwaveInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeEightDInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeLofiInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.bpmBarToggle.addEventListener("change", playbackHandlers.bpmBarToggler);
   elements.volumeButton.addEventListener("click", tuningHandlers.handleVolumeButtonClick);
-  elements.beatGradientToggle.addEventListener("change", playbackHandlers.handleBeatGradientToggle);
-  elements.beatJumpGradientToggle.addEventListener("change", playbackHandlers.handleBeatJumpGradientToggle);
+  elements.visualEffectDefaultToggle.addEventListener("change", playbackHandlers.handleVisualEffectModeChange);
+  elements.useRGBGradientToggle.addEventListener("change", playbackHandlers.handleVisualEffectModeChange);
+  elements.useSimilarityColorsToggle.addEventListener("change", playbackHandlers.handleVisualEffectModeChange);
+  elements.useEngineColorsToggle.addEventListener("change", playbackHandlers.handleVisualEffectModeChange);
+  elements.useSquareBeatsToggle.addEventListener("change", playbackHandlers.handleUseSquareBeatsChange);
+  elements.useAltSeekShapeToggle.addEventListener("change", playbackHandlers.handleUseAltSeekShapeChange);
+
   // buttons
   elements.autocanonizerTuningButton.addEventListener(
     "click",

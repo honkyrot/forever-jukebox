@@ -445,6 +445,12 @@
                     The Forever Jukebox
                   </div>
                   <div class="viz-meta">
+                    <span id="viz-timestamp">00:00</span>
+                    <span id="autocanonizer-green-timestamp" class="viz-divider">·</span>
+                    <span id="autocanonizer-green-label" class="timestamp-green">00:00</span>
+                    <span id="viz-duration-divider">/</span>
+                    <span id="viz-duration">00:00</span>
+                    <span class="viz-divider">·</span>
                     <span>Listen Time:</span>
                     <span id="listen-time">00:00:00</span>
                     <span id="viz-beats-divider" class="viz-divider">·</span>
@@ -768,40 +774,71 @@
               </div>
               <div class="model-right-half">
                 <div class="checkbox-row">
-                  <label
-                    ><input id="just-backwards" type="checkbox" /> Allow only
-                    reverse branches</label
-                  >
-                  <label
-                    ><input id="just-long" type="checkbox" /> Allow only long
-                    branches</label
-                  >
-                  <label
-                    ><input id="remove-seq" type="checkbox" /> Remove sequential
-                    branches</label
-                  >
-                  <label
-                    ><input id="highlight-anchor-branch" type="checkbox" />
-                    Highlight forced anchor jump</label
-                  >
                   <label>
-                  <input id="bpm-bar-toggle" type="checkbox" checked/> Show BPM bar
+                    <input id="just-backwards" type="checkbox" />
+                    Allow only reverse branches
                   </label>
                   <label>
-                    <input id="beat-gradient" type="checkbox"/> Use gradient on beats
+                    <input id="just-long" type="checkbox" /> 
+                    Allow only long branches
                   </label>
                   <label>
-                    <input id="beat-jump-gradient" type="checkbox"/> Use gradient on jump lines
+                    <input id="remove-seq" type="checkbox" />
+                    Remove sequential branches
+                  </label>
+                  <label>
+                    <input id="highlight-anchor-branch" type="checkbox" />
+                    Highlight forced anchor jump
+                  </label>
                 </div>
               </div>
             </div>
-            <h2 id="tuning-title">
+            <div class="model-footer">
+              <button id="tuning-reset">Reset</button>
+            </div>
+            <h2 style="margin: 0px;">
+              Visuals
+            </h2>
+            <div class="tuning-body">
+              <label style="margin: 4px;">
+                <input id="bpm-bar-toggle" type="checkbox" checked/>
+                Show BPM bar
+              </label>
+              <label style="margin: 4px;">
+                <input id="use-square-beats" type="checkbox"/>
+                Square beats
+              </label>
+              <label style="margin: 4px;">
+                <input id="use-alt-seek-shape" type="checkbox"/>
+                Alternate Seek Shape
+              </label>
+            </div>
+            <div class="tuning-body">
+              <div class="visual-mode-group">
+                <div class="label-line">Coloring</div>
+                <div class="visual-mode-options" style="margin-top: 8px;">
+                  <label>
+                    <input id="visual-effect-default" type="radio" name="visual-effect" value="0"/> Default
+                  </label>
+                  <label>
+                    <input id="use-RGB-gradient" type="radio" name="visual-effect" value="1"/> Rainbow Gradient
+                  </label>
+                  <label>
+                    <input id="use-similarity-colors" type="radio" name="visual-effect" value="2" /> Similarity-based
+                  </label>
+                  <label>
+                    <input id="use-engine-colors" type="radio" name="visual-effect" value="3" title="Similar to Eternal Jukebox's coloring."/> Engine-based
+                  </label>
+                </div>
+              </div>
+            </div>
+            <h2 id="tuning-title" style="margin-top: 0px;">
               <span id="tuning-title-text">Extras</span>
             </h2>
             <div id="tuning-panel-extras" class="mega-visible">
               <div class="checkbox-row extras-checkbox-row">
                 <label>
-                  <input id="extras-enabled" type="checkbox" />
+                  <input id="extras-enabled" type="checkbox"/>
                   Show selected branch stats
                 </label>
               </div>
@@ -876,8 +913,7 @@
               </div>
             </div>
           </div>
-          <div class="modal-footer tuning-footer">
-            <button id="tuning-reset">Reset</button>
+          <div class="modal-footer tuning-footer hidden">
             <button id="tuning-apply" class="is-hidden">Apply</button>
           </div>
         </div>

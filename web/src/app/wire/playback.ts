@@ -7,7 +7,7 @@ import type { JukeboxController } from "../../jukebox/JukeboxController";
 import type { AutocanonizerController } from "../../autocanonizer/AutocanonizerController";
 import type { ToastOptions } from "../ui";
 import { VISUALIZATION_LABELS } from "../constants";
-import { formatDuration } from "../format";
+import { formatDuration, formatShortDuration } from "../format";
 import { setAutoMarqueeText } from "../marquee";
 
 type PlaybackUiDeps = {
@@ -229,6 +229,8 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
         );
         state.lastBeatIndex = engineState.currentBeatIndex;
       }
+
+      
     });
 
     // updates on every beat!?
@@ -236,15 +238,34 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
       onBeat();
     });
 
-    elements.beatGradientToggle.checked = localStorage.getItem("beatGradient") === "true";
-    elements.beatJumpGradientToggle.checked = localStorage.getItem("beatJumpGradient") === "true";
-  
+    let visualEffectVal = localStorage.getItem("visualEffectMode");
+    if (!visualEffectVal) {
+      visualEffectVal = "0";
+      localStorage.setItem("visualEffectMode", "0");
+    }
+
+    if (visualEffectVal === "1") {
+      elements.useRGBGradientToggle.checked = true;
+    } else if (visualEffectVal === "2") {
+      elements.useSimilarityColorsToggle.checked = true;
+    } else if (visualEffectVal === "3") {
+      elements.useEngineColorsToggle.checked = true;
+    } else {
+      elements.visualEffectDefaultToggle.checked = true;
+    }
+
+    if (localStorage.getItem("useSquareBeats") === "true") {
+      elements.useSquareBeatsToggle.checked = true;
+    }
+
+    if (localStorage.getItem("useAltSeekShape") === "true") {
+      elements.useAltSeekShapeToggle.checked = true;
+    }
+
     elements.autocanonizerTuningButton.classList.toggle(
       "is-hidden",
       state.playMode === "jukebox",
     );
-
-
   }
 
   var bpmBarVisible = true;
@@ -632,25 +653,34 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     syncBringItHomeLabel();
   }
 
-  function handleBeatGradientToggle(event: Event) {
+  // forks
+  function handleVisualEffectModeChange(event: Event) {
     const input = event.currentTarget as HTMLInputElement | null;
-    if (!input) {
+    if (!input || !input.checked) {
       return;
     }
-    const enabled = input.checked;
-    localStorage.setItem("beatGradient", String(enabled));
+    localStorage.setItem("visualEffectMode", input.value);
     jukebox.refresh();
   }
 
-  function handleBeatJumpGradientToggle(event: Event) {
+  function handleUseSquareBeatsChange(event: Event) {
     const input = event.currentTarget as HTMLInputElement | null;
     if (!input) {
       return;
     }
-    const enabled = input.checked;
-    localStorage.setItem("beatJumpGradient", String(enabled));
+    localStorage.setItem("useSquareBeats", String(input.checked));
     jukebox.refresh();
   }
+
+  function handleUseAltSeekShapeChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input) {
+      return;
+    }
+    localStorage.setItem("useAltSeekShape", String(input.checked));
+    jukebox.refresh();
+  }
+  //
 
   return {
     initializePlayback,
@@ -669,7 +699,8 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     updateVizVisibility: () => updateVizVisibility(context),
     bpmBarToggler,
     handleVolumeButtonClick,
-    handleBeatGradientToggle,
-    handleBeatJumpGradientToggle,
+    handleVisualEffectModeChange,
+    handleUseSquareBeatsChange,
+    handleUseAltSeekShapeChange,
   };
 }

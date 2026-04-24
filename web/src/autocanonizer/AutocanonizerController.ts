@@ -82,6 +82,18 @@ class AutocanonizerPlayer {
     this.skewDelta = 0;
   }
 
+  getCurrentTime(): number {
+    if (!this.currentBeat) return 0;
+    if (!this.mainSource) return this.currentBeat.start;
+    return this.context.currentTime - this.deltaTime;
+  }
+
+  getOtherCurrentTime(): number {
+    if (!this.currentBeat) return 0;
+    if (!this.otherSource) return this.currentBeat.other.start;
+    return this.context.currentTime - this.otherDeltaTime;
+  }
+
   stop() {
     if (this.mainSource) {
       try {
@@ -325,6 +337,14 @@ export class AutocanonizerController {
 
   isReady() {
     return Boolean(this.player && this.beats.length);
+  }
+
+  getCurrentTimes() {
+    if (!this.player) return null;
+    return {
+      main: this.player.getCurrentTime(),
+      other: this.player.getOtherCurrentTime()
+    };
   }
 
   start() {

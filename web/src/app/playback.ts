@@ -4,7 +4,7 @@ import {
   ANALYSIS_POLL_INTERVAL_MS,
   LISTEN_TIMER_INTERVAL_MS,
 } from "./constants";
-import { formatDuration } from "./format";
+import { formatDuration, formatShortDuration } from "./format";
 import {
   fetchAnalysis,
   fetchAudio,
@@ -123,6 +123,49 @@ export function updateListenTimeDisplay(context: AppContext) {
     state.playTimerMs +
     (state.lastPlayStamp !== null ? now - state.lastPlayStamp : 0);
   elements.listenTimeEl.textContent = formatDuration(totalMs / 1000);
+
+  // timestamp
+  let currentTime = context.player.getCurrentTime() || 0;
+  let duration = state.trackDurationSec || 0;
+  let otherTime = 0;
+
+  if (state.playMode === "autocanonizer") {
+    const times = context.autocanonizer.getCurrentTimes();
+    if (times) {
+      currentTime = times.main || 0;
+      otherTime = times.other || 0;
+    }
+  }
+
+  if (state.playMode === "autocanonizer") {
+    // tracks the two audio stream's times
+    elements.songTimestampLabel.classList.add("timestamp-blue");
+    elements.songGreenTimestampLabel.classList.remove("is-hidden");
+    elements.songGreenLabel.classList.remove("is-hidden");
+    
+    if (Number.isFinite(currentTime) && Number.isFinite(otherTime)) {
+      elements.songTimestampLabel.textContent = formatShortDuration(currentTime);
+      elements.songGreenLabel.textContent = formatShortDuration(otherTime);
+      elements.songDurationLabel.textContent = formatShortDuration(duration);
+    } else {
+      elements.songTimestampLabel.textContent = "00:00";
+      elements.songGreenLabel.textContent = "00:00";
+      elements.songDurationLabel.textContent = "00:00";
+    }
+  } else {
+    // and the normal single stream time
+    elements.songTimestampLabel.classList.remove("timestamp-blue");
+    elements.songGreenTimestampLabel.classList.add("is-hidden");
+    elements.songGreenLabel.classList.add("is-hidden");
+
+    if (Number.isFinite(currentTime) && Number.isFinite(duration)) {
+      elements.songTimestampLabel.textContent = formatShortDuration(currentTime);
+      elements.songDurationLabel.textContent = formatShortDuration(duration);
+    } else {
+      elements.songTimestampLabel.textContent = "00:00";
+      elements.songDurationLabel.textContent = "00:00";
+    }
+  }
 }
 
 function maybeUpdateDeleteEligibility(

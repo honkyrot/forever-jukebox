@@ -19,6 +19,11 @@ body {
   min-height: 100vh;
 }
 
+/* going to use monotype font for ths */
+span {
+  font-feature-settings: "tnum";
+}
+
 #app {
   max-width: 1240px;
   width: 100%;
@@ -1113,6 +1118,14 @@ button.is-loading::after {
   border-radius: 8px;
 }
 
+.timestamp-blue {
+  color: var(--blue, #4f8fff);
+}
+
+.timestamp-green {
+  color: var(--green, #10df00);
+}
+
 .is-hidden {
   display: none !important;
 }
@@ -1929,4 +1942,19 @@ button.is-loading::after {
 
 .channel-label {
   text-align: center;
+}
+
+/* my stuff appended below */
+
+.visual-mode-group {
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface-control);
+}
+
+.visual-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }

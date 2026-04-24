@@ -9,6 +9,15 @@ export function formatDuration(seconds: number) {
   return `${hh}:${mm}:${ss}`;
 }
 
+export function formatShortDuration(seconds: number) {
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(secs).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
 export function formatTrackDuration(seconds: unknown) {
   if (typeof seconds !== "number" || Number.isNaN(seconds)) {
     return "-";

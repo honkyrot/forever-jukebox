@@ -159,34 +159,38 @@ export function createTuningHandlers(deps: TuningDeps) {
   // }
 
   function handleTuningApply() {
-    const activeTab = getActiveTuningTab(context);
-    if (activeTab === "extras") {
-      const result = applyExtrasChanges(context);
-      syncExtrasUI(context);
-      syncTuningTabsUI(context);
-      if (result.audioModeChanged) {
-        syncTrackTitle();
-      }
-      closeTuning(context);
-      return;
-    }
+    // const activeTab = getActiveTuningTab(context);
+    // if (activeTab === "extras") {
+    //   const result = applyExtrasChanges(context);
+    //   syncExtrasUI(context);
+    //   syncTuningTabsUI(context);
+    //   if (result.audioModeChanged) {
+    //     syncTrackTitle();
+    //   }
+    //   closeTuning(context);
+    //   return;
     applyTuningChanges(context);
   }
 
   function handleTuningReset() {
-    const activeTab = getActiveTuningTab(context);
-    if (activeTab === "extras") {
-      const result = resetExtrasDefaults(context);
-      syncExtrasUI(context);
-      syncTuningTabsUI(context);
-      if (result.audioModeChanged) {
-        syncTrackTitle();
-      }
-      closeTuning(context);
-      return;
-    }
+    // const activeTab = getActiveTuningTab(context);
+    // if (activeTab === "extras") {
+    //   const result = resetExtrasDefaults(context);
+    //   syncExtrasUI(context);
+    //   syncTuningTabsUI(context);
+    //   if (result.audioModeChanged) {
+    //     syncTrackTitle();
+    //   }
+    //   closeTuning(context);
+    //   return;
+    // }
     resetTuningDefaults(context);
-    //closeTuning(context);
+    const result = resetExtrasDefaults(context);
+    syncExtrasUI(context);
+    syncTuningTabsUI(context);
+    if (result.audioModeChanged) {
+      syncTrackTitle();
+    }
   }
 
   function handleVolumeButtonClick() {

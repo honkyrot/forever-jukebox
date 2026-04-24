@@ -64,6 +64,8 @@ export type AppState = {
     blue: number;
     green: number;
   };
+  autocanonizerMainTime?: number;
+  autocanonizerOtherTime?: number;
 };
 
 export type AppContext = {
