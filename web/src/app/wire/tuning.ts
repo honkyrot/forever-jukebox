@@ -169,7 +169,14 @@ export function createTuningHandlers(deps: TuningDeps) {
     //   }
     //   closeTuning(context);
     //   return;
+    // }
     applyTuningChanges(context);
+    const result = applyExtrasChanges(context);
+    syncExtrasUI(context);
+    syncTuningTabsUI(context);
+    if (result.audioModeChanged) {
+      syncTrackTitle();
+    }
   }
 
   function handleTuningReset() {
