@@ -7,7 +7,7 @@ import type { JukeboxController } from "../../jukebox/JukeboxController";
 import type { AutocanonizerController } from "../../autocanonizer/AutocanonizerController";
 import type { ToastOptions } from "../ui";
 import { VISUALIZATION_LABELS } from "../constants";
-import { formatDuration, formatShortDuration } from "../format";
+import { formatDuration } from "../format";
 import { setAutoMarqueeText } from "../marquee";
 
 type PlaybackUiDeps = {
