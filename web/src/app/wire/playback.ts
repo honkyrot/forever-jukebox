@@ -133,6 +133,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
       state.playMode !== "jukebox" ||
       !edge
     ) {
+      elements.branchStatsDeleteButton.disabled = true;
       elements.branchStatsPopup.classList.add("hidden");
       return;
     }
@@ -156,7 +157,29 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     elements.branchStatsDirectionEl.textContent = direction;
     elements.branchStatsSimilarityEl.textContent =
       `${toSimilarityPercent(edge.distance, maxDistance)}%`;
+    elements.branchStatsDeleteButton.disabled = edge.deleted;
     elements.branchStatsPopup.classList.remove("hidden");
+  }
+
+  function deleteSelectedBranch() {
+    if (!state.selectedEdge || state.selectedEdge.deleted) {
+      return;
+    }
+    engine.deleteEdge(state.selectedEdge);
+    engine.rebuildGraph();
+    state.vizData = engine.getVisualizationData();
+    const data = state.vizData;
+    if (data) {
+      jukebox.setData(data);
+    }
+    jukebox.refresh();
+    jukebox.resizeActive();
+    syncDeletedEdgeState(context);
+    updateTrackInfo(context);
+    writeTuningParamsToUrl(state.tuningParams, true);
+    state.selectedEdge = null;
+    jukebox.setSelectedEdge(null);
+    syncExtrasPopup(null);
   }
 
   function initializePlayback() {
@@ -416,21 +439,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
       !state.selectedEdge.deleted
     ) {
       event.preventDefault();
-      engine.deleteEdge(state.selectedEdge);
-      engine.rebuildGraph();
-      state.vizData = engine.getVisualizationData();
-      const data = state.vizData;
-      if (data) {
-        jukebox.setData(data);
-      }
-      jukebox.refresh();
-      jukebox.resizeActive();
-      syncDeletedEdgeState(context);
-      updateTrackInfo(context);
-      writeTuningParamsToUrl(state.tuningParams, true);
-      state.selectedEdge = null;
-      jukebox.setSelectedEdge(null);
-      syncExtrasPopup(null);
+      deleteSelectedBranch();
       return;
     }
     if (
@@ -476,6 +485,12 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     state.selectedEdge = edge;
     jukebox.setSelectedEdgeActive(edge);
     syncExtrasPopup(edge);
+  }
+
+  function handleBranchStatsDeleteClick(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteSelectedBranch();
   }
 
   async function copyShortUrl() {
@@ -693,6 +708,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     handleKeyup,
     handleBeatSelect,
     handleEdgeSelect,
+    handleBranchStatsDeleteClick,
     setActiveVisualization,
     applyModeFromUrl,
     setPlayMode,
