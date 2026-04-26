@@ -317,6 +317,54 @@ class CanvasViz {
     return null;
   }
 
+  // yeah
+  private clamp(value: number, min: number, max: number) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  private resolveTimbreColor(
+    beat: QuantumBase | null | undefined,
+    alpha: number,
+    fallback: string
+  ) {
+    const hue_shift = 200;
+
+    const timbre = beat?.oseg?.timbre;
+    if (!timbre || timbre.length === 0) {
+      return fallback;
+    }
+
+    let vectorX = 0;
+    let vectorY = 0;
+    let energy = 0;
+    const scale = 24;
+
+    for (let i = 0; i < timbre.length; i++) {
+      const normalized = Math.tanh(timbre[i] / scale);
+      const angle = (i / timbre.length) * Math.PI * 2;
+      vectorX += normalized * Math.cos(angle);
+      vectorY += normalized * Math.sin(angle);
+      energy += normalized * normalized;
+    }
+
+    let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
+    if (hue < 0) {
+      hue += 360;
+    }
+    hue = (hue + hue_shift) % 360;
+
+    const rms = Math.sqrt(energy / timbre.length);
+    const brightnessBias = Math.tanh((timbre[0] ?? 0) / 18);
+    const saturation = this.clamp(42 + rms * 68, 38, 96);
+    const lightness = this.clamp(48 + brightnessBias * 14 + rms * 10, 30, 78);
+    const normalizedAlpha = this.clamp(alpha, 0, 1);
+
+    return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${lightness.toFixed(
+      1
+    )}%, ${normalizedAlpha.toFixed(3)})`;
+  }
+  //
+
   private drawBase() {
     if (!this.data || !this.visible) {
       return;
@@ -356,7 +404,6 @@ class CanvasViz {
       }
       const geometry = this.getEdgeGeometry(edge);
       if (geometry?.bend && geometry.control) {
-        // console.log(edge);
         // branch
         // use gradient between two nodes if option is checked
         if (localStorage.getItem("visualEffectMode") === "1") {
@@ -381,25 +428,11 @@ class CanvasViz {
 
           this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
         } else if (localStorage.getItem("visualEffectMode") === "3") {
-          // engine colors
-          if (edge.src.oseg && edge.src.oseg.pitches) {
-            // Calculate a circular mean of the pitches for smooth continuity
-            let vectorX = 0;
-            let vectorY = 0;
-
-            for (let j = 0; j < edge.src.oseg.pitches.length; j++) {
-              const angle = (j / edge.src.oseg.pitches.length) * Math.PI * 2;
-              vectorX += edge.src.oseg.pitches[j] * Math.cos(angle);
-              vectorY += edge.src.oseg.pitches[j] * Math.sin(angle);
-            }
-
-            let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
-            if (hue < 0) hue += 360;
-
-            this.baseCtx.strokeStyle = `hsla(${hue}, 75%, 65%, 0.6)`;
-          } else {
-            this.baseCtx.strokeStyle = this.theme.edgeStroke;
-          }
+          this.baseCtx.strokeStyle = this.resolveTimbreColor(
+            edge.src,
+            0.6,
+            this.theme.edgeStroke
+          );
         }
           
 
@@ -448,23 +481,12 @@ class CanvasViz {
         const hue = similarity * 140; // red to green
         this.baseCtx.fillStyle = `hsla(${hue}, 100%, 65%, 0.8)`;
       } else if (localStorage.getItem("visualEffectMode") === "3") {
-        // engine colors
         const beat = this.data.beats[i];
-        if (beat && beat.oseg && beat.oseg.pitches) {
-          let vectorX = 0;
-          let vectorY = 0;
-          for (let j = 0; j < beat.oseg.pitches.length; j++) {
-            const angle = (j / beat.oseg.pitches.length) * Math.PI * 2;
-            vectorX += beat.oseg.pitches[j] * Math.cos(angle);
-            vectorY += beat.oseg.pitches[j] * Math.sin(angle);
-          }
-          let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
-          if (hue < 0) hue += 360;
-
-          this.baseCtx.fillStyle = `hsla(${hue}, 75%, 65%, 0.8)`;
-        } else {
-          this.baseCtx.fillStyle = this.theme.beatFill;
-        }
+        this.baseCtx.fillStyle = this.resolveTimbreColor(
+          beat,
+          0.8,
+          this.theme.beatFill
+        );
       }
 
       const p = this.positions[i];
@@ -514,24 +536,12 @@ class CanvasViz {
         this.overlayCtx.fillStyle = `hsl(${progress * 360}, 100%, 70%)`;
 
       } else if (localStorage.getItem("visualEffectMode") === "3") {
-        // uses pitch coloring via circular mean
         const beat = this.data.beats[this.currentIndex];
-
-        if (beat && beat.oseg && beat.oseg.pitches) {
-          let vectorX = 0;
-          let vectorY = 0;
-          for (let j = 0; j < beat.oseg.pitches.length; j++) {
-            const angle = (j / beat.oseg.pitches.length) * Math.PI * 2;
-            vectorX += beat.oseg.pitches[j] * Math.cos(angle);
-            vectorY += beat.oseg.pitches[j] * Math.sin(angle);
-          }
-          let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
-          if (hue < 0) hue += 360;
-
-          this.overlayCtx.fillStyle = `hsl(${hue}, 100%, 75%)`;
-        } else {
-          this.overlayCtx.fillStyle = this.theme.beatHighlight;
-        }
+        this.overlayCtx.fillStyle = this.resolveTimbreColor(
+          beat,
+          1,
+          this.theme.beatHighlight
+        );
       } else {
         this.overlayCtx.fillStyle = this.theme.beatHighlight;
       }

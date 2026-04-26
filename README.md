@@ -1,13 +1,15 @@
 ### Local modifications
 This fork was created to add a couple of features I wanted
 
-Changes:
+Changelog:
 - Some adjustments to UI elements (personal preference).
 - Added a "Branch Chance" display to show the current probability of branching at the next beat.
-- bpm visualizer
-- random stuff i liked
+- BPM visualizer
+- More color options (timbre and similarity)
+- Extra autocannonizer features
+- Show all songs feature
 
-i dunno how to modify PWA or Android versions<br>
+i dunno how to modify PWA or Android versions, they will be left as is<br>
 have fun
 
 # The Forever Jukebox
