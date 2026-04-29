@@ -358,7 +358,7 @@ class CanvasViz {
     hue = (hue + hue_shift) % 360;
 
     const rms = Math.sqrt(energy / timbre.length);
-    const brightnessBias = Math.tanh((timbre[0] ?? 0) / 18);
+    // const brightnessBias = Math.tanh((timbre[0] ?? 0) / 18);
     const saturation = this.clamp(42 + rms * 68, 38, 96);
     // const lightness = this.clamp(48 + brightnessBias * 14 + rms * 10, 30, 78);
     const normalizedAlpha = this.clamp(alpha, 0, 1);
