@@ -679,8 +679,8 @@ function startJukeboxPlayback(context: AppContext, resetSession: boolean) {
   } else {
     engine.syncToPlaybackPosition();
   }
-  engine.startJukebox(resetSession);
   engine.play();
+  engine.startJukebox(resetSession);
   state.lastPlayStamp = performance.now();
   state.isRunning = true;
   state.isPaused = false;
@@ -733,8 +733,8 @@ export function startJukeboxFromBeat(context: AppContext, index: number) {
   engine.seekToBeat(index);
   state.lastBeatIndex = index;
   if (!state.isRunning) {
-    engine.startJukebox(false);
     engine.play();
+    engine.startJukebox(false);
     state.lastPlayStamp = performance.now();
     state.isRunning = true;
     state.isPaused = false;
