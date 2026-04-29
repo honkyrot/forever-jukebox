@@ -322,17 +322,21 @@ class CanvasViz {
     return Math.min(Math.max(value, min), max);
   }
 
-  private resolveTimbreColor(
+  private resolveVEMThreeColor(
     beat: QuantumBase | null | undefined,
     alpha: number,
     fallback: string
   ) {
+    // return color based on values
     const hue_shift = 200;
 
     const timbre = beat?.oseg?.timbre;
     if (!timbre || timbre.length === 0) {
       return fallback;
     }
+
+    const loudness = beat?.oseg?.loudness_max ?? 0;
+    let decibel = 70 + loudness;
 
     let vectorX = 0;
     let vectorY = 0;
@@ -356,12 +360,11 @@ class CanvasViz {
     const rms = Math.sqrt(energy / timbre.length);
     const brightnessBias = Math.tanh((timbre[0] ?? 0) / 18);
     const saturation = this.clamp(42 + rms * 68, 38, 96);
-    const lightness = this.clamp(48 + brightnessBias * 14 + rms * 10, 30, 78);
+    // const lightness = this.clamp(48 + brightnessBias * 14 + rms * 10, 30, 78);
     const normalizedAlpha = this.clamp(alpha, 0, 1);
 
-    return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${lightness.toFixed(
-      1
-    )}%, ${normalizedAlpha.toFixed(3)})`;
+    // return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${lightness.toFixed(1)}%, ${normalizedAlpha.toFixed(3)})`;
+    return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${decibel.toFixed(1)}%, ${normalizedAlpha.toFixed(3)})`;
   }
   //
 
@@ -428,7 +431,7 @@ class CanvasViz {
 
           this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
         } else if (localStorage.getItem("visualEffectMode") === "3") {
-          this.baseCtx.strokeStyle = this.resolveTimbreColor(
+          this.baseCtx.strokeStyle = this.resolveVEMThreeColor(
             edge.src,
             0.6,
             this.theme.edgeStroke
@@ -482,7 +485,7 @@ class CanvasViz {
         this.baseCtx.fillStyle = `hsla(${hue}, 100%, 65%, 0.8)`;
       } else if (localStorage.getItem("visualEffectMode") === "3") {
         const beat = this.data.beats[i];
-        this.baseCtx.fillStyle = this.resolveTimbreColor(
+        this.baseCtx.fillStyle = this.resolveVEMThreeColor(
           beat,
           0.8,
           this.theme.beatFill
@@ -537,7 +540,7 @@ class CanvasViz {
 
       } else if (localStorage.getItem("visualEffectMode") === "3") {
         const beat = this.data.beats[this.currentIndex];
-        this.overlayCtx.fillStyle = this.resolveTimbreColor(
+        this.overlayCtx.fillStyle = this.resolveVEMThreeColor(
           beat,
           1,
           this.theme.beatHighlight
