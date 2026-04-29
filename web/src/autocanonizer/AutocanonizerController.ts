@@ -27,7 +27,7 @@ class AutocanonizerPlayer {
   private mainPanner: StereoPannerNode;
   private otherPanner: StereoPannerNode;
   private masterBlend: number;
-  private baseVolume = 0.7;
+  private baseVolume = 0.5;
 
   private currentBeat: CanonizerBeat | null = null;
   private mainSource: AudioBufferSourceNode | null = null;
