@@ -27,7 +27,7 @@ class AutocanonizerPlayer {
   private mainPanner: StereoPannerNode;
   private otherPanner: StereoPannerNode;
   private masterBlend: number;
-  private baseVolume = 1;
+  private baseVolume = 0.7;
 
   private currentBeat: CanonizerBeat | null = null;
   private mainSource: AudioBufferSourceNode | null = null;
@@ -63,6 +63,9 @@ class AutocanonizerPlayer {
   setBalance(blue: number, green: number) {
     this.mainPanner.pan.value = Math.max(-1, Math.min(1, blue / 100));
     this.otherPanner.pan.value = Math.max(-1, Math.min(1, green / 100));
+
+    // save to localstorage
+    localStorage.setItem("audioBalance", JSON.stringify({ blue, green }));
   }
 
   setBuffer(buffer: AudioBuffer) {

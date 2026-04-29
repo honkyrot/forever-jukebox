@@ -252,8 +252,6 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
         );
         state.lastBeatIndex = engineState.currentBeatIndex;
       }
-
-      
     });
 
     // updates on every beat!?
@@ -632,6 +630,27 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     // close tuning elements
     context.elements.tuningModal.classList.remove("open");
     context.elements.autocanonizerTuningModal.classList.remove("open");
+
+    // load balance from localstorage when switching to autocanonizer
+    if (mode === "autocanonizer") {
+      const balance = localStorage.getItem("audioBalance");
+      if (balance) {
+        try {
+          const { blue, green } = JSON.parse(balance);
+          if (typeof blue === "number" && typeof green === "number") {
+            context.state.audioBalance.blue = blue;
+            context.state.audioBalance.green = green;
+            elements.blueAudioBalanceInput.value = String(blue);
+            elements.greenAudioBalanceInput.value = String(green);
+            elements.blueAudioBalanceLabel.textContent = `${blue}`;
+            elements.greenAudioBalanceLabel.textContent = `${green}`;
+            autocanonizer.setBalance(blue, green);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    }
     // fork end
     autocanonizer.setVisible(mode === "autocanonizer");
     jukebox.setVisible(mode === "jukebox");
