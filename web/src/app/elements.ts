@@ -347,6 +347,14 @@ export function getElements() {
     document.querySelector<HTMLInputElement>("#audio-mode-lofi"),
     "#audio-mode-lofi"
   );
+  const audioModeCowbellInput = requireElement(
+    document.querySelector<HTMLInputElement>("#audio-mode-cowbell"),
+    "#audio-mode-cowbell"
+  );
+  const audioModeSwingInput = requireElement(
+    document.querySelector<HTMLInputElement>("#audio-mode-swing"),
+    "#audio-mode-swing"
+  );
   const searchInput = requireElement(
     document.querySelector<HTMLInputElement>("#search-input"),
     "#search-input"
@@ -716,6 +724,8 @@ export function getElements() {
     audioModeVaporwaveInput,
     audioModeEightDInput,
     audioModeLofiInput,
+    audioModeCowbellInput,
+    audioModeSwingInput,
     searchInput,
     searchButton,
     searchSubtabs,

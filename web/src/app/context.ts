@@ -9,6 +9,7 @@ import type { FavoriteTrack } from "./favorites";
 import type { AppConfig } from "./api";
 import type { AutocanonizerController } from "../autocanonizer/AutocanonizerController";
 import type { JukeboxController } from "../jukebox/JukeboxController";
+import type { CowbellOverlayService } from "../audio/CowbellOverlayService";
 
 export type TabId = "top" | "search" | "play" | "faq";
 
@@ -41,6 +42,8 @@ export type AppState = {
   bringItHomeMode: boolean;
   branchStatsEnabled: boolean;
   jukeboxAudioMode: JukeboxAudioMode;
+  swingPreparing: boolean;
+  swingRenderToken: number;
   selectedEdge: Edge | null;
   topSongsRefreshTimer: number | null;
   topSongsLoaded: boolean;
@@ -74,6 +77,7 @@ export type AppContext = {
   player: BufferedAudioPlayer;
   autocanonizer: AutocanonizerController;
   jukebox: JukeboxController;
+  cowbellOverlay: CowbellOverlayService;
   defaultConfig: ReturnType<JukeboxEngine["getConfig"]>;
   state: AppState;
 };
