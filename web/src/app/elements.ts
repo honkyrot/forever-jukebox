@@ -451,6 +451,14 @@ export function getElements() {
     document.querySelector<HTMLOListElement>("#recent-songs"),
     "#recent-songs"
   );
+  const favoritesFilter = requireElement(
+    document.querySelector<HTMLDivElement>("#favorites-filter"),
+    "#favorites-filter"
+  );
+  const favoritesSearchInput = requireElement(
+    document.querySelector<HTMLInputElement>("#favorites-search-input"),
+    "#favorites-search-input"
+  );
   const favoritesList = requireElement(
     document.querySelector<HTMLOListElement>("#favorites-list"),
     "#favorites-list"
@@ -750,6 +758,8 @@ export function getElements() {
     topSongsList,
     trendingSongsList,
     recentSongsList,
+    favoritesFilter,
+    favoritesSearchInput,
     favoritesList,
     topSongsTabs,
     topListTitle,

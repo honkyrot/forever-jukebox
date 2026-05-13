@@ -962,6 +962,14 @@ button.is-loading::after {
   list-style: none;
 }
 
+.favorites-filter {
+  margin: 0 0 10px;
+}
+
+.favorites-filter .search-input {
+  width: 100%;
+}
+
 .favorite-row {
   display: flex;
   align-items: center;

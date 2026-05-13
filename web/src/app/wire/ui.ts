@@ -72,6 +72,10 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.favoritesSyncItems.forEach((button) => {
     button.addEventListener("click", favoritesHandlers.handleFavoritesSyncItem);
   });
+  elements.favoritesSearchInput.addEventListener(
+    "input",
+    favoritesHandlers.handleFavoritesSearchInput,
+  );
   elements.favoritesSyncEnterClose.addEventListener(
     "click",
     favoritesHandlers.handleFavoritesSyncEnterClose,

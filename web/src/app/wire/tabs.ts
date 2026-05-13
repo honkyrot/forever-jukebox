@@ -36,6 +36,7 @@ export function createTabsHandlers(deps: TabsDeps) {
     elements.trendingSongsList.classList.toggle("hidden", tabId !== "trending");
     elements.allTimeSongsList.classList.toggle("hidden", tabId !== "all-time");
     elements.recentSongsList.classList.toggle("hidden", tabId !== "recent");
+    elements.favoritesFilter.classList.toggle("hidden", tabId !== "favorites");
     elements.favoritesList.classList.toggle("hidden", tabId !== "favorites");
     elements.allTimeSortSelect.classList.toggle("hidden", tabId !== "all-time");
     if (tabId !== "all-time") {
