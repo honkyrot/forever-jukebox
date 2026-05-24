@@ -16,7 +16,6 @@ type TopSongsDeps = {
   fetchTopSongs: (limit: number, sortBy?: string, offset?: number) => Promise<TopSongItem[]>;
   fetchTrendingSongs: () => Promise<TopSongItem[]>;
   fetchRecentSongs: (limit: number) => Promise<TopSongItem[]>;
-  loadTrackBySourceId: (sourceId: string, sourceProvider?: string) => void;
   loadTrackById: (trackId: string) => void;
   loadTrackByJobId: (jobId: string) => void;
   navigateToTabWithState: (
