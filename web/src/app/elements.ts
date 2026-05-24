@@ -153,10 +153,6 @@ export function getElements() {
     document.querySelector<HTMLSpanElement>("#tuning-title-text"),
     "#tuning-title-text"
   );
-  const tuningBetaTag = requireElement(
-    document.querySelector<HTMLSpanElement>("#tuning-beta-tag"),
-    "#tuning-beta-tag"
-  );
   const tuningTabToggle = requireElement(
     document.querySelector<HTMLButtonElement>("#tuning-tab-toggle"),
     "#tuning-tab-toggle"
@@ -168,6 +164,34 @@ export function getElements() {
   const tuningTabToggleLabel = requireElement(
     document.querySelector<HTMLSpanElement>("#tuning-tab-toggle-label"),
     "#tuning-tab-toggle-label"
+  );
+  const sleepTimerOpen = requireElement(
+    document.querySelector<HTMLButtonElement>("#sleep-timer-open"),
+    "#sleep-timer-open"
+  );
+  const sleepTimerModal = requireElement(
+    document.querySelector<HTMLDivElement>("#sleep-timer-modal"),
+    "#sleep-timer-modal"
+  );
+  const sleepTimerClose = requireElement(
+    document.querySelector<HTMLButtonElement>("#sleep-timer-close"),
+    "#sleep-timer-close"
+  );
+  const sleepTimerCancel = requireElement(
+    document.querySelector<HTMLButtonElement>("#sleep-timer-cancel"),
+    "#sleep-timer-cancel"
+  );
+  const sleepTimerSet = requireElement(
+    document.querySelector<HTMLButtonElement>("#sleep-timer-set"),
+    "#sleep-timer-set"
+  );
+  const sleepTimerSelect = requireElement(
+    document.querySelector<HTMLSelectElement>("#sleep-timer-select"),
+    "#sleep-timer-select"
+  );
+  const sleepTimerCurrent = requireElement(
+    document.querySelector<HTMLDivElement>("#sleep-timer-current"),
+    "#sleep-timer-current"
   );
   const tuningPanelTuning = requireElement(
     document.querySelector<HTMLDivElement>("#tuning-panel-tuning"),
@@ -423,6 +447,10 @@ export function getElements() {
     document.querySelector<HTMLDivElement>("#upload-youtube-section"),
     "#upload-youtube-section"
   );
+  const uploadYoutubeForm = requireElement(
+    document.querySelector<HTMLFormElement>("#upload-youtube-form"),
+    "#upload-youtube-form"
+  );
   const uploadYoutubeInput = requireElement(
     document.querySelector<HTMLInputElement>("#upload-youtube-input"),
     "#upload-youtube-input"
@@ -471,6 +499,10 @@ export function getElements() {
     document.querySelector<HTMLSpanElement>("#top-list-title"),
     "#top-list-title"
   );
+  const topListRefreshButton = requireElement(
+    document.querySelector<HTMLButtonElement>("#top-list-refresh"),
+    "#top-list-refresh"
+  );
   const favoritesSyncButton = requireElement(
     document.querySelector<HTMLButtonElement>("#favorites-sync-button"),
     "#favorites-sync-button"
@@ -494,6 +526,10 @@ export function getElements() {
   const toast = requireElement(
     document.querySelector<HTMLDivElement>("#toast"),
     "#toast"
+  );
+  const footerCredit = requireElement(
+    document.querySelector<HTMLParagraphElement>("#site-footer-credit"),
+    "#site-footer-credit"
   );
   const branchStatsPopup = requireElement(
     document.querySelector<HTMLDivElement>("#branch-stats-popup"),
@@ -684,10 +720,16 @@ export function getElements() {
     tuningClose,
     tuningTitle,
     tuningTitleText,
-    tuningBetaTag,
     tuningTabToggle,
     tuningTabToggleIcon,
     tuningTabToggleLabel,
+    sleepTimerOpen,
+    sleepTimerModal,
+    sleepTimerClose,
+    sleepTimerCancel,
+    sleepTimerSet,
+    sleepTimerSelect,
+    sleepTimerCurrent,
     tuningPanelTuning,
     tuningPanelExtras,
     infoClose,
@@ -751,6 +793,7 @@ export function getElements() {
     uploadFileInput,
     uploadFileButton,
     uploadYoutubeSection,
+    uploadYoutubeForm,
     uploadYoutubeInput,
     uploadYoutubeButton,
     searchResults,
@@ -763,11 +806,13 @@ export function getElements() {
     favoritesList,
     topSongsTabs,
     topListTitle,
+    topListRefreshButton,
     favoritesSyncButton,
     favoritesSyncIcon,
     favoritesSyncMenu,
     favoritesSyncItems,
     toast,
+    footerCredit,
     branchStatsPopup,
     branchStatsTitleEl,
     branchStatsDeleteButton,

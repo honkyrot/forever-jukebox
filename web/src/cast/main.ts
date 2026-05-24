@@ -7,6 +7,7 @@ import { JukeboxEngine } from "../engine";
 import type { JukeboxConfig } from "../engine/types";
 import { JukeboxViz } from "../jukebox/JukeboxViz";
 import { fetchAnalysis, fetchAudio, recordPlay } from "../app/api";
+import { formatErrorForDisplay } from "../app/errorDisplay";
 import { formatDuration } from "../app/format";
 import { applyCastTuningToEngine, parseCastTuningParams } from "./tuning";
 
@@ -60,6 +61,7 @@ type CastTuningStatus = {
     deltaPercent: number;
   };
   deletedEdgeIds: number[];
+  anchorBranchId: number | null;
   highlightAnchorBranch: boolean;
   audioMode: JukeboxAudioMode;
 };
@@ -294,7 +296,16 @@ async function pollAnalysis(
       throw new Error("Analysis not found");
     }
     if (response.status === "failed") {
-      throw new Error(response.error || "Analysis failed");
+      throw Object.assign(
+        new Error(
+          formatErrorForDisplay(response.error, {
+            sourceProvider: response.source_provider,
+            errorCode: response.error_code,
+            fallback: "Analysis failed.",
+          }),
+        ),
+        { code: response.error_code },
+      );
     }
     if (response.status === "complete") {
       return response;
@@ -463,6 +474,7 @@ async function bootstrap() {
         ),
       },
       deletedEdgeIds,
+      anchorBranchId: engine.getUserAnchorEdgeId(),
       highlightAnchorBranch: anchorHighlightEnabled,
       audioMode: state.audioMode,
     };
@@ -921,7 +933,9 @@ async function bootstrap() {
       if (token !== state.loadToken) {
         return;
       }
-      const errorMessage = err instanceof Error ? err.message : "Load failed";
+      const errorMessage = formatErrorForDisplay(err, {
+        fallback: "Load failed.",
+      });
       const errorCode =
         err &&
         typeof err === "object" &&
@@ -960,11 +974,77 @@ async function bootstrap() {
     return { parsed: result.parsed, highlightOnly: result.highlightOnly };
   }
 
+  function buildLiveGraphTuningParams(tuningParams: string) {
+    const params = new URLSearchParams(tuningParams);
+    if (!params.has("d")) {
+      const deletedEdgeIds =
+        engine
+          ?.getGraphState()
+          ?.allEdges.filter((edge) => edge.deleted)
+          .map((edge) => edge.id) ?? [];
+      if (deletedEdgeIds.length > 0) {
+        params.set("d", deletedEdgeIds.join(","));
+      }
+    }
+    if (!params.has("ab")) {
+      const anchorBranchId = engine?.getUserAnchorEdgeId?.() ?? null;
+      if (anchorBranchId !== null) {
+        params.set("ab", `${anchorBranchId}`);
+      }
+    }
+    if (!params.has("ah")) {
+      params.set("ah", anchorHighlightEnabled ? "1" : "0");
+    }
+    if (!params.has("am") && state.audioMode !== "off") {
+      params.set("am", state.audioMode);
+    }
+    return params.toString();
+  }
+
   function applyTuningUpdate(tuningParams: string | null): boolean {
     if (!engine || !defaultConfig || !state.currentJobId) {
       return false;
     }
     try {
+      const parsed = parseCastTuningParams(tuningParams, defaultConfig);
+      if (parsed && !parsed.hasGraphTuning) {
+        if (parsed.hasAudioModeParam) {
+          setAudioMode(parsed.audioMode ?? "off");
+          if (engine.isRunning() && player?.isPlaying()) {
+            engine.syncToPlaybackPosition();
+          }
+        }
+        if (new URLSearchParams(tuningParams ?? "").has("ah")) {
+          anchorHighlightEnabled = parsed.highlightAnchorBranch;
+        }
+        state.tuningParams = tuningParams;
+        if (viz) {
+          viz.setAnchorHighlightEnabled(anchorHighlightEnabled);
+          viz.setVisible(true);
+        }
+        return true;
+      }
+      if (parsed && tuningParams !== null) {
+        const liveTuningParams = buildLiveGraphTuningParams(tuningParams);
+        const result = applyCastTuningToEngine(
+          engine,
+          engine.getConfig(),
+          liveTuningParams,
+        );
+        if (result.parsed?.hasAudioModeParam) {
+          setAudioMode(result.parsed.audioMode ?? "off");
+        }
+        anchorHighlightEnabled = result.highlightAnchorBranch;
+        state.tuningParams = liveTuningParams;
+        if (engine.isRunning() && player?.isPlaying()) {
+          engine.syncToPlaybackPosition();
+        }
+        syncVizFromEngine();
+        if (viz) {
+          viz.setVisible(true);
+        }
+        return true;
+      }
       const result = applyTuningToEngine(tuningParams, {
         storeTuningParams: true,
       });
@@ -974,6 +1054,9 @@ async function bootstrap() {
           viz.setVisible(true);
         }
         return true;
+      }
+      if (engine.isRunning() && player?.isPlaying()) {
+        engine.syncToPlaybackPosition();
       }
       syncVizFromEngine();
       if (viz) {

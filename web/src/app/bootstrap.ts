@@ -40,7 +40,7 @@ import {
   resetTuningDefaults,
   loadAudioFromJob,
   loadTrackByJobId,
-  loadTrackByYouTubeId,
+  loadTrackById,
   openExtras,
   openInfo,
   openTuning,
@@ -48,9 +48,11 @@ import {
   releaseWakeLock,
   requestWakeLock,
   resetForNewTrack,
+  addSleepTimerListener,
   syncDeletedEdgeState,
   startAutocanonizerPlayback,
   startJukeboxFromBeat,
+  setSleepTimer,
   stopPlayback,
   syncExtrasUI,
   syncTuningTabsUI,
@@ -142,7 +144,7 @@ export function bootstrap() {
     audioLoadInFlight: false,
     autoComputedThreshold: null,
     lastJobId: null,
-    lastYouTubeId: null,
+    lastTrackId: null,
     lastSourceProvider: null,
     pendingAutoFavoriteId: null,
     lastPlayCountedJobId: null,
@@ -168,6 +170,12 @@ export function bootstrap() {
     appConfig: null,
     pollController: null,
     listenTimerId: null,
+    sleepTimer: {
+      configuredDurationMs: null,
+      endTimeMs: null,
+      remainingMs: 0,
+    },
+    sleepTimerTimeoutId: null,
     wakeLock: null,
     tuningParams: null,
     deletedEdgeIds: [],
@@ -221,10 +229,10 @@ export function bootstrap() {
     setActiveTab: (tabId: TabId) => navigationHandlers.setActiveTabWithRefresh(tabId),
     navigateToTab: (
       tabId: TabId,
-      options?: { replace?: boolean; youtubeId?: string | null },
+      options?: { replace?: boolean; trackId?: string | null },
     ) => navigationHandlers.navigateToTabWithState(tabId, options),
-    updateTrackUrl: (youtubeId: string, replace?: boolean) =>
-      updateTrackUrl(youtubeId, replace, state.tuningParams, state.playMode),
+    updateTrackUrl: (trackId: string, replace?: boolean) =>
+      updateTrackUrl(trackId, replace, state.tuningParams, state.playMode),
     setAnalysisStatus: (message: string, spinning: boolean) =>
       setAnalysisStatus(context, message, spinning),
     setLoadingProgress: (progress: number | null, message?: string | null) =>
@@ -251,10 +259,9 @@ export function bootstrap() {
     createFavoritesSync,
     updateFavoritesSync,
     navigateToTabWithState: navigationHandlers.navigateToTabWithState,
-    loadTrackByYouTubeId: (youtubeId, sourceProvider) =>
-      loadTrackByYouTubeId(context, playbackDeps, youtubeId, {
+    loadTrackById: (trackId) =>
+      loadTrackById(context, playbackDeps, trackId, {
         preserveUrlTuning: true,
-        sourceProvider,
       }),
     loadTrackByJobId: (jobId) =>
       loadTrackByJobId(context, playbackDeps, jobId, {
@@ -271,10 +278,10 @@ export function bootstrap() {
     setActiveTab: (tabId: TabId) => navigationHandlers.setActiveTabWithRefresh(tabId),
     navigateToTab: (
       tabId: TabId,
-      options?: { replace?: boolean; youtubeId?: string | null },
+      options?: { replace?: boolean; trackId?: string | null },
     ) => navigationHandlers.navigateToTabWithState(tabId, options),
-    updateTrackUrl: (youtubeId: string, replace?: boolean) =>
-      updateTrackUrl(youtubeId, replace, state.tuningParams, state.playMode),
+    updateTrackUrl: (trackId: string, replace?: boolean) =>
+      updateTrackUrl(trackId, replace, state.tuningParams, state.playMode),
     setAnalysisStatus: (message: string, spinning: boolean) =>
       setAnalysisStatus(context, message, spinning),
     showToast: (message, options) => showToast(context, message, options),
@@ -298,26 +305,20 @@ export function bootstrap() {
     fetchTrendingSongs,
     fetchRecentSongs,
     limit: TOP_SONGS_LIMIT,
-    loadTrackBySourceId: (sourceId: string, sourceProvider?: string) =>
-      loadTrackByYouTubeId(context, playbackDeps, sourceId, { sourceProvider }),
+    loadTrackById: (trackId: string) =>
+      loadTrackById(context, playbackDeps, trackId),
     loadTrackByJobId: (jobId: string) =>
       loadTrackByJobId(context, playbackDeps, jobId),
     navigateToTabWithState: navigationHandlers.navigateToTabWithState,
   });
+  type LazyTopSongsTab = "top" | "trending" | "recent";
+  const loadedTopSongTabs = new Set<LazyTopSongsTab>();
   const topSongsTabLoaders = {
     top: {
-      loaded: () => state.topSongsLoaded,
-      markLoaded: () => {
-        state.topSongsLoaded = true;
-      },
       fetch: () => topSongsHandlers.fetchTopSongsList(),
       errorLabel: "Top songs",
     },
     trending: {
-      loaded: () => state.trendingSongsLoaded,
-      markLoaded: () => {
-        state.trendingSongsLoaded = true;
-      },
       fetch: () => topSongsHandlers.fetchTrendingSongsList(),
       errorLabel: "Trending songs",
     },
@@ -330,14 +331,24 @@ export function bootstrap() {
       errorLabel: "All time songs",
     },
     recent: {
-      loaded: () => state.recentSongsLoaded,
-      markLoaded: () => {
-        state.recentSongsLoaded = true;
-      },
       fetch: () => topSongsHandlers.fetchRecentSongsList(),
       errorLabel: "Recent songs",
     },
   } as const;
+  const loadTopSongsTab = (tabId: LazyTopSongsTab, options?: { force?: boolean }) => {
+    const loader = topSongsTabLoaders[tabId];
+    if (!options?.force && loadedTopSongTabs.has(tabId)) {
+      return;
+    }
+    loader
+      .fetch()
+      .then(() => {
+        loadedTopSongTabs.add(tabId);
+      })
+      .catch((err) => {
+        console.warn(`${loader.errorLabel} load failed: ${String(err)}`);
+      });
+  };
   const refreshCacheSafely = () => {
     cacheHandlers.refreshCacheButton().catch((err) => {
       console.warn(`Cache size failed: ${String(err)}`);
@@ -352,13 +363,13 @@ export function bootstrap() {
       if (!(tabId in topSongsTabLoaders)) {
         return;
       }
-      const loader = topSongsTabLoaders[tabId as keyof typeof topSongsTabLoaders];
-      if (loader.loaded()) {
+      loadTopSongsTab(tabId as LazyTopSongsTab);
+    },
+    onTopSongsRefresh: (tabId) => {
+      if (!(tabId in topSongsTabLoaders)) {
         return;
       }
-      loader.fetch().then(loader.markLoaded).catch((err) => {
-        console.warn(`${loader.errorLabel} load failed: ${String(err)}`);
-      });
+      loadTopSongsTab(tabId as LazyTopSongsTab, { force: true });
     },
     onFaqOpen: refreshCacheSafely,
   });
@@ -419,6 +430,8 @@ export function bootstrap() {
     syncTuningTabsUI,
     setActiveTuningTab,
     getActiveTuningTab,
+    setSleepTimer,
+    addSleepTimerListener,
   });
   const fullscreenHandlers = createFullscreenHandlers({
     context,

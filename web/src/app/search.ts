@@ -16,14 +16,15 @@ import {
   isAnalysisFailed,
   isAnalysisInProgress,
 } from "./analysisStatus";
+import { formatErrorForDisplay } from "./errorDisplay";
 
 export type SearchDeps = {
   setActiveTab: (tabId: TabId) => void;
   navigateToTab: (
     tabId: TabId,
-    options?: { replace?: boolean; youtubeId?: string | null }
+    options?: { replace?: boolean; trackId?: string | null }
   ) => void;
-  updateTrackUrl: (youtubeId: string, replace?: boolean) => void;
+  updateTrackUrl: (trackId: string, replace?: boolean) => void;
   setAnalysisStatus: (message: string, spinning: boolean) => void;
   showToast: (message: string, options?: ToastOptions) => void;
   setLoadingProgress: (progress: number | null, message?: string | null) => void;
@@ -32,7 +33,7 @@ export type SearchDeps = {
   loadAudioFromJob: (jobId: string) => Promise<boolean>;
   resetForNewTrack: (options?: { clearTuning?: boolean }) => void;
   updateVizVisibility: () => void;
-  onTrackChange?: (youtubeId: string | null) => void;
+  onTrackChange?: (trackId: string | null) => void;
 };
 
 function formatMinutes(value: number): string {
@@ -63,7 +64,7 @@ function isTrackLengthAllowed(
     duration > maxTrackLengthMinutes * 60
   ) {
     deps.showToast(
-      `Error: The maximum track length for this server is ${formatMinutes(maxTrackLengthMinutes)} minutes.`,
+      `The maximum track length for this server is ${formatMinutes(maxTrackLengthMinutes)} minutes.`,
       { icon: "error", tone: "error" },
     );
     return false;
@@ -168,7 +169,7 @@ export async function startYoutubeAnalysisFlow(
   deps.updateVizVisibility();
   deps.setActiveTab("play");
   deps.setLoadingProgress(null, "Fetching audio");
-  context.state.lastYouTubeId = youtubeId;
+  context.state.lastTrackId = youtubeId;
   context.state.lastSourceProvider = "youtube";
   deps.onTrackChange?.(youtubeId);
   deps.updateTrackUrl(youtubeId);
@@ -211,7 +212,8 @@ export async function showYoutubeMatches(
     );
     renderSearchList(elements.searchResults, rows);
   } catch (err) {
-    elements.searchResults.textContent = `YouTube search failed: ${String(err)}`;
+    elements.searchResults.textContent =
+      `YouTube search failed: ${formatErrorForDisplay(err)}`;
     elements.searchHint.textContent = "Step 1: Find a Spotify track.";
   }
 }
@@ -234,11 +236,14 @@ export async function tryLoadExistingTrackByName(
       return false;
     }
     const jobId = response.id;
-    const youtubeId = response.source_id ?? state.lastYouTubeId;
+    const trackId =
+      response.source_id && response.source_provider && response.source_provider !== "youtube"
+        ? `${response.source_provider}:${response.source_id}`
+        : (response.source_id ?? jobId);
     if (typeof response.source_provider === "string") {
       state.lastSourceProvider = response.source_provider;
     }
-    if (!youtubeId) {
+    if (!trackId) {
       return false;
     }
     deps.resetForNewTrack({ clearTuning: true });
@@ -248,21 +253,23 @@ export async function tryLoadExistingTrackByName(
     deps.updateVizVisibility();
     deps.setActiveTab("play");
     deps.setLoadingProgress(null, "Fetching audio");
-    if (response.source_provider && response.source_provider !== "youtube") {
-      state.lastYouTubeId = null;
-      deps.onTrackChange?.(null);
-    } else {
-      state.lastYouTubeId = youtubeId;
-      deps.onTrackChange?.(youtubeId);
-    }
-    deps.updateTrackUrl(youtubeId);
+    state.lastTrackId = trackId;
+    deps.onTrackChange?.(trackId);
+    deps.updateTrackUrl(trackId);
     state.lastJobId = jobId;
     if (isAnalysisInProgress(response)) {
       await deps.pollAnalysis(jobId);
       return true;
     }
     if (isAnalysisFailed(response)) {
-      deps.setAnalysisStatus(response.error || "Loading failed.", false);
+      deps.setAnalysisStatus(
+        formatErrorForDisplay(response.error, {
+          sourceProvider: response.source_provider,
+          errorCode: response.error_code,
+          fallback: "Loading failed.",
+        }),
+        false,
+      );
       return true;
     }
     if (isAnalysisComplete(response)) {
@@ -279,7 +286,8 @@ export async function tryLoadExistingTrackByName(
     await deps.pollAnalysis(jobId);
     return true;
   } catch (err) {
-    elements.searchResults.textContent = `Lookup failed: ${String(err)}`;
+    elements.searchResults.textContent =
+      `Lookup failed: ${formatErrorForDisplay(err)}`;
     return false;
   }
 }
@@ -306,7 +314,8 @@ export async function runSearch(context: AppContext, deps: SearchDeps) {
     const rows = items.map((item) => buildSpotifyMatchItem(context, deps, item));
     renderSearchList(elements.searchResults, rows);
   } catch (err) {
-    elements.searchResults.textContent = `Search failed: ${String(err)}`;
+    elements.searchResults.textContent =
+      `Search failed: ${formatErrorForDisplay(err)}`;
   } finally {
     elements.searchButton.disabled = false;
   }
@@ -337,7 +346,10 @@ function handleYoutubeMatchClick(
     return;
   }
   startYoutubeAnalysisFlow(context, deps, youtubeId, name, artist).catch((err) => {
-    deps.setAnalysisStatus(`YouTube analysis failed: ${String(err)}`, false);
+    deps.setAnalysisStatus(
+      `YouTube analysis failed: ${formatErrorForDisplay(err, { sourceProvider: "youtube" })}`,
+      false,
+    );
   });
 }
 

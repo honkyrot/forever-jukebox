@@ -54,6 +54,10 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.allTimeLoadMoreButton.addEventListener("click", () => {
     topSongsHandlers.handleLoadMoreAllTime();
   });
+  elements.topListRefreshButton.addEventListener(
+    "click",
+    tabsHandlers.handleTopSongsRefreshClick,
+  );
   elements.searchButton.addEventListener("click", searchHandlers.handleSearchClick);
   elements.searchInput.addEventListener(
     "keydown",
@@ -100,9 +104,9 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
     "click",
     searchHandlers.handleUploadFileClick,
   );
-  elements.uploadYoutubeButton.addEventListener(
-    "click",
-    searchHandlers.handleUploadYoutubeClick,
+  elements.uploadYoutubeForm.addEventListener(
+    "submit",
+    searchHandlers.handleUploadYoutubeSubmit,
   );
   elements.thresholdInput.addEventListener(
     "input",
@@ -122,6 +126,30 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
     tuningHandlers.handleVolumeInput,
   );
   elements.tuningButton.addEventListener("click", tuningHandlers.handleOpenTuning);
+  elements.sleepTimerOpen.addEventListener(
+    "click",
+    tuningHandlers.handleOpenSleepTimer,
+  );
+  elements.sleepTimerClose.addEventListener(
+    "click",
+    tuningHandlers.handleCloseSleepTimer,
+  );
+  elements.sleepTimerCancel.addEventListener(
+    "click",
+    tuningHandlers.handleCloseSleepTimer,
+  );
+  elements.sleepTimerSet.addEventListener(
+    "click",
+    tuningHandlers.handleSleepTimerSet,
+  );
+  elements.sleepTimerSelect.addEventListener(
+    "change",
+    tuningHandlers.handleSleepTimerSelectChange,
+  );
+  elements.sleepTimerModal.addEventListener(
+    "click",
+    tuningHandlers.handleSleepTimerModalClick,
+  );
   elements.tuningTabToggle.addEventListener("click", tuningHandlers.handleTuningTabToggle);
   elements.infoButton.addEventListener("click", tuningHandlers.handleOpenInfo);
   elements.favoriteButton.addEventListener(

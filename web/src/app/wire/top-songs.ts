@@ -1,7 +1,8 @@
 import type { Elements } from "../elements";
 import type { TabId } from "../context";
+import { formatErrorForDisplay } from "../errorDisplay";
 
-type TopSongItem = {
+export type TopSongItem = {
   id?: string;
   title?: string;
   artist?: string;
@@ -16,10 +17,11 @@ type TopSongsDeps = {
   fetchTrendingSongs: () => Promise<TopSongItem[]>;
   fetchRecentSongs: (limit: number) => Promise<TopSongItem[]>;
   loadTrackBySourceId: (sourceId: string, sourceProvider?: string) => void;
+  loadTrackById: (trackId: string) => void;
   loadTrackByJobId: (jobId: string) => void;
   navigateToTabWithState: (
     tabId: TabId,
-    options?: { replace?: boolean; youtubeId?: string | null },
+    options?: { replace?: boolean; trackId?: string | null },
   ) => void;
   limit: number;
 };
@@ -32,7 +34,7 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
     fetchTopSongs,
     fetchTrendingSongs,
     fetchRecentSongs,
-    loadTrackBySourceId,
+    loadTrackById,
     loadTrackByJobId,
     navigateToTabWithState,
     limit,
@@ -85,9 +87,12 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
         const artist = typeof item.artist === "string" ? item.artist : "";
         const sourceId = typeof item.source_id === "string" ? item.source_id : "";
         const jobId = typeof item.id === "string" ? item.id : "";
-        const sourceProvider = typeof item.source_provider === "string" ? item.source_provider : "";
-        const listenId = sourceProvider === "youtube" && sourceId ? sourceId : (jobId || sourceId);
-        
+        const sourceProvider =
+          typeof item.source_provider === "string" ? item.source_provider : "";
+        const listenId =
+          sourceProvider === "youtube" && sourceId
+            ? sourceId
+            : (jobId || sourceId);
         const li = document.createElement("li");
         
         const container = document.createElement("span");
@@ -125,7 +130,7 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
       onRendered?.(renderItems.length);
     } catch (err) {
       if (!append) {
-        listEl.textContent = `${errorPrefix} unavailable: ${String(err)}`;
+        listEl.textContent = `${errorPrefix} unavailable: ${formatErrorForDisplay(err)}`;
       }
       onRendered?.(0);
     }
@@ -194,16 +199,15 @@ export function createTopSongsHandlers(deps: TopSongsDeps) {
     event.preventDefault();
     const target = event.currentTarget as HTMLAnchorElement | null;
     const trackId = target?.dataset.trackId;
-    const sourceProvider = target?.dataset.sourceProvider;
     if (!trackId) {
       return;
     }
-    navigateToTabWithState("play", { youtubeId: trackId });
+    navigateToTabWithState("play", { trackId });
     if (isLikelyJobId(trackId)) {
       loadTrackByJobId(trackId);
       return;
     }
-    loadTrackBySourceId(trackId, sourceProvider);
+    loadTrackById(trackId);
   }
 
   return {

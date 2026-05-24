@@ -192,6 +192,70 @@ describe("JukeboxViz", () => {
     expect(onEdgeSelect).toHaveBeenCalledWith(null);
   });
 
+  it("draws user-selected anchor highlight even when anchor highlighting is disabled", () => {
+    const container = createContainer();
+    const viz = new JukeboxViz(container);
+    const edge = {
+      id: 7,
+      src: { which: 0 },
+      dest: { which: 1 },
+      deleted: false,
+    };
+    viz.setData(
+      {
+        beats: [
+          { which: 0, start: 0, duration: 1 },
+          { which: 1, start: 1, duration: 1 },
+        ],
+        edges: [edge],
+        lastBranchPoint: 0,
+        anchorEdgeId: 7,
+        userAnchorEdgeId: 7,
+      } as any
+    );
+    const active = (viz as any).activeViz;
+    const drawEdge = vi.spyOn(active, "drawEdge");
+
+    active.drawBase();
+
+    expect(drawEdge).toHaveBeenCalledWith(
+      expect.anything(),
+      edge,
+      "#ff2d2d",
+      1.8,
+    );
+  });
+
+  it("does not draw an anchor highlight for a deleted anchor edge", () => {
+    const container = createContainer();
+    const viz = new JukeboxViz(container);
+    const edge = {
+      id: 7,
+      src: { which: 0 },
+      dest: { which: 1 },
+      deleted: true,
+    };
+    viz.setAnchorHighlightEnabled(true);
+    viz.setData(
+      {
+        beats: [
+          { which: 0, start: 0, duration: 1 },
+          { which: 1, start: 1, duration: 1 },
+        ],
+        edges: [edge],
+        lastBranchPoint: 0,
+        anchorEdgeId: 7,
+        userAnchorEdgeId: null,
+      } as any
+    );
+    const active = (viz as any).activeViz;
+    const drawEdge = vi.spyOn(active, "drawEdge");
+
+    active.drawBase();
+
+    expect(drawEdge).not.toHaveBeenCalled();
+  });
+
   it("swaps visualization instances when active index changes", () => {
     const container = createContainer();
     const viz = new JukeboxViz(container);

@@ -6,9 +6,11 @@ import type { JukeboxEngine } from "../../engine";
 import type { JukeboxController } from "../../jukebox/JukeboxController";
 import type { AutocanonizerController } from "../../autocanonizer/AutocanonizerController";
 import type { ToastOptions } from "../ui";
+import { formatErrorForDisplay } from "../errorDisplay";
 import { VISUALIZATION_LABELS } from "../constants";
-import { formatDuration } from "../format";
+import { formatDuration, formatPlaybackTitle } from "../format";
 import { setAutoMarqueeText } from "../marquee";
+import { serializeParams } from "../tuning";
 
 type PlaybackUiDeps = {
   context: AppContext;
@@ -35,15 +37,15 @@ type PlaybackUiDeps = {
   startJukeboxFromBeat: (context: AppContext, index: number) => void;
   startAutocanonizerPlayback: (context: AppContext, index: number) => void;
   updateTrackUrl: (
-    youtubeId: string,
+    trackId: string,
     replace?: boolean,
     tuningParams?: string | null,
     playMode?: "jukebox" | "autocanonizer",
   ) => void;
   navigateToTab: (
     tabId: TabId,
-    options?: { replace?: boolean; youtubeId?: string | null },
-    lastYouTubeId?: string | null,
+    options?: { replace?: boolean; trackId?: string | null },
+    lastTrackId?: string | null,
     tuningParams?: string | null,
     playMode?: "jukebox" | "autocanonizer",
   ) => void;
@@ -81,27 +83,6 @@ function toSimilarityPercent(distance: number, maxDistance: number) {
   }
   const normalized = 1 - distance / maxDistance;
   return Math.round(Math.max(0, Math.min(1, normalized)) * 100);
-}
-
-function formatAudioModeLabel(audioMode: AppState["jukeboxAudioMode"]) {
-  if (audioMode === "cowbell") {
-    return "more cowbell";
-  }
-  return audioMode === "swing" ? "swing" : audioMode;
-}
-
-function formatTrackTitle(
-  baseTitle: string,
-  playMode: AppState["playMode"],
-  audioMode: AppState["jukeboxAudioMode"],
-) {
-  if (playMode === "autocanonizer") {
-    return `${baseTitle} (autocanonized)`;
-  }
-  if (audioMode !== "off") {
-    return `${baseTitle} (${formatAudioModeLabel(audioMode)})`;
-  }
-  return baseTitle;
 }
 
 export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
@@ -404,6 +385,30 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     syncExtrasPopup(nextEdge);
   }
 
+  function toggleSelectedAnchorBranch() {
+    const edge = state.selectedEdge;
+    if (!edge || edge.deleted || edge.dest.which >= edge.src.which) {
+      return false;
+    }
+    const nextAnchor = engine.getUserAnchorEdgeId() === edge.id ? null : edge;
+    engine.setUserAnchorEdge(nextAnchor);
+    state.vizData = engine.getVisualizationData();
+    const data = state.vizData;
+    if (data) {
+      jukebox.setData(data);
+    }
+    jukebox.setSelectedEdgeActive(edge);
+    const tuningParams = getTuningParamsFromEngine(context);
+    const result = serializeParams(tuningParams);
+    state.tuningParams = result.length > 0 ? result : null;
+    writeTuningParamsToUrl(state.tuningParams, true);
+    showToast(
+      context,
+      nextAnchor ? "Anchor branch set" : "Anchor branch reset",
+    );
+    return true;
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (state.activeTabId !== "play") {
       return;
@@ -440,6 +445,12 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
         "is-crossed",
         state.bringItHomeMode,
       );
+      return;
+    }
+    if ((event.key === "a" || event.key === "A") && !event.repeat) {
+      if (toggleSelectedAnchorBranch()) {
+        event.preventDefault();
+      }
       return;
     }
     if (
@@ -511,7 +522,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
   }
 
   async function copyShortUrl() {
-    const trackId = state.lastYouTubeId ?? state.lastJobId;
+    const trackId = state.lastTrackId ?? state.lastJobId;
     if (!trackId) {
       setAnalysisStatus(
         context,
@@ -537,7 +548,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
       await navigator.clipboard.writeText(shortUrl);
       showToast(context, "Link copied to clipboard");
     } catch (err) {
-      setAnalysisStatus(context, `Copy failed: ${String(err)}`, false);
+      setAnalysisStatus(context, `Copy failed: ${formatErrorForDisplay(err)}`, false);
     }
   }
 
@@ -678,7 +689,7 @@ export function createPlaybackUiHandlers(deps: PlaybackUiDeps) {
     syncTuningTabsUI(context);
     if (state.trackTitle || state.trackArtist) {
       const baseTitle = state.trackTitle ?? "Unknown";
-      const withSuffix = formatTrackTitle(
+      const withSuffix = formatPlaybackTitle(
         baseTitle,
         mode,
         state.jukeboxAudioMode,

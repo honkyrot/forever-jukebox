@@ -147,6 +147,19 @@
               <option value="title">Title (A-Z)</option>
               <option value="artist">Artist (A-Z)</option>
             </select>
+            <button
+              id="top-list-refresh"
+              class="top-list-refresh-button"
+              type="button"
+              aria-label="Refresh Top 25"
+              title="Refresh"
+            >
+              <span
+                class="material-symbols-outlined top-list-refresh-icon"
+                aria-hidden="true"
+                >refresh</span
+              >
+            </button>
           </div>
           <div class="favorites-sync">
             <button
@@ -272,7 +285,7 @@
           <div class="upload-section hidden" id="upload-youtube-section">
             <div class="upload-title">Upload by URL</div>
             <div class="upload-hint">Supported: YouTube, SoundCloud, Bandcamp</div>
-            <div class="search-bar">
+            <form class="search-bar" id="upload-youtube-form" novalidate>
               <input
                 id="upload-youtube-input"
                 class="search-input"
@@ -280,8 +293,8 @@
                 placeholder="https://www.youtube.com/watch?v=... or https://soundcloud.com/... or https://artist.bandcamp.com/track/..."
                 autocomplete="off"
               />
-              <button id="upload-youtube-button">Load</button>
-            </div>
+              <button id="upload-youtube-button" type="submit">Load</button>
+            </form>
           </div>
         </div>
       </section>
@@ -669,6 +682,13 @@
               Offline App (PWA) can now <strong>export audio</strong> with any
               actively selected Audio Mode.
             </li>
+            <li>
+              Implemented <strong>custom anchor branches</strong>: select a backward branch and press A to make it
+              the forced anchor jump.
+            </li>
+            <li>
+              Added a <strong>sleep timer</strong> to the Tuning/Extras dialog.
+            </li>
           </ul>
 
           <h4>April 2026</h4>
@@ -737,7 +757,6 @@
             <div class="modal-header-main">
               <h2 id="tuning-title">
                 <span id="tuning-title-text">Tuning</span>
-                <span id="tuning-beta-tag" class="beta-tag hidden">Beta</span>
               </h2>
               <div class="modal-tabs" aria-label="Tune sections">
                 <button id="tuning-tab-toggle" class="modal-tab hidden mega-hidden" type="button">
@@ -751,13 +770,28 @@
                 </button>
               </div>
             </div>
-            <button id="tuning-close" class="modal-close" aria-label="Close">
-              <span
-                class="material-symbols-outlined modal-close-icon"
-                aria-hidden="true"
-                >close</span
+            <div class="modal-header-actions">
+              <button
+                id="sleep-timer-open"
+                class="modal-icon-button"
+                type="button"
+                aria-label="Sleep Timer"
+                title="Sleep Timer"
               >
-            </button>
+                <span
+                  class="material-symbols-outlined modal-icon-button-icon"
+                  aria-hidden="true"
+                  >timer</span
+                >
+              </button>
+              <button id="tuning-close" class="modal-close" aria-label="Close">
+                <span
+                  class="material-symbols-outlined modal-close-icon"
+                  aria-hidden="true"
+                  >close</span
+                >
+              </button>
+            </div>
           </div>
           <div class="modal-body">
             <div id="tuning-panel-tuning" class="tuning-body">
@@ -1073,6 +1107,52 @@
           </div>
         </div>
       </div>
+      <div id="sleep-timer-modal" class="modal">
+        <div class="modal-panel sleep-timer-panel">
+          <div class="modal-header">
+            <h2>Sleep Timer</h2>
+            <button
+              id="sleep-timer-close"
+              class="modal-close"
+              aria-label="Close"
+            >
+              <span
+                class="material-symbols-outlined modal-close-icon"
+                aria-hidden="true"
+                >close</span
+              >
+            </button>
+          </div>
+          <div class="modal-body sleep-timer-body">
+            <div id="sleep-timer-current" class="sleep-timer-current">Off</div>
+            <label class="sleep-timer-select-group" for="sleep-timer-select">
+              <span class="label-line">Timer</span>
+              <span class="viz-select-wrap sleep-timer-select-wrap">
+                <select
+                  id="sleep-timer-select"
+                  class="viz-select sleep-timer-select"
+                >
+                  <option value="off">Off</option>
+                  <option value="900000">15 minutes</option>
+                  <option value="1800000">30 minutes</option>
+                  <option value="2700000">45 minutes</option>
+                  <option value="3600000">1 hour</option>
+                  <option value="7200000">2 hours</option>
+                </select>
+                <span
+                  class="material-symbols-outlined viz-select-arrow"
+                  aria-hidden="true"
+                  >arrow_drop_down</span
+                >
+              </span>
+            </label>
+          </div>
+          <div class="modal-footer sleep-timer-footer">
+            <button id="sleep-timer-cancel" type="button">Close</button>
+            <button id="sleep-timer-set" type="button">Set</button>
+          </div>
+        </div>
+      </div>
       <div id="info-modal" class="modal">
         <div class="modal-panel">
           <div class="modal-header">
@@ -1114,6 +1194,10 @@
             <div class="info-row">
               <span class="info-label">Left/Right:</span>
               <span>Cycle selected branch</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">A:</span>
+              <span>Set/reset selected anchor branch</span>
             </div>
             <div class="info-row">
               <span class="info-label">Delete:</span>
@@ -1210,7 +1294,7 @@
         </div>
       </div>
       <footer class="site-footer">
-        <p>
+        <p id="site-footer-credit">
           The Forever Jukebox &amp; Analysis Engine by
           <a href="https://creighton.dev" target="_blank" rel="noreferrer"
             >Creighton</a>.

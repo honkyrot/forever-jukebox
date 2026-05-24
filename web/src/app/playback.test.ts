@@ -8,8 +8,11 @@ import {
   resetExtrasDefaults,
   applyTuningChanges,
   loadAudioFromJob,
+  loadTrackById,
   openExtras,
+  pollAnalysis,
   resetForNewTrack,
+  setSleepTimer,
   setActiveTuningTab,
   startJukeboxFromBeat,
   stopPlayback,
@@ -19,6 +22,7 @@ import {
   updateVizVisibility,
   updateListenTimeDisplay,
 } from "./playback";
+import { createPlaybackUiHandlers } from "./wire/playback";
 import { setWindowUrl } from "./__tests__/test-utils";
 import { getOrCreateSwingBuffer } from "../audio/swingBufferCache";
 import { renderSwingBuffer } from "../audio/swingRenderer";
@@ -176,15 +180,36 @@ function createElements() {
     extrasEnabledInput: createInput(),
     bringHomeEnabledInput: createInput(),
     extrasJukeboxOnlyHint: { classList: createClassList() },
-    tuningTitle: createSpan(),
+    tuningTitle: {
+      textContent: "",
+      classList: createMutableClassList(),
+    },
     tuningTitleText: createSpan(),
-    tuningBetaTag: { classList: createMutableClassList(["hidden"]) },
     tuningTabToggle: {
       classList: createMutableClassList(),
       setAttribute: vi.fn(),
     },
     tuningTabToggleIcon: createSpan(),
     tuningTabToggleLabel: createSpan(),
+    sleepTimerOpen: {
+      classList: createMutableClassList(),
+      setAttribute: vi.fn(),
+    },
+    sleepTimerModal: { classList: createMutableClassList() },
+    sleepTimerClose: {
+      classList: createMutableClassList(),
+      setAttribute: vi.fn(),
+    },
+    sleepTimerCancel: {
+      classList: createMutableClassList(),
+      setAttribute: vi.fn(),
+    },
+    sleepTimerSet: {
+      classList: createMutableClassList(),
+      setAttribute: vi.fn(),
+    },
+    sleepTimerSelect: { value: "off" },
+    sleepTimerCurrent: createSpan(),
     tuningPanelTuning: { classList: createMutableClassList() },
     tuningPanelExtras: { classList: createMutableClassList(["hidden"]) },
     tuningModal: { classList: createClassList() },
@@ -223,6 +248,7 @@ function createElements() {
     branchStatsDeltaEl: createSpan(),
     branchStatsDirectionEl: createSpan(),
     branchStatsSimilarityEl: createSpan(),
+    branchStatsDeleteButton: { disabled: false },
     deleteButton: { classList: createClassList() },
     vizStats: {
       classList: createClassList(),
@@ -234,6 +260,8 @@ function createElements() {
 function createContext(overrides?: Partial<AppContext>): AppContext {
   const elements = createElements();
   const engineConfig = {
+    maxBranches: 4,
+    maxBranchThreshold: 80,
     currentThreshold: 0,
     minRandomBranchChance: 0.1,
     maxRandomBranchChance: 0.5,
@@ -241,13 +269,16 @@ function createContext(overrides?: Partial<AppContext>): AppContext {
     justBackwards: false,
     justLongBranches: false,
     removeSequentialBranches: false,
+    minLongBranch: 0,
   };
+  let userAnchorEdgeId: number | null = null;
   const engine = {
     getConfig: vi.fn(() => ({ ...engineConfig })),
     updateConfig: vi.fn((partial: Record<string, unknown>) => {
       Object.assign(engineConfig, partial);
     }),
     rebuildGraph: vi.fn(),
+    loadAnalysis: vi.fn(),
     getGraphState: vi.fn(() => ({ currentThreshold: 45, allEdges: [], totalBeats: 0 })),
     getVisualizationData: vi.fn(() => ({ beats: [], edges: [] })),
     pauseJukebox: vi.fn(),
@@ -260,6 +291,10 @@ function createContext(overrides?: Partial<AppContext>): AppContext {
     seekToBeat: vi.fn(),
     setForceBranch: vi.fn(),
     setBringItHomeMode: vi.fn(),
+    setUserAnchorEdge: vi.fn((edge: { id: number } | null) => {
+      userAnchorEdgeId = edge ? edge.id : null;
+    }),
+    getUserAnchorEdgeId: vi.fn(() => userAnchorEdgeId),
     getSectionStartBeatIndices: vi.fn(() => []),
   };
   const player = {
@@ -291,6 +326,7 @@ function createContext(overrides?: Partial<AppContext>): AppContext {
     setData: vi.fn(),
     setAnchorHighlightEnabled: vi.fn(),
     setSelectedEdge: vi.fn(),
+    setSelectedEdgeActive: vi.fn(),
     resizeActive: vi.fn(),
     reset: vi.fn(),
     update: vi.fn(),
@@ -324,7 +360,7 @@ function createContext(overrides?: Partial<AppContext>): AppContext {
       audioLoadInFlight: false,
       activeTabId: "play",
       activeVizIndex: 0,
-      lastYouTubeId: null,
+      lastTrackId: null,
       lastJobId: null,
       isRunning: false,
       isPaused: false,
@@ -342,6 +378,12 @@ function createContext(overrides?: Partial<AppContext>): AppContext {
       swingPreparing: false,
       swingRenderToken: 0,
       listenTimerId: null,
+      sleepTimer: {
+        configuredDurationMs: null,
+        endTimeMs: null,
+        remainingMs: 0,
+      },
+      sleepTimerTimeoutId: null,
       pollController: null,
       wakeLock: null,
       favorites: [],
@@ -377,6 +419,18 @@ describe("playback tuning", () => {
     expect(context.elements.volumeVal.textContent).toBe("50");
     expect(context.elements.highlightAnchorBranchInput.checked).toBe(true);
     expect(context.elements.computedThresholdEl.textContent).toBe("45");
+  });
+
+  it("preserves selected tuning while resetting for a new track", () => {
+    setWindowUrl("http://localhost/listen/favorite?jb=1&d=2,8");
+    const context = createContext();
+    context.state.lastTrackId = "old-track";
+    context.state.tuningParams = "jb=1&d=2,8";
+
+    resetForNewTrack(context, { clearTuning: false });
+
+    expect(context.state.tuningParams).toBe("jb=1&d=2,8");
+    expect(window.location.search).toBe("?jb=1&d=2,8");
   });
 
   it("applies tuning changes and normalizes min/max", () => {
@@ -629,6 +683,100 @@ describe("playback tuning", () => {
     expect(context.state.deletedEdgeIds).toEqual([1, 3]);
   });
 
+  it("applies anchor branch from url when analysis loads", () => {
+    setWindowUrl("http://localhost/listen/abc?ab=3");
+    const anchorEdge = {
+      id: 3,
+      deleted: false,
+      src: { which: 8 },
+      dest: { which: 2 },
+    };
+    const context = createContext({
+      engine: {
+        getConfig: vi.fn(() => ({
+          currentThreshold: 0,
+          minRandomBranchChance: 0.18,
+          maxRandomBranchChance: 0.5,
+          randomBranchChanceDelta: 0.02,
+          justBackwards: false,
+          justLongBranches: false,
+          removeSequentialBranches: false,
+        })),
+        updateConfig: vi.fn(),
+        loadAnalysis: vi.fn(),
+        getSectionStartBeatIndices: vi.fn(() => []),
+        getGraphState: vi.fn(() => ({
+          currentThreshold: 45,
+          allEdges: [anchorEdge],
+          totalBeats: 0,
+        })),
+        getVisualizationData: vi.fn(() => ({ beats: [], edges: [] })),
+        deleteEdge: vi.fn(),
+        rebuildGraph: vi.fn(),
+        setUserAnchorEdge: vi.fn(),
+        getUserAnchorEdgeId: vi.fn(() => 3),
+      } as unknown as AppContext["engine"],
+    });
+
+    const response: AnalysisComplete = {
+      status: "complete",
+      id: "job123",
+      result: { beats: [], track: {} },
+    };
+
+    const applied = applyAnalysisResult(context, response);
+
+    expect(applied).toBe(true);
+    expect(context.engine.setUserAnchorEdge).toHaveBeenCalledWith(anchorEdge);
+    expect(context.state.tuningParams).toContain("ab=3");
+  });
+
+  it("ignores forward anchor branch ids from url", () => {
+    setWindowUrl("http://localhost/listen/abc?ab=4");
+    const forwardEdge = {
+      id: 4,
+      deleted: false,
+      src: { which: 2 },
+      dest: { which: 8 },
+    };
+    const context = createContext({
+      engine: {
+        getConfig: vi.fn(() => ({
+          currentThreshold: 0,
+          minRandomBranchChance: 0.18,
+          maxRandomBranchChance: 0.5,
+          randomBranchChanceDelta: 0.02,
+          justBackwards: false,
+          justLongBranches: false,
+          removeSequentialBranches: false,
+        })),
+        updateConfig: vi.fn(),
+        loadAnalysis: vi.fn(),
+        getSectionStartBeatIndices: vi.fn(() => []),
+        getGraphState: vi.fn(() => ({
+          currentThreshold: 45,
+          allEdges: [forwardEdge],
+          totalBeats: 0,
+        })),
+        getVisualizationData: vi.fn(() => ({ beats: [], edges: [] })),
+        deleteEdge: vi.fn(),
+        rebuildGraph: vi.fn(),
+        setUserAnchorEdge: vi.fn(),
+        getUserAnchorEdgeId: vi.fn(() => null),
+      } as unknown as AppContext["engine"],
+    });
+
+    const response: AnalysisComplete = {
+      status: "complete",
+      id: "job123",
+      result: { beats: [], track: {} },
+    };
+
+    applyAnalysisResult(context, response);
+
+    expect(context.engine.setUserAnchorEdge).not.toHaveBeenCalled();
+  });
+
   it("adds nightcore suffix to displayed title in jukebox mode", () => {
     const context = createContext({
       engine: {
@@ -714,16 +862,20 @@ describe("playback tuning", () => {
 
     setActiveTuningTab(context, "tuning");
     expect(context.elements.tuningTitleText.textContent).toBe("Tuning");
-    expect(context.elements.tuningBetaTag.classList.contains("hidden")).toBe(true);
+    expect(context.elements.tuningTitle.classList.contains("is-extras-active")).toBe(
+      false,
+    );
     expect(context.elements.tuningTabToggleLabel.textContent).toBe("Extras");
     expect(context.elements.tuningTabToggle.classList.contains("hidden")).toBe(false);
     expect(getActiveTuningTab(context)).toBe("tuning");
 
     setActiveTuningTab(context, "extras");
     expect(context.elements.tuningTitleText.textContent).toBe("Extras");
-    expect(context.elements.tuningBetaTag.classList.contains("hidden")).toBe(false);
+    expect(context.elements.tuningTitle.classList.contains("is-extras-active")).toBe(
+      true,
+    );
     expect(context.elements.tuningTabToggleLabel.textContent).toBe("Tuning");
-    expect(context.elements.tuningTabToggle.classList.contains("hidden")).toBe(true);
+    expect(context.elements.tuningTabToggle.classList.contains("hidden")).toBe(false);
     expect(getActiveTuningTab(context)).toBe("extras");
   });
 
@@ -746,7 +898,9 @@ describe("playback tuning", () => {
     syncTuningTabsUI(context);
 
     expect(context.elements.tuningTitleText.textContent).toBe("Tuning");
-    expect(context.elements.tuningBetaTag.classList.contains("hidden")).toBe(true);
+    expect(context.elements.tuningTitle.classList.contains("is-extras-active")).toBe(
+      false,
+    );
     expect(context.elements.tuningPanelTuning.classList.contains("hidden")).toBe(false);
     expect(context.elements.tuningPanelExtras.classList.contains("hidden")).toBe(true);
     expect(context.elements.tuningTabToggle.classList.contains("hidden")).toBe(true);
@@ -806,6 +960,26 @@ describe("playback tuning", () => {
 });
 
 describe("playback timers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setupSleepTimerClock(initialNowMs = 1000) {
+    let nowMs = initialNowMs;
+    vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+    (globalThis.window as unknown as { setTimeout: typeof setTimeout }).setTimeout =
+      setTimeout;
+    (globalThis.window as unknown as { clearTimeout: typeof clearTimeout }).clearTimeout =
+      clearTimeout;
+    vi.stubGlobal("document", { fullscreenElement: null });
+    return {
+      setNow(nextNowMs: number) {
+        nowMs = nextNowMs;
+      },
+    };
+  }
+
   it("updates listen time display", () => {
     const context = createContext();
     context.state.playTimerMs = 1000;
@@ -813,6 +987,102 @@ describe("playback timers", () => {
     vi.spyOn(performance, "now").mockReturnValue(1000);
     updateListenTimeDisplay(context);
     expect(context.elements.listenTimeEl.textContent).toBe("00:00:02");
+  });
+
+  it("maps null, zero, negative, and unknown sleep timer durations to off", () => {
+    setupSleepTimerClock();
+    const context = createContext();
+
+    for (const durationMs of [null, 0, -1, Number.NaN]) {
+      setSleepTimer(context, 30 * 60 * 1000);
+      setSleepTimer(context, durationMs);
+
+      expect(context.state.sleepTimer).toEqual({
+        configuredDurationMs: null,
+        endTimeMs: null,
+        remainingMs: 0,
+      });
+      expect(context.state.sleepTimerTimeoutId).toBe(null);
+    }
+  });
+
+  it("sets sleep timer state from monotonic time", () => {
+    setupSleepTimerClock(5000);
+    const context = createContext();
+
+    setSleepTimer(context, 15 * 60 * 1000);
+
+    expect(context.state.sleepTimer).toEqual({
+      configuredDurationMs: 15 * 60 * 1000,
+      endTimeMs: 905000,
+      remainingMs: 15 * 60 * 1000,
+    });
+    expect(context.state.sleepTimerTimeoutId).not.toBe(null);
+  });
+
+  it("replacing a sleep timer cancels the old expiry", () => {
+    const clock = setupSleepTimerClock(1000);
+    const context = createContext();
+    context.state.isRunning = true;
+
+    setSleepTimer(context, 1000);
+    setSleepTimer(context, 5000);
+    clock.setNow(2000);
+    vi.advanceTimersByTime(1000);
+
+    expect(context.engine.stopJukebox).not.toHaveBeenCalled();
+    expect(context.state.sleepTimer.configuredDurationMs).toBe(5000);
+    expect(context.state.sleepTimer.remainingMs).toBe(4000);
+  });
+
+  it("expires by clearing timer state, stopping playback, and exiting fullscreen", () => {
+    const clock = setupSleepTimerClock(1000);
+    const exitFullscreen = vi.fn(async () => undefined);
+    vi.stubGlobal("document", {
+      fullscreenElement: {},
+      exitFullscreen,
+    });
+    const context = createContext();
+    context.state.isRunning = true;
+    context.state.isPaused = false;
+    context.state.playTimerMs = 1234;
+    context.elements.beatsPlayedEl.textContent = "8";
+
+    setSleepTimer(context, 1000);
+    clock.setNow(2000);
+    vi.advanceTimersByTime(1000);
+
+    expect(context.state.sleepTimer).toEqual({
+      configuredDurationMs: null,
+      endTimeMs: null,
+      remainingMs: 0,
+    });
+    expect(context.state.isRunning).toBe(false);
+    expect(context.state.isPaused).toBe(false);
+    expect(context.engine.stopJukebox).toHaveBeenCalled();
+    expect(context.elements.beatsPlayedEl.textContent).toBe("0");
+    expect(exitFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules the final partial second without waiting a full extra tick", () => {
+    const clock = setupSleepTimerClock(1000);
+    const context = createContext();
+    context.state.isRunning = true;
+
+    setSleepTimer(context, 1500);
+    clock.setNow(2000);
+    vi.advanceTimersByTime(1000);
+
+    expect(context.state.sleepTimer.remainingMs).toBe(500);
+    expect(context.engine.stopJukebox).not.toHaveBeenCalled();
+
+    clock.setNow(2499);
+    vi.advanceTimersByTime(499);
+    expect(context.engine.stopJukebox).not.toHaveBeenCalled();
+
+    clock.setNow(2500);
+    vi.advanceTimersByTime(1);
+    expect(context.engine.stopJukebox).toHaveBeenCalled();
   });
 });
 
@@ -989,7 +1259,220 @@ describe("playback controls", () => {
   });
 });
 
+describe("playback branch shortcuts", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    setWindowUrl("http://localhost/listen/abc");
+  });
+
+  function makeHandlers(context: AppContext, showToast = vi.fn()) {
+    const writeTuningParamsToUrl = vi.fn();
+    return {
+      handlers: createPlaybackUiHandlers({
+        context,
+        elements: context.elements,
+        state: context.state,
+        player: context.player,
+        engine: context.engine,
+        jukebox: context.jukebox,
+        autocanonizer: context.autocanonizer,
+        vizStorageKey: "viz",
+        canonizerFinishKey: "finish",
+        setAnalysisStatus: vi.fn(),
+        showToast,
+        stopPlayback: vi.fn(),
+        togglePlayback: vi.fn(),
+        startJukeboxFromBeat: vi.fn(),
+        startAutocanonizerPlayback: vi.fn(),
+        updateTrackUrl: vi.fn(),
+        navigateToTab: vi.fn(),
+        updateVizVisibility: vi.fn(),
+        openExtras: vi.fn(),
+        syncTuningTabsUI: vi.fn(),
+        getTuningParamsFromEngine: vi.fn(() => {
+          const params = new URLSearchParams();
+          const anchorId = context.engine.getUserAnchorEdgeId();
+          if (anchorId !== null) {
+            params.set("ab", `${anchorId}`);
+          }
+          return params;
+        }),
+        writeTuningParamsToUrl,
+        syncDeletedEdgeState: vi.fn(),
+        updateTrackInfo: vi.fn(),
+        isEditableTarget: vi.fn(() => false),
+        getCurrentTrackId: vi.fn(() => null),
+      }),
+      showToast,
+      writeTuningParamsToUrl,
+    };
+  }
+
+  function keyEvent(key: string) {
+    return {
+      key,
+      repeat: false,
+      target: null,
+      preventDefault: vi.fn(),
+    } as unknown as KeyboardEvent;
+  }
+
+  it("sets and clears the selected backward branch as the user anchor", () => {
+    const context = createContext();
+    const edge = {
+      id: 7,
+      src: { which: 8 },
+      dest: { which: 2 },
+      deleted: false,
+    };
+    context.state.selectedEdge = edge as AppContext["state"]["selectedEdge"];
+    context.state.vizData = {
+      beats: [],
+      edges: [edge],
+      lastBranchPoint: 1,
+      anchorEdgeId: null,
+    } as unknown as AppContext["state"]["vizData"];
+    const nextVizData = {
+      beats: [],
+      edges: [edge],
+      lastBranchPoint: 1,
+      anchorEdgeId: 7,
+    };
+    (
+      context.engine.getVisualizationData as ReturnType<typeof vi.fn>
+    ).mockReturnValue(nextVizData);
+    const { handlers, showToast, writeTuningParamsToUrl } = makeHandlers(context);
+    const setEvent = keyEvent("A");
+
+    handlers.handleKeydown(setEvent);
+
+    expect(setEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(context.engine.setUserAnchorEdge).toHaveBeenCalledWith(edge);
+    expect(context.jukebox.setData).toHaveBeenCalledWith(nextVizData);
+    expect(context.jukebox.setSelectedEdgeActive).toHaveBeenCalledWith(edge);
+    expect(showToast).toHaveBeenCalledWith(context, "Anchor branch set");
+    expect(writeTuningParamsToUrl).toHaveBeenCalledWith("ab=7", true);
+
+    const resetEvent = keyEvent("a");
+    handlers.handleKeydown(resetEvent);
+
+    expect(resetEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(context.engine.setUserAnchorEdge).toHaveBeenLastCalledWith(null);
+    expect(showToast).toHaveBeenLastCalledWith(context, "Anchor branch reset");
+    expect(writeTuningParamsToUrl).toHaveBeenLastCalledWith(null, true);
+  });
+
+  it("ignores A for a selected forward branch", () => {
+    const context = createContext();
+    const edge = {
+      id: 8,
+      src: { which: 2 },
+      dest: { which: 5 },
+      deleted: false,
+    };
+    context.state.selectedEdge = edge as AppContext["state"]["selectedEdge"];
+    const { handlers } = makeHandlers(context);
+    const event = keyEvent("A");
+
+    handlers.handleKeydown(event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(context.engine.setUserAnchorEdge).not.toHaveBeenCalled();
+  });
+
+  it("shows branch stats and enables delete for a selected active branch", () => {
+    const context = createContext();
+    context.state.branchStatsEnabled = true;
+    const edge = {
+      id: 12,
+      src: { which: 8, start: 32 },
+      dest: { which: 2, start: 8 },
+      distance: 20,
+      deleted: false,
+    };
+    const { handlers } = makeHandlers(context);
+
+    handlers.handleEdgeSelect(edge as AppContext["state"]["selectedEdge"]);
+
+    expect(context.state.selectedEdge).toBe(edge);
+    expect(context.jukebox.setSelectedEdgeActive).toHaveBeenCalledWith(edge);
+    expect(context.elements.branchStatsTitleEl.textContent).toBe("Branch #12 stats");
+    expect(context.elements.branchStatsStartEl.textContent).toBe("00:00:32");
+    expect(context.elements.branchStatsEndEl.textContent).toBe("00:00:08");
+    expect(context.elements.branchStatsDeltaEl.textContent).toBe("-00:00:24");
+    expect(context.elements.branchStatsDirectionEl.textContent).toBe("Backward");
+    expect(context.elements.branchStatsSimilarityEl.textContent).toBe("75%");
+    expect(context.elements.branchStatsDeleteButton.disabled).toBe(false);
+    expect(context.elements.branchStatsPopup.classList.remove).toHaveBeenCalledWith(
+      "hidden",
+    );
+  });
+
+  it("hides branch stats and disables delete for a deleted selected branch", () => {
+    const context = createContext();
+    context.state.branchStatsEnabled = true;
+    const edge = {
+      id: 13,
+      src: { which: 8, start: 32 },
+      dest: { which: 2, start: 8 },
+      distance: 20,
+      deleted: true,
+    };
+    const { handlers } = makeHandlers(context);
+
+    handlers.handleEdgeSelect(edge as AppContext["state"]["selectedEdge"]);
+
+    expect(context.elements.branchStatsDeleteButton.disabled).toBe(true);
+    expect(context.elements.branchStatsPopup.classList.remove).toHaveBeenCalledWith(
+      "hidden",
+    );
+  });
+});
+
 describe("playback loading", () => {
+  function createLoadDeps() {
+    return {
+      setActiveTab: vi.fn(),
+      navigateToTab: vi.fn(),
+      updateTrackUrl: vi.fn(),
+      setAnalysisStatus: vi.fn(),
+      setLoadingProgress: vi.fn(),
+      onTrackChange: vi.fn(),
+    };
+  }
+
+  it("loads bare track ids as YouTube sources", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = createContext();
+    const deps = createLoadDeps();
+
+    await loadTrackById(context, deps, "abc123def45");
+
+    expect(context.state.lastTrackId).toBe("abc123def45");
+    expect(context.state.lastSourceProvider).toBe("youtube");
+    expect(deps.onTrackChange).toHaveBeenCalledWith("abc123def45");
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
+      "/api/jobs/by-source/youtube/abc123def45",
+    );
+  });
+
+  it("loads 32-character hex track ids as jobs", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = createContext();
+    const deps = createLoadDeps();
+    const jobId = "a3f3c0dc73c6476c9db95c227f9206f2";
+
+    await loadTrackById(context, deps, jobId);
+
+    expect(context.state.lastTrackId).toBe(jobId);
+    expect(context.state.lastJobId).toBe(jobId);
+    expect(context.state.lastSourceProvider).toBe("upload");
+    expect(deps.onTrackChange).toHaveBeenCalledWith(jobId);
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
+      `/api/analysis/${jobId}`,
+    );
+  });
+
   it("returns false on missing audio without calling repair endpoint", async () => {
     const context = createContext();
     context.state.audioLoadInFlight = true;
@@ -1007,5 +1490,105 @@ describe("playback loading", () => {
     expect(calls.some((call) => String(call[0]).includes("/api/repair/"))).toBe(
       false,
     );
+  });
+
+  it("loads audio before applying a complete polled analysis", async () => {
+    const context = createContext();
+    const deps = createLoadDeps();
+    const audioBuffer = new ArrayBuffer(4);
+    const decodedBuffer = { duration: 12 } as AudioBuffer;
+    context.player = {
+      ...context.player,
+      decode: vi.fn(async () => undefined),
+      getBuffer: vi.fn(() => decodedBuffer),
+      getContext: vi.fn(() => ({} as BaseAudioContext)),
+    } as unknown as AppContext["player"];
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: "complete",
+          id: "job-complete",
+          result: {
+            sections: [],
+            bars: [],
+            beats: [],
+            tatums: [],
+            segments: [],
+            track: { title: "Loaded", duration: 12 },
+          },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => audioBuffer,
+      } as Response)
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      } as Response);
+
+    await pollAnalysis(context, deps, "job-complete");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/analysis/job-complete",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/audio/job-complete", {
+      signal: undefined,
+    });
+    expect(context.player.decode).toHaveBeenCalledWith(audioBuffer);
+    expect(context.engine.loadAnalysis).toHaveBeenCalled();
+    expect(context.state.audioLoaded).toBe(true);
+    expect(context.state.analysisLoaded).toBe(true);
+    expect(deps.setLoadingProgress).toHaveBeenCalledWith(100, "Calculating pathways");
+    expect(deps.setActiveTab).toHaveBeenCalledWith("play");
+  });
+
+  it("shows a generic load error when polling returns missing analysis", async () => {
+    const context = createContext();
+    const deps = createLoadDeps();
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({}),
+    } as Response);
+
+    await pollAnalysis(context, deps, "missing-job");
+
+    expect(deps.setAnalysisStatus).toHaveBeenCalledWith(
+      "Something went wrong. Please try again or report an issue on GitHub.",
+      false,
+    );
+    expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
+  });
+
+  it("surfaces failed analysis status without applying stale analysis", async () => {
+    const context = createContext();
+    const deps = createLoadDeps();
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "failed",
+        id: "job-failed",
+        source_provider: "youtube",
+        error_code: "download_unavailable",
+        error: "ERROR: [download] This video is not available.",
+      }),
+    } as Response);
+
+    await pollAnalysis(context, deps, "job-failed");
+
+    expect(deps.setAnalysisStatus).toHaveBeenCalledWith(
+      "YouTube fetch failed.",
+      false,
+    );
+    expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
+    expect(context.state.analysisLoaded).toBe(false);
   });
 });

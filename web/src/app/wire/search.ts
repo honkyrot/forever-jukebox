@@ -2,6 +2,10 @@ import type { AppContext, AppState, TabId } from "../context";
 import type { Elements } from "../elements";
 import type { SearchDeps } from "../search";
 import type { ToastOptions } from "../ui";
+import {
+  formatErrorForDisplay,
+  inferSourceProviderFromUrl,
+} from "../errorDisplay";
 
 type SearchHandlersDeps = {
   context: AppContext;
@@ -13,7 +17,14 @@ type SearchHandlersDeps = {
   uploadAudio: (file: File) => Promise<{ id?: string } | null>;
   startUrlAnalysis: (payload: {
     url: string;
-  }) => Promise<{ id?: string; source_id?: string; source_provider?: string } | null>;
+  }) => Promise<{
+    id?: string;
+    source_id?: string;
+    source_provider?: string;
+    status?: string;
+    error?: string;
+    error_code?: string;
+  } | null>;
   resetForNewTrack: (context: AppContext) => void;
   setActiveTabWithRefresh: (tabId: TabId) => void;
   setLoadingProgress: (
@@ -22,7 +33,7 @@ type SearchHandlersDeps = {
     message?: string | null,
   ) => void;
   updateTrackUrl: (
-    youtubeId: string,
+    trackId: string,
     replace?: boolean,
     tuningParams?: string | null,
     playMode?: "jukebox" | "autocanonizer",
@@ -61,17 +72,13 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
   }
 
   function maxTrackLengthMessage(minutes: number): string {
-    return `Error: The maximum track length for this server is ${formatMinutes(minutes)} minutes.`;
+    return `The maximum track length for this server is ${formatMinutes(minutes)} minutes.`;
   }
 
   function setButtonBusy(button: HTMLButtonElement, busy: boolean) {
     button.disabled = busy;
     button.classList.toggle("is-loading", busy);
     button.setAttribute("aria-busy", busy ? "true" : "false");
-  }
-
-  function setButtonBusySpinnerOnly(button: HTMLButtonElement, busy: boolean) {
-    setButtonBusy(button, busy);
   }
 
   async function triggerSearch() {
@@ -201,7 +208,7 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
       }
     }
     uploadFileInFlight = true;
-    setButtonBusySpinnerOnly(elements.uploadFileButton, true);
+    setButtonBusy(elements.uploadFileButton, true);
     try {
       const response = await uploadAudio(file);
       if (!response || !response.id) {
@@ -210,7 +217,7 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
       resetForNewTrack(context);
       state.lastJobId = response.id;
       state.pendingAutoFavoriteId = response.id;
-      state.lastYouTubeId = null;
+      state.lastTrackId = response.id;
       state.lastSourceProvider = "upload";
       state.audioLoaded = false;
       state.analysisLoaded = false;
@@ -232,10 +239,10 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
             : null;
         showToast(
           context,
-          (err as Error).message ||
+          formatErrorForDisplay(err) ||
             (fallbackLimit !== null
               ? maxTrackLengthMessage(fallbackLimit)
-              : "Error: This track exceeds the server max track length."),
+              : "This track exceeds the server max track length."),
           {
             icon: "error",
             tone: "error",
@@ -243,9 +250,12 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
         );
         return;
       }
-      showToast(context, `Upload failed: ${String(err)}`);
+      showToast(context, `Upload failed: ${formatErrorForDisplay(err)}`, {
+        icon: "error",
+        tone: "error",
+      });
     } finally {
-      setButtonBusySpinnerOnly(elements.uploadFileButton, false);
+      setButtonBusy(elements.uploadFileButton, false);
       uploadFileInFlight = false;
     }
   }
@@ -270,14 +280,27 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
       showToast(context, "Invalid or unsupported URL.");
       return;
     }
+    const requestedSourceProvider = inferSourceProviderFromUrl(sourceUrl);
     uploadYoutubeInFlight = true;
-    setButtonBusySpinnerOnly(elements.uploadYoutubeButton, true);
+    setButtonBusy(elements.uploadYoutubeButton, true);
     try {
       const response = await startUrlAnalysis({
         url: sourceUrl,
       });
       const sourceId = response?.source_id;
       const sourceProvider = response?.source_provider;
+      if (response?.status === "failed") {
+        showToast(
+          context,
+          formatErrorForDisplay(response.error, {
+            sourceProvider: sourceProvider ?? requestedSourceProvider,
+            errorCode: response.error_code,
+            fallback: "Upload failed.",
+          }),
+          { icon: "error", tone: "error" },
+        );
+        return;
+      }
       if (!response || !response.id || !sourceProvider) {
         throw new Error("Upload failed");
       }
@@ -289,7 +312,7 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
           ? (sourceId as string)
           : response.id;
       resetForNewTrack(context);
-      state.lastYouTubeId = sourceProvider === "youtube" ? (sourceId as string) : null;
+      state.lastTrackId = listenId;
       state.lastJobId = response.id;
       state.lastSourceProvider = sourceProvider;
       state.pendingAutoFavoriteId = listenId;
@@ -311,10 +334,12 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
             : null;
         showToast(
           context,
-          (err as Error).message ||
+          formatErrorForDisplay(err, {
+            sourceProvider: requestedSourceProvider,
+          }) ||
             (fallbackLimit !== null
               ? maxTrackLengthMessage(fallbackLimit)
-              : "Error: This track exceeds the server max track length."),
+              : "This track exceeds the server max track length."),
           {
             icon: "error",
             tone: "error",
@@ -322,11 +347,23 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
         );
         return;
       }
-      showToast(context, `Upload failed: ${String(err)}`);
+      showToast(
+        context,
+        formatErrorForDisplay(err, {
+          sourceProvider: requestedSourceProvider,
+          fallback: "Upload failed.",
+        }),
+        { icon: "error", tone: "error" },
+      );
     } finally {
-      setButtonBusySpinnerOnly(elements.uploadYoutubeButton, false);
+      setButtonBusy(elements.uploadYoutubeButton, false);
       uploadYoutubeInFlight = false;
     }
+  }
+
+  function handleUploadYoutubeSubmit(event: SubmitEvent) {
+    event.preventDefault();
+    void handleUploadYoutubeClick();
   }
 
   return {
@@ -334,5 +371,6 @@ export function createSearchHandlers(deps: SearchHandlersDeps) {
     handleSearchKeydown,
     handleUploadFileClick,
     handleUploadYoutubeClick,
+    handleUploadYoutubeSubmit,
   };
 }

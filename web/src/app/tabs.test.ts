@@ -5,6 +5,7 @@ import {
   pathForFaqSubtab,
   pathForTab,
   updateTrackUrl,
+  urlForTrack,
 } from "./tabs";
 import { setWindowUrl } from "./__tests__/test-utils";
 
@@ -36,7 +37,7 @@ describe("tabs", () => {
   it("navigates to play and preserves tuning params", () => {
     navigateToTab(
       "play",
-      { replace: true, youtubeId: "abc123" },
+      { replace: true, trackId: "abc123" },
       null,
       "jb=1&thresh=20",
       "jukebox",
@@ -49,6 +50,24 @@ describe("tabs", () => {
     updateTrackUrl("xyz", true, "lg=1", "jukebox");
     expect(window.location.pathname).toBe("/listen/xyz");
     expect(window.location.search).toBe("?lg=1");
+  });
+
+  it("builds full track URLs with tuning params", () => {
+    const href = urlForTrack(
+      "a3f3c0dc73c6476c9db95c227f9206f2",
+      "https://example.test/current?old=1",
+      "jb=1&d=2,8&am=nightcore",
+      "jukebox",
+    );
+    expect(href).toBe(
+      "https://example.test/listen/a3f3c0dc73c6476c9db95c227f9206f2?jb=1&d=2,8&am=nightcore",
+    );
+  });
+
+  it("builds full track URLs without search when tuning is absent", () => {
+    expect(urlForTrack("abc123", "https://example.test/top", null, "jukebox")).toBe(
+      "https://example.test/listen/abc123",
+    );
   });
 
   it("updates track URL with audio mode tuning param", () => {
