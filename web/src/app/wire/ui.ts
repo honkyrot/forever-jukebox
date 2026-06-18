@@ -227,12 +227,20 @@ export function bindUiHandlers(deps: UiBindingsDeps) {
   elements.highlightAnchorBranchInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.removeSeqInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.extrasEnabledInput.addEventListener("change", tuningHandlers.handleTuningApply);
+
   elements.audioModeOffInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.audioModeNightcoreInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.audioModeDaycoreInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.audioModeVaporwaveInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.audioModeEightDInput.addEventListener("change", tuningHandlers.handleTuningApply);
   elements.audioModeLofiInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeUnderwaterInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeCathedralInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeCowbellInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeSwingInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeEightBitInput.addEventListener("change", tuningHandlers.handleTuningApply);
+  elements.audioModeEightDInput.addEventListener("change", tuningHandlers.handleTuningApply);
+
   elements.bpmBarToggle.addEventListener("change", playbackHandlers.bpmBarToggler);
   elements.volumeButton.addEventListener("click", tuningHandlers.handleVolumeButtonClick);
   elements.visualEffectDefaultToggle.addEventListener("change", playbackHandlers.handleVisualEffectModeChange);

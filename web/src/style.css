@@ -972,6 +972,11 @@ button.is-loading::after {
   border-radius: 8px;
   padding: 10px 12px;
   background: var(--surface-control);
+  transition: border-color 0.2s ease;
+}
+
+.audio-mode-group:has(input[type="radio"]:checked:not([value="off"])) {
+  border-color: var(--accent);
 }
 
 .audio-mode-group .label-line {
