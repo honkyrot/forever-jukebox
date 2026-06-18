@@ -121,6 +121,18 @@ export function getElements() {
     document.querySelector<HTMLButtonElement>("#delete-job"),
     "#delete-job"
   );
+  const deleteConfirmModal = requireElement(
+    document.querySelector<HTMLDivElement>("#delete-confirm-modal"),
+    "#delete-confirm-modal"
+  );
+  const deleteConfirmCancel = requireElement(
+    document.querySelector<HTMLButtonElement>("#delete-confirm-cancel"),
+    "#delete-confirm-cancel"
+  );
+  const deleteConfirmDelete = requireElement(
+    document.querySelector<HTMLButtonElement>("#delete-confirm-delete"),
+    "#delete-confirm-delete"
+  );
   const playTitle = requireElement(
     document.querySelector<HTMLDivElement>("#play-title"),
     "#play-title"
@@ -367,9 +379,21 @@ export function getElements() {
     document.querySelector<HTMLInputElement>("#audio-mode-eight-d"),
     "#audio-mode-eight-d"
   );
+  const audioModeEightBitInput = requireElement(
+    document.querySelector<HTMLInputElement>("#audio-mode-eight-bit"),
+    "#audio-mode-eight-bit"
+  );
   const audioModeLofiInput = requireElement(
     document.querySelector<HTMLInputElement>("#audio-mode-lofi"),
     "#audio-mode-lofi"
+  );
+  const audioModeUnderwaterInput = requireElement(
+    document.querySelector<HTMLInputElement>("#audio-mode-underwater"),
+    "#audio-mode-underwater"
+  );
+  const audioModeCathedralInput = requireElement(
+    document.querySelector<HTMLInputElement>("#audio-mode-cathedral"),
+    "#audio-mode-cathedral"
   );
   const audioModeCowbellInput = requireElement(
     document.querySelector<HTMLInputElement>("#audio-mode-cowbell"),
@@ -488,7 +512,7 @@ export function getElements() {
     "#favorites-search-input"
   );
   const favoritesList = requireElement(
-    document.querySelector<HTMLOListElement>("#favorites-list"),
+    document.querySelector<HTMLDivElement>("#favorites-list"),
     "#favorites-list"
   );
   const topSongsTabs = requireNonEmpty(
@@ -712,6 +736,9 @@ export function getElements() {
     infoButton,
     favoriteButton,
     deleteButton,
+    deleteConfirmModal,
+    deleteConfirmCancel,
+    deleteConfirmDelete,
     playTitle,
     themeLinks,
     fullscreenButton,
@@ -773,7 +800,10 @@ export function getElements() {
     audioModeDaycoreInput,
     audioModeVaporwaveInput,
     audioModeEightDInput,
+    audioModeEightBitInput,
     audioModeLofiInput,
+    audioModeUnderwaterInput,
+    audioModeCathedralInput,
     audioModeCowbellInput,
     audioModeSwingInput,
     searchInput,

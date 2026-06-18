@@ -67,6 +67,11 @@ class MockStereoPannerNode extends MockNode {
   pan = new MockAudioParam();
 }
 
+class MockWaveShaperNode extends MockNode {
+  curve: Float32Array | null = null;
+  oversample: OverSampleType = "none";
+}
+
 class MockOfflineAudioContext {
   static last: MockOfflineAudioContext | null = null;
   readonly numberOfChannels: number;
@@ -74,9 +79,11 @@ class MockOfflineAudioContext {
   readonly sampleRate: number;
   destination = new MockNode();
   sources: MockSourceNode[] = [];
+  gains: MockGainNode[] = [];
   biquads: MockBiquadNode[] = [];
   convolvers: MockConvolverNode[] = [];
   panners: MockStereoPannerNode[] = [];
+  waveShapers: MockWaveShaperNode[] = [];
 
   constructor(
     channelsOrOptions: number | {
@@ -114,7 +121,9 @@ class MockOfflineAudioContext {
   }
 
   createGain() {
-    return new MockGainNode() as unknown as GainNode;
+    const gain = new MockGainNode();
+    this.gains.push(gain);
+    return gain as unknown as GainNode;
   }
 
   createBiquadFilter() {
@@ -133,6 +142,12 @@ class MockOfflineAudioContext {
     const panner = new MockStereoPannerNode();
     this.panners.push(panner);
     return panner as unknown as StereoPannerNode;
+  }
+
+  createWaveShaper() {
+    const shaper = new MockWaveShaperNode();
+    this.waveShapers.push(shaper);
+    return shaper as unknown as WaveShaperNode;
   }
 
   async startRendering() {
@@ -235,6 +250,60 @@ describe("renderJukeboxAudio", () => {
     expect(context?.convolvers.length).toBeGreaterThan(0);
   });
 
+  it("builds underwater lowpass nodes", async () => {
+    await renderJukeboxAudio({
+      sourceBuffer: makeSourceBuffer(new Array(20).fill(1), 10),
+      segments: [
+        {
+          outputStart: 0,
+          sourceStart: 0,
+          duration: 1,
+          beatIndex: 0,
+          jumped: false,
+          jumpFromIndex: null,
+        },
+      ],
+      durationSeconds: 1,
+      gain: 1,
+      audioMode: "underwater",
+    });
+
+    const context = MockOfflineAudioContext.last;
+    expect(context?.biquads[0]?.type).toBe("lowpass");
+    expect(context?.biquads[0]?.frequency.value).toBe(400);
+    expect(context?.convolvers).toHaveLength(0);
+  });
+
+  it("builds cathedral filter and reverb nodes", async () => {
+    await renderJukeboxAudio({
+      sourceBuffer: makeSourceBuffer(new Array(20).fill(1), 10),
+      segments: [
+        {
+          outputStart: 0,
+          sourceStart: 0,
+          duration: 1,
+          beatIndex: 0,
+          jumped: false,
+          jumpFromIndex: null,
+        },
+      ],
+      durationSeconds: 1,
+      gain: 1,
+      audioMode: "cathedral",
+    });
+
+    const context = MockOfflineAudioContext.last;
+    const dryGain = context?.gains[context.gains.length - 3];
+    const wetGain = context?.gains[context.gains.length - 2];
+    expect(context?.biquads[0]?.type).toBe("highpass");
+    expect(context?.biquads[0]?.frequency.value).toBe(150);
+    expect(context?.biquads[1]?.type).toBe("lowpass");
+    expect(context?.biquads[1]?.frequency.value).toBe(5500);
+    expect(context?.convolvers[0]?.buffer?.duration).toBe(4.75);
+    expect(dryGain?.gain.value).toBe(0.7);
+    expect(wetGain?.gain.value).toBe(0.9);
+  });
+
   it("automates panning for 8D mode", async () => {
     await renderJukeboxAudio({
       sourceBuffer: makeSourceBuffer(new Array(8).fill(1), 4),
@@ -255,6 +324,32 @@ describe("renderJukeboxAudio", () => {
 
     const panner = MockOfflineAudioContext.last?.panners[0];
     expect(panner?.pan.setValueAtTime).toHaveBeenCalled();
+  });
+
+  it("builds bitcrusher and lowpass nodes for eight-bit mode", async () => {
+    await renderJukeboxAudio({
+      sourceBuffer: makeSourceBuffer(new Array(20).fill(1), 10),
+      segments: [
+        {
+          outputStart: 0,
+          sourceStart: 0,
+          duration: 1,
+          beatIndex: 0,
+          jumped: false,
+          jumpFromIndex: null,
+        },
+      ],
+      durationSeconds: 1,
+      gain: 1,
+      audioMode: "eight_bit",
+    });
+
+    const context = MockOfflineAudioContext.last;
+    const shaper = context?.waveShapers[0];
+    const curve = shaper?.curve;
+    expect(curve).toBeInstanceOf(Float32Array);
+    expect(new Set(Array.from(curve ?? [])).size).toBeLessThanOrEqual(256);
+    expect(context?.biquads).toHaveLength(0);
   });
 
   it("schedules cowbell overlay events deterministically into the offline graph", async () => {

@@ -41,6 +41,13 @@ class MockStereoPannerNode {
   disconnect = vi.fn();
 }
 
+class MockWaveShaperNode {
+  curve: Float32Array | null = null;
+  oversample: OverSampleType = "none";
+  connect = vi.fn();
+  disconnect = vi.fn();
+}
+
 class MockAudioContext {
   currentTime = 0;
   destination = {};
@@ -50,6 +57,8 @@ class MockAudioContext {
   createdBiquads: MockBiquadNode[] = [];
   createdConvolvers: MockConvolverNode[] = [];
   createdPanners: MockStereoPannerNode[] = [];
+  createdWaveShapers: MockWaveShaperNode[] = [];
+  createdBuffers: AudioBuffer[] = [];
   createGain() {
     const gain = new MockGainNode();
     this.createdGains.push(gain);
@@ -70,16 +79,24 @@ class MockAudioContext {
     this.createdPanners.push(panner);
     return panner;
   }
+  createWaveShaper() {
+    const shaper = new MockWaveShaperNode();
+    this.createdWaveShapers.push(shaper);
+    return shaper;
+  }
   createBuffer(channels: number, length: number, sampleRate: number) {
     const data = Array.from({ length: channels }, () => new Float32Array(length));
-    return {
+    const buffer = {
       length,
+      duration: length / sampleRate,
       sampleRate,
       numberOfChannels: channels,
       getChannelData(channel: number) {
         return data[channel] as Float32Array;
       },
     } as AudioBuffer;
+    this.createdBuffers.push(buffer);
+    return buffer;
   }
   createBufferSource() {
     const source = new MockSourceNode();
@@ -201,6 +218,109 @@ describe("BufferedAudioPlayer", () => {
     expect(bandPass).toBeDefined();
     expect(bandPass?.frequency.value).toBe(2000);
     expect(context.createdSources[0]?.playbackRate.value).toBe(1);
+  });
+
+  it("builds underwater chain with heavy lowpass filter", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+    player.setJukeboxAudioMode("underwater");
+    player.play();
+
+    const lowPass = context.createdBiquads.find((node) => node.type === "lowpass");
+    expect(lowPass).toBeDefined();
+    expect(lowPass?.frequency.value).toBe(400);
+    expect(context.createdSources[0]?.playbackRate.value).toBe(1);
+    expect(context.createdConvolvers.length).toBe(0);
+  });
+
+  it("builds cathedral chain with cathedral-style reverb", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+    player.setJukeboxAudioMode("cathedral");
+    player.play();
+
+    const reverb = context.createdConvolvers[0];
+    const dryGain = context.createdGains[context.createdGains.length - 2];
+    const wetGain = context.createdGains[context.createdGains.length - 1];
+    const highPass = context.createdBiquads.find((node) => node.type === "highpass");
+    const lowPass = context.createdBiquads.find((node) => node.type === "lowpass");
+    expect(reverb).toBeDefined();
+    expect(reverb?.buffer?.duration).toBe(4.75);
+    expect(dryGain?.gain.value).toBe(0.7);
+    expect(wetGain?.gain.value).toBe(0.9);
+    expect(highPass?.frequency.value).toBe(150);
+    expect(lowPass?.frequency.value).toBe(5500);
+    expect(context.createdSources[0]?.playbackRate.value).toBe(1);
+  });
+
+  it("builds eight-bit chain with bitcrusher and lowpass filter", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    const sourceBuffer = context.createBuffer(1, 8, 48_000) as AudioBuffer;
+    sourceBuffer.getChannelData(0).set([-1, -0.5, 0, 0.5, 1, 0.25, -0.25, 0.75]);
+    await player.loadBuffer(sourceBuffer);
+    player.setJukeboxAudioMode("eight_bit");
+    player.play();
+
+    const shaper = context.createdWaveShapers[0];
+    const curve = shaper?.curve;
+    const lowPass = context.createdBiquads.find((node) => node.type === "lowpass");
+    const rendered = context.createdSources[0]?.buffer;
+    expect(curve).toBeInstanceOf(Float32Array);
+    expect(curve?.[0]).toBe(-1);
+    expect(curve?.[curve.length - 1]).toBe(1);
+    expect(new Set(Array.from(curve ?? [])).size).toBeLessThanOrEqual(256);
+    expect(rendered).not.toBe(sourceBuffer);
+    expect(
+      new Set(Array.from(rendered?.getChannelData(0).slice(0, 6) ?? [])).size,
+    ).toBe(1);
+    expect(lowPass).toBeUndefined();
+    expect(context.createdSources[0]?.playbackRate.value).toBe(1);
+  });
+
+  it("renders eight-bit buffers lazily and releases them after switching away", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    const sourceBuffer = context.createBuffer(1, 8, 48_000) as AudioBuffer;
+    const createdBeforeLoad = context.createdBuffers.length;
+
+    await player.loadBuffer(sourceBuffer);
+    expect(context.createdBuffers).toHaveLength(createdBeforeLoad);
+
+    player.setJukeboxAudioMode("eight_bit");
+    expect(context.createdBuffers).toHaveLength(createdBeforeLoad + 1);
+
+    player.setJukeboxAudioMode("off");
+    player.setJukeboxAudioMode("eight_bit");
+    expect(context.createdBuffers).toHaveLength(createdBeforeLoad + 2);
+  });
+
+  it("releases cached reverb impulses after switching away from reverb modes", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+
+    player.setJukeboxAudioMode("cathedral");
+    expect(context.createdBuffers).toHaveLength(1);
+
+    player.setJukeboxAudioMode("off");
+    player.setJukeboxAudioMode("cathedral");
+    expect(context.createdBuffers).toHaveLength(2);
+  });
+
+  it("clears decoded and rendered buffers on dispose", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    const sourceBuffer = context.createBuffer(1, 8, 48_000) as AudioBuffer;
+    await player.loadBuffer(sourceBuffer);
+    player.setJukeboxAudioMode("eight_bit");
+
+    await player.dispose();
+
+    expect(player.getBuffer()).toBeNull();
+    expect(player.getSourceBuffer()).toBeNull();
   });
 
   it("switches swing mode to a rendered buffer without playbackRate slicing", async () => {

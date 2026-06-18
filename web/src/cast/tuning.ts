@@ -16,6 +16,27 @@ const TUNING_PARAM_KEYS = [
   "ab",
 ];
 
+export type CastAudioModeCapability = {
+  wireValue: JukeboxAudioMode;
+  label: string;
+};
+
+export const CAST_AUDIO_MODE_CAPABILITIES = [
+  { wireValue: "off", label: "Off" },
+  { wireValue: "nightcore", label: "Nightcore" },
+  { wireValue: "daycore", label: "Daycore" },
+  { wireValue: "vaporwave", label: "Vaporwave" },
+  { wireValue: "eight_d", label: "8D Audio" },
+  { wireValue: "lofi", label: "LoFi" },
+  { wireValue: "underwater", label: "Underwater" },
+  { wireValue: "cathedral", label: "Cathedral" },
+  { wireValue: "cowbell", label: "More Cowbell" },
+] as const satisfies readonly CastAudioModeCapability[];
+
+const CAST_AUDIO_MODE_VALUES = new Set<string>(
+  CAST_AUDIO_MODE_CAPABILITIES.map((mode) => mode.wireValue),
+);
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -41,17 +62,10 @@ function parseAnchorBranchId(raw: string | null): number | null {
 }
 
 function parseAudioMode(raw: string | null): JukeboxAudioMode | null {
-  if (
-    raw === "off" ||
-    raw === "nightcore" ||
-    raw === "daycore" ||
-    raw === "vaporwave" ||
-    raw === "eight_d" ||
-    raw === "lofi"
-  ) {
-    return raw;
-  }
-  return null;
+  const normalized = raw?.trim().toLowerCase();
+  return normalized && CAST_AUDIO_MODE_VALUES.has(normalized)
+    ? (normalized as JukeboxAudioMode)
+    : null;
 }
 
 export type CastParsedTuning = {

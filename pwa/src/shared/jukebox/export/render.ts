@@ -2,6 +2,8 @@ import {
   AUDIO_MODE_SETTINGS,
   PAN_STEP,
   REVERB_SECONDS,
+  createBitcrusherCurve,
+  renderBitcrushedBuffer,
   type JukeboxAudioMode,
 } from "@/shared/jukebox/audio/audioModes";
 import type { PlannedJukeboxSegment } from "./plan";
@@ -180,8 +182,17 @@ async function renderModeGraph(options: {
   const outputFrameLength = options.durationSeconds * sampleRate;
   const context = createOfflineContext(channels, outputFrameLength, sampleRate);
   const settings = AUDIO_MODE_SETTINGS[options.audioMode];
+  const graphInput =
+    settings.crushBitDepth !== undefined && settings.crushSampleRate !== undefined
+      ? renderBitcrushedBuffer(
+          context,
+          options.assembled,
+          settings.crushBitDepth,
+          settings.crushSampleRate,
+        )
+      : options.assembled;
   const source = context.createBufferSource();
-  source.buffer = options.assembled;
+  source.buffer = graphInput;
   source.playbackRate.value = settings.rate;
 
   const modeOutput = connectAudioModeChain(context, source, options.audioMode);
@@ -214,6 +225,14 @@ function connectAudioModeChain(
     lastNode = highPass;
   }
 
+  if (settings.crushBitDepth !== undefined) {
+    const bitcrusher = context.createWaveShaper();
+    bitcrusher.curve = createBitcrusherCurve(settings.crushBitDepth);
+    bitcrusher.oversample = "none";
+    lastNode.connect(bitcrusher);
+    lastNode = bitcrusher;
+  }
+
   if (settings.lowPassFrequency !== null) {
     const lowPass = context.createBiquadFilter();
     lowPass.type = settings.useBandPass ? "bandpass" : "lowpass";
@@ -226,8 +245,13 @@ function connectAudioModeChain(
     const dryGain = context.createGain();
     const wetGain = context.createGain();
     const reverb = context.createConvolver();
+    dryGain.gain.value = settings.dryMix ?? 1;
     wetGain.gain.value = settings.reverbMix;
-    reverb.buffer = createReverbImpulseBuffer(context);
+    reverb.buffer = createReverbImpulseBuffer(
+      context,
+      settings.reverbSeconds ?? REVERB_SECONDS,
+      settings.reverbDecay ?? 2,
+    );
     lastNode.connect(dryGain);
     dryGain.connect(chainOutput);
     lastNode.connect(reverb);
@@ -297,8 +321,12 @@ function scheduleCowbellEvents(
   }
 }
 
-function createReverbImpulseBuffer(context: OfflineAudioContext) {
-  const length = Math.floor(context.sampleRate * REVERB_SECONDS);
+function createReverbImpulseBuffer(
+  context: OfflineAudioContext,
+  seconds: number,
+  decay: number,
+) {
+  const length = Math.floor(context.sampleRate * seconds);
   const impulse = context.createBuffer(2, length, context.sampleRate);
   let seed = 123456789;
   const random = () => {
@@ -312,7 +340,7 @@ function createReverbImpulseBuffer(context: OfflineAudioContext) {
     const channel = impulse.getChannelData(channelIndex);
     for (let sampleIndex = 0; sampleIndex < length; sampleIndex += 1) {
       channel[sampleIndex] =
-        (random() * 2 - 1) * Math.pow(1 - sampleIndex / length, 2);
+        (random() * 2 - 1) * Math.pow(1 - sampleIndex / length, decay);
     }
   }
   return impulse;

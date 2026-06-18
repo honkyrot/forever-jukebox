@@ -316,11 +316,11 @@ export function bootstrap() {
   const topSongsTabLoaders = {
     top: {
       fetch: () => topSongsHandlers.fetchTopSongsList(),
-      errorLabel: "Top songs",
+      errorLabel: "Top tracks",
     },
     trending: {
       fetch: () => topSongsHandlers.fetchTrendingSongsList(),
-      errorLabel: "Trending songs",
+      errorLabel: "Trending tracks",
     },
     "all-time": {
       loaded: () => state.allTimeSongsLoaded,
@@ -332,7 +332,7 @@ export function bootstrap() {
     },
     recent: {
       fetch: () => topSongsHandlers.fetchRecentSongsList(),
-      errorLabel: "Recent songs",
+      errorLabel: "Recent tracks",
     },
   } as const;
   const loadTopSongsTab = (tabId: LazyTopSongsTab, options?: { force?: boolean }) => {
@@ -479,12 +479,14 @@ export function bootstrap() {
   playbackHandlers.initializePlayback();
 
   navigationHandlers.setActiveTabWithRefresh("top");
-  setAnalysisStatus(context, "No song selected.", false);
+  setAnalysisStatus(context, "No track selected.", false);
   applyTheme(context, initialTheme);
   loadAppConfig()
     .then((config) => {
       if (config) {
-        appConfigHandlers.applyAppConfig(config as AppConfig);
+        appConfigHandlers.applyAppConfig(config as AppConfig, {
+          hydrateFavorites: false,
+        });
       }
     })
     .catch((err) => {

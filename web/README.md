@@ -21,14 +21,17 @@ Audio results are cached locally in IndexedDB when available; browsers may evict
 data under storage pressure.
 
 ## Extras audio modes
-- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `lofi`, `cowbell`, `swing`.
+- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `eight_bit`, `lofi`, `underwater`, `cathedral`, `cowbell`, `swing`.
 - UI labels/tooltips:
   - Normal
   - Nightcore (Fast & Bright)
   - Daycore (Slow & Deep)
   - Vaporwave (Muffled & Slow)
   - 8D Audio (Spinning/Spatial)
+  - 8-Bit (Bitcrushed & Filtered)
   - Lofi (Radio Filter)
+  - Underwater (Heavy Low-Pass)
+  - Cathedral (Cathedral Reverb)
   - More Cowbell
   - Swing (pre-renders a pitch-preserved swung buffer with Rubber Band WASM)
 - More Cowbell and Swing are beat-aware remix toys inspired by Echo Nest Remix:
@@ -71,6 +74,14 @@ If the analysis file nests these arrays under `analysis`, that is also supported
 
 This UI calls the API via the `/api` prefix (proxied by Vite).
 See `schema.json` at the repo root for the full analysis schema reference.
+
+## Admin mode
+
+Set the API `ADMIN_KEY` value in browser local storage under `fj-admin-key` to keep
+track deletion available outside the normal 30-minute grace window. Admin delete
+requests send the value in the `X-Admin-Key` header. Reload the page or load another
+track after changing the value. Because the key is stored in browser local storage,
+use admin mode only on trusted instances and devices.
 
 ## Jump logic (high level)
 - Beats are the main playback unit.

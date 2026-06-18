@@ -11,7 +11,10 @@ function parseAudioMode(raw: string | null) {
     raw === "daycore" ||
     raw === "vaporwave" ||
     raw === "eight_d" ||
+    raw === "eight_bit" ||
     raw === "lofi" ||
+    raw === "underwater" ||
+    raw === "cathedral" ||
     raw === "cowbell" ||
     raw === "swing"
   ) {

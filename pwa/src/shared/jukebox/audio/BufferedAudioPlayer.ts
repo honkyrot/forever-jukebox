@@ -2,6 +2,8 @@ import {
   AUDIO_MODE_SETTINGS,
   PAN_STEP,
   REVERB_SECONDS,
+  createBitcrusherCurve,
+  renderBitcrushedBuffer,
   type JukeboxAudioMode,
 } from "./audioModes";
 
@@ -22,7 +24,7 @@ export class BufferedAudioPlayer {
   private sourceChainOutput: GainNode;
   private stereoPanner: StereoPannerNode | null = null;
   private chainNodes: AudioNode[] = [];
-  private reverbImpulseBuffer: AudioBuffer | null = null;
+  private reverbImpulseBuffers = new Map<string, AudioBuffer>();
   private volume = 0.5;
   private startAt = 0;
   private offset = 0;
@@ -56,8 +58,9 @@ export class BufferedAudioPlayer {
   async loadBuffer(buffer: AudioBuffer) {
     this.stop();
     this.originalBuffer = buffer;
-    this.buffer = buffer;
     this.renderedModeBuffers = {};
+    this.reverbImpulseBuffers.clear();
+    this.buffer = this.getActiveBuffer();
     this.offset = 0;
   }
 
@@ -185,6 +188,11 @@ export class BufferedAudioPlayer {
     const resumeOffset = shouldResume ? this.getCurrentTime() : this.offset;
     this.audioMode = mode;
     this.playbackRate = AUDIO_MODE_SETTINGS[mode].rate;
+    if (mode === "eight_bit") {
+      this.renderEightBitBuffer();
+    }
+    this.releaseInactiveRenderedModeBuffers(mode);
+    this.reverbImpulseBuffers.clear();
     this.buffer = this.getActiveBuffer();
     this.rebuildSourceChain();
     this.syncPanMotion();
@@ -200,8 +208,17 @@ export class BufferedAudioPlayer {
     this.startSourceAt(this.offset, now);
   }
 
+  private releaseInactiveRenderedModeBuffers(activeMode: JukeboxAudioMode) {
+    if (activeMode !== "eight_bit") {
+      delete this.renderedModeBuffers.eight_bit;
+    }
+    if (activeMode !== "swing") {
+      delete this.renderedModeBuffers.swing;
+    }
+  }
+
   setRenderedJukeboxAudioBuffer(
-    mode: Extract<JukeboxAudioMode, "swing">,
+    mode: Extract<JukeboxAudioMode, "eight_bit" | "swing">,
     buffer: AudioBuffer,
   ) {
     this.renderedModeBuffers[mode] = buffer;
@@ -224,13 +241,37 @@ export class BufferedAudioPlayer {
   }
 
   getRenderedJukeboxAudioBuffer(
-    mode: Extract<JukeboxAudioMode, "swing">,
+    mode: Extract<JukeboxAudioMode, "eight_bit" | "swing">,
   ): AudioBuffer | null {
     return this.renderedModeBuffers[mode] ?? null;
   }
 
   private getActiveBuffer(): AudioBuffer | null {
     return this.renderedModeBuffers[this.audioMode] ?? this.originalBuffer;
+  }
+
+  private renderEightBitBuffer() {
+    const settings = AUDIO_MODE_SETTINGS.eight_bit;
+    if (
+      !this.originalBuffer ||
+      !Number.isFinite(this.originalBuffer.length) ||
+      this.originalBuffer.length <= 0 ||
+      !Number.isFinite(this.originalBuffer.sampleRate) ||
+      this.originalBuffer.sampleRate <= 0 ||
+      !Number.isInteger(this.originalBuffer.numberOfChannels) ||
+      this.originalBuffer.numberOfChannels <= 0 ||
+      typeof this.originalBuffer.getChannelData !== "function" ||
+      settings.crushBitDepth === undefined ||
+      settings.crushSampleRate === undefined
+    ) {
+      return;
+    }
+    this.renderedModeBuffers.eight_bit = renderBitcrushedBuffer(
+      this.context,
+      this.originalBuffer,
+      settings.crushBitDepth,
+      settings.crushSampleRate,
+    );
   }
 
   getJukeboxAudioMode(): JukeboxAudioMode {
@@ -409,6 +450,15 @@ export class BufferedAudioPlayer {
       lastNode = highPass;
     }
 
+    if (settings.crushBitDepth !== undefined) {
+      const bitcrusher = this.context.createWaveShaper();
+      bitcrusher.curve = createBitcrusherCurve(settings.crushBitDepth);
+      bitcrusher.oversample = "none";
+      this.chainNodes.push(bitcrusher);
+      lastNode.connect(bitcrusher);
+      lastNode = bitcrusher;
+    }
+
     if (settings.lowPassFrequency !== null) {
       const lowPass = this.context.createBiquadFilter();
       lowPass.type = settings.useBandPass ? "bandpass" : "lowpass";
@@ -422,8 +472,12 @@ export class BufferedAudioPlayer {
       const dryGain = this.context.createGain();
       const wetGain = this.context.createGain();
       const reverb = this.context.createConvolver();
+      dryGain.gain.value = settings.dryMix ?? 1;
       wetGain.gain.value = settings.reverbMix;
-      reverb.buffer = this.getReverbImpulseBuffer();
+      reverb.buffer = this.getReverbImpulseBuffer(
+        settings.reverbSeconds ?? REVERB_SECONDS,
+        settings.reverbDecay ?? 2,
+      );
       this.chainNodes.push(dryGain, wetGain, reverb);
       lastNode.connect(dryGain);
       dryGain.connect(this.sourceChainOutput);
@@ -491,26 +545,31 @@ export class BufferedAudioPlayer {
     }
   }
 
-  private getReverbImpulseBuffer() {
-    if (this.reverbImpulseBuffer) {
-      return this.reverbImpulseBuffer;
+  private getReverbImpulseBuffer(seconds: number, decay: number) {
+    const cacheKey = `${seconds}:${decay}`;
+    const cached = this.reverbImpulseBuffers.get(cacheKey);
+    if (cached) {
+      return cached;
     }
-    const length = Math.floor(this.context.sampleRate * REVERB_SECONDS);
+    const length = Math.floor(this.context.sampleRate * seconds);
     const impulse = this.context.createBuffer(2, length, this.context.sampleRate);
     for (let channelIndex = 0; channelIndex < 2; channelIndex += 1) {
       const channel = impulse.getChannelData(channelIndex);
       for (let sampleIndex = 0; sampleIndex < length; sampleIndex += 1) {
         channel[sampleIndex] =
-          (Math.random() * 2 - 1) * Math.pow(1 - sampleIndex / length, 2);
+          (Math.random() * 2 - 1) * Math.pow(1 - sampleIndex / length, decay);
       }
     }
-    this.reverbImpulseBuffer = impulse;
+    this.reverbImpulseBuffers.set(cacheKey, impulse);
     return impulse;
   }
 
   async dispose() {
     this.stop();
+    this.originalBuffer = null;
     this.buffer = null;
+    this.renderedModeBuffers = {};
+    this.reverbImpulseBuffers.clear();
     this.onEnded = null;
     this.stopPanMotion();
     this.clearSourceChain();

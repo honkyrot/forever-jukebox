@@ -150,6 +150,9 @@ const AUDIO_MODE_SECTIONS: AudioModeSection[] = [
       { value: "vaporwave", label: "Vaporwave", tooltip: "Muffled & Slow" },
       { value: "eight_d", label: "8D Audio", tooltip: "Spinning/Spatial" },
       { value: "lofi", label: "Lofi", tooltip: "Radio Filter" },
+      { value: "eight_bit", label: "8-Bit", tooltip: "Bitcrushed & Filtered" },
+      { value: "underwater", label: "Underwater", tooltip: "Heavy Low-Pass" },
+      { value: "cathedral", label: "Cathedral", tooltip: "Cathedral Reverb" },
     ],
   },
   {
@@ -254,7 +257,10 @@ function parseAudioMode(value: string | null): JukeboxAudioMode | null {
     value === "daycore" ||
     value === "vaporwave" ||
     value === "eight_d" ||
+    value === "eight_bit" ||
     value === "lofi" ||
+    value === "underwater" ||
+    value === "cathedral" ||
     value === "cowbell" ||
     value === "swing"
   ) {
@@ -2085,7 +2091,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                 checked={finishOutSong}
                 onChange={(event) => setFinishOutSong(event.target.checked)}
               />
-              <span>Finish out the song</span>
+              <span>Finish out the track</span>
             </div>
           </div>
           <div id="viz-layer" className="viz-layer" ref={vizLayerRef} />
@@ -2620,7 +2626,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
             </div>
             <div className="modal-body info-body">
               <div className="info-row">
-                <span className="info-label">Song length:</span>
+                <span className="info-label">Track length:</span>
                 <span>{formatDuration(analysis?.track?.duration ?? 0)}</span>
               </div>
               <div className="info-row">
