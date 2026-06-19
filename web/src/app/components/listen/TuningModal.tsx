@@ -101,6 +101,8 @@ export function TuningModal() {
 
   const close = () => useAppStore.setState({ tuningModalOpen: false });
 
+  const does_nothing = () => {};
+
   const handleToggleTab = () => {
     useAppStore.setState({
       tuningModalTab: tab === "tuning" ? "extras" : "tuning",
@@ -171,7 +173,7 @@ export function TuningModal() {
 
   return (
     <>
-      <Modal id="tuning-modal" open={open} onClose={close}>
+      <Modal id="tuning-modal" open={open} onClose={does_nothing}>
         <div className="modal-header">
           <div className="modal-header-main">
             <h2

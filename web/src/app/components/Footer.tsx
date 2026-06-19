@@ -23,6 +23,9 @@ export function Footer() {
           </>
         ) : null}
       </p>
+      <p>
+        This instance is forked by <a href="https://github.com/honkyrot.com" target="_blank" rel="noreferrer">Honkyrot</a>.
+      </p>
     </footer>
   );
 }

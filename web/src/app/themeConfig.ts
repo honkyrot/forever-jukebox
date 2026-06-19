@@ -6,7 +6,7 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--bg": "#0F1115",
     "--text": "#E7E4DD",
     "--text-rgb": "231, 228, 221",
-    "--muted": "#9AA3B2",
+    "--muted": "#e7e4dd",
     "--accent": "#4AC7FF",
     "--title-accent": "#F1C47A",
     "--title-glow": "rgba(241, 196, 122, 0.55)",

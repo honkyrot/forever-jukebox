@@ -680,12 +680,12 @@ button.is-loading::after {
 }
 
 .modal {
-  position: fixed;
+  position: relative;
   inset: 0;
   display: none;
   align-items: center;
   justify-content: center;
-  background: var(--scrim);
+  /* background: var(--scrim); */
   z-index: 20;
 }
 

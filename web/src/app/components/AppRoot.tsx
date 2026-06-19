@@ -126,9 +126,9 @@ export function AppRoot() {
       {activeTab === "search" ? <SearchPanel /> : null}
       <ListenPanel visible={activeTab === "play"} />
       {activeTab === "faq" ? <FaqPanel /> : null}
+      <TuningModal />
       <Footer />
       <Toast />
-      <TuningModal />
       <SleepTimerModal />
       <InfoModal />
       <PlaylistModal />
