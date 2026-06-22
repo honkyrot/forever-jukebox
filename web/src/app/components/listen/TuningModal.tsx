@@ -49,6 +49,8 @@ function RangeRow({
   step,
   value,
   onChange,
+  onMouseUp,
+  onTouchEnd,
   hint,
 }: {
   id: string;
@@ -59,6 +61,8 @@ function RangeRow({
   step: number;
   value: number;
   onChange: (value: number) => void;
+  onMouseUp?: () => void;
+  onTouchEnd?: () => void;
   hint?: React.ReactNode;
 }) {
   return (
@@ -75,6 +79,8 @@ function RangeRow({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
+        onMouseUp={onMouseUp}
+        onTouchEnd={onTouchEnd}
       />
     </label>
   );
@@ -115,7 +121,7 @@ export function TuningModal() {
         return;
       }
       applyExtrasChanges(getAppContext(), extras);
-      close();
+      // close();
       return;
     }
     if (!form) {
@@ -127,11 +133,11 @@ export function TuningModal() {
   const handleReset = () => {
     if (tab === "extras") {
       resetExtrasDefaults(getAppContext());
-      close();
+      // close();
       return;
     }
     resetTuningDefaults(getAppContext());
-    close();
+    // close();
   };
 
   const setFormField = <K extends keyof TuningFormValues>(
@@ -246,11 +252,13 @@ export function TuningModal() {
               id="threshold"
               label="Branch Similarity Threshold:"
               valueText={`${form?.threshold ?? 2}`}
-              min={2}
-              max={80}
+              min={1}
+              max={100}
               step={1}
               value={form?.threshold ?? 2}
               onChange={(value) => setFormField("threshold", value)}
+              onMouseUp={handleApply}
+              onTouchEnd={handleApply}
               hint={
                 <div className="hint">
                   Computed default threshold:{" "}
@@ -269,9 +277,11 @@ export function TuningModal() {
               valueText={`${form?.minProbPct ?? 18}%`}
               min={0}
               max={100}
-              step={2}
+              step={1}
               value={form?.minProbPct ?? 18}
               onChange={(value) => setFormField("minProbPct", value)}
+              onMouseUp={handleApply}
+              onTouchEnd={handleApply}
             />
             <RangeRow
               id="max-prob"
@@ -279,9 +289,11 @@ export function TuningModal() {
               valueText={`${form?.maxProbPct ?? 50}%`}
               min={0}
               max={100}
-              step={2}
+              step={1}
               value={form?.maxProbPct ?? 50}
               onChange={(value) => setFormField("maxProbPct", value)}
+              onMouseUp={handleApply}
+              onTouchEnd={handleApply}
             />
             <RangeRow
               id="ramp"
@@ -289,9 +301,11 @@ export function TuningModal() {
               valueText={`${form?.rampPct ?? 10}%`}
               min={0}
               max={100}
-              step={2}
+              step={1}
               value={form?.rampPct ?? 10}
               onChange={(value) => setFormField("rampPct", value)}
+              onMouseUp={handleApply}
+              onTouchEnd={handleApply}
             />
             <div className="checkbox-row">
               <label>

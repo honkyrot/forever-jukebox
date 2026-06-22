@@ -302,7 +302,7 @@ export function applyTuningChanges(
   }
   syncTuningParamsState(context);
   writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
-  closeTuning();
+  // closeTuning();
   return {
     ...form,
     threshold: nextThreshold,

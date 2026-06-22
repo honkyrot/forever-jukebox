@@ -685,6 +685,7 @@ button.is-loading::after {
   display: none;
   align-items: center;
   justify-content: center;
+  margin-top: 16px;
   /* background: var(--scrim); */
   z-index: 20;
 }
@@ -694,7 +695,8 @@ button.is-loading::after {
 }
 
 .modal-panel {
-  width: min(520px, 90vw);
+  /* width: min(520px, 90vw); */
+  width: 100%;
   background: var(--surface-panel);
   border: 1px solid var(--border-panel);
   border-radius: 8px;
