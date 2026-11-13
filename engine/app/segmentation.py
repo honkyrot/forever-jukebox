@@ -24,7 +24,7 @@ def segment_from_novelty(frame_times: np.ndarray,
                           config: SegmentationConfig,
                           duration: float) -> List[float]:
     smooth = uniform_filter1d(novelty, size=max(1, config.novelty_smoothing))
-    peaks, props = find_peaks(
+    peaks, _ = find_peaks(
         smooth,
         height=config.peak_threshold,
         prominence=config.peak_prominence,
@@ -39,7 +39,7 @@ def segment_from_novelty(frame_times: np.ndarray,
     # Snap boundaries to nearest beat to keep segments beat-aware.
     snapped = [0.0]
     for t in boundaries[1:-1]:
-        nearest = min(beats, key=lambda b: abs(b - t)) if beats else t
+        nearest = min(beats, key=lambda b, target=t: abs(b - target)) if beats else t
         if abs(nearest - t) <= config.beat_snap_tolerance:
             snapped.append(float(nearest))
         else:

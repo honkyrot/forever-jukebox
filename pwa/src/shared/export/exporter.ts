@@ -1,0 +1,465 @@
+import type { AnalysisOutput } from "@/shared/analysis-schema";
+import {
+  concatMp3ChunksWithFfmpeg,
+  encodeAudioBufferWithFfmpeg,
+  type EncodedAudioFormat,
+} from "@/core/infrastructure/audio/ffmpegAudio";
+import {
+  getAudioModeSettings,
+  type JukeboxAudioMode,
+} from "@forever-jukebox/shared/audio/audioModes";
+import type { JukeboxConfig, RandomMode } from "@forever-jukebox/shared";
+import type { CanonizerRenderPlan } from "@forever-jukebox/shared/autocanonizer/canonizerRenderPlan";
+import { renderCanonizerAudio } from "./canonizer";
+import {
+  planJukeboxPath,
+  type AnchorRef,
+  type EdgeRef,
+  type PlannedJukeboxSegment,
+} from "./plan";
+import {
+  loadCowbellExportSamples,
+  planCowbellExportEvents,
+  projectCowbellEventsIntoWindow,
+} from "./cowbellExport";
+import { clampGain, createOutputBuffer, renderJukeboxAudio } from "./render";
+
+export interface JukeboxExportProgress {
+  stage: "planning" | "rendering" | "encoding";
+  message:
+    | { kind: "initializing" }
+    | { kind: "preparingSwing" }
+    | { kind: "preparingInstrumental" }
+    | { kind: "preparingWubMachine" }
+    | { kind: "planning" }
+    | { kind: "renderingChunk"; chunk: number; total: number }
+    | { kind: "encodingChunk"; chunk: number; total: number }
+    | { kind: "combiningChunks" }
+    | { kind: "renderingAudio" }
+    | { kind: "encodingFormat"; format: string }
+    | { kind: "finalizing" };
+  percent: number;
+}
+
+export interface ExportJukeboxAudioOptions {
+  analysis: AnalysisOutput;
+  sourceBuffer: AudioBuffer;
+  config: JukeboxConfig;
+  deletedEdges?: EdgeRef[];
+  userAnchorEdge?: AnchorRef | null;
+  durationSeconds: number;
+  format: EncodedAudioFormat;
+  bitrateKbps?: number;
+  gain?: number;
+  audioMode: JukeboxAudioMode;
+  audioIntensityPct?: number;
+  sectionStartBeatIndices?: number[];
+  // Pre-rendered source for modes that play a rendered copy of the track.
+  renderedBuffer?: AudioBuffer;
+  randomMode?: RandomMode;
+  seed?: number;
+  onProgress?: (progress: JukeboxExportProgress) => void;
+}
+
+export interface ExportJukeboxAudioResult {
+  bytes: Uint8Array;
+  extension: EncodedAudioFormat;
+  mimeType: string;
+  renderedDurationSeconds: number;
+  beatsPlanned: number;
+  segments: PlannedJukeboxSegment[];
+}
+
+const MP3_RENDER_CHUNK_SECONDS = 120;
+const MAX_WAV_FLOAT32_RENDER_BYTES = 1_200_000_000;
+const WAV_TOO_LARGE_MESSAGE =
+  "WAV export is too large for browser memory at this duration. Use MP3 for long exports.";
+
+function report(
+  onProgress: ExportJukeboxAudioOptions["onProgress"],
+  stage: JukeboxExportProgress["stage"],
+  message: JukeboxExportProgress["message"],
+  percent: number,
+) {
+  onProgress?.({
+    stage,
+    message,
+    percent: Math.max(0, Math.min(100, percent)),
+  });
+}
+
+export async function exportJukeboxAudio(
+  options: ExportJukeboxAudioOptions,
+): Promise<ExportJukeboxAudioResult> {
+  report(options.onProgress, "planning", { kind: "planning" }, 2);
+  const sourceBuffer =
+    (options.audioMode === "swing" || options.audioMode === "instrumental") &&
+    options.renderedBuffer
+      ? options.renderedBuffer
+      : options.sourceBuffer;
+  const audioModeSettings = getAudioModeSettings(
+    options.audioMode,
+    options.audioIntensityPct,
+  );
+  const playbackRate = audioModeSettings.rate;
+  const requestedSourceTimelineSeconds = options.durationSeconds * playbackRate;
+
+  const plan = planJukeboxPath({
+    analysis: options.analysis,
+    bufferDurationSeconds: sourceBuffer.duration,
+    durationSeconds: requestedSourceTimelineSeconds,
+    config: options.config,
+    deletedEdges: options.deletedEdges,
+    randomMode: options.randomMode,
+    seed: options.seed,
+    userAnchorEdge: options.userAnchorEdge,
+  });
+  const renderedDurationSeconds = plan.renderDurationSeconds / playbackRate;
+  const cowbellEvents =
+    options.audioMode === "cowbell"
+      ? planCowbellExportEvents({
+          analysis: options.analysis,
+          segments: plan.segments,
+          samples: await loadCowbellExportSamples(sourceBuffer.sampleRate),
+          sectionStartBeatIndices: options.sectionStartBeatIndices,
+          volume: options.gain ?? 1,
+          seed: options.seed,
+        })
+      : [];
+
+  let encoded;
+
+  if (options.format === "mp3") {
+    const totalDuration = Math.max(0.001, renderedDurationSeconds);
+    const chunkCount = Math.max(1, Math.ceil(totalDuration / MP3_RENDER_CHUNK_SECONDS));
+    const encodedChunks: Uint8Array[] = [];
+
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const chunkStart = chunkIndex * MP3_RENDER_CHUNK_SECONDS;
+      const chunkDuration = Math.min(
+        MP3_RENDER_CHUNK_SECONDS,
+        totalDuration - chunkStart,
+      );
+      const chunkSegments = projectSegmentsIntoWindow(
+        plan.segments,
+        chunkStart * playbackRate,
+        chunkDuration * playbackRate,
+      );
+      const chunkCowbellEvents = projectCowbellEventsIntoWindow(
+        cowbellEvents,
+        chunkStart * playbackRate,
+        chunkDuration * playbackRate,
+      );
+
+      report(
+        options.onProgress,
+        "rendering",
+        {
+          kind: "renderingChunk",
+          chunk: chunkIndex + 1,
+          total: chunkCount,
+        },
+        8 + (chunkIndex / chunkCount) * 72,
+      );
+      const renderedChunk = await renderJukeboxAudio({
+        sourceBuffer,
+        segments: chunkSegments,
+        durationSeconds: chunkDuration,
+        gain: options.gain ?? 1,
+        audioMode: options.audioMode,
+        audioIntensityPct: options.audioIntensityPct,
+        cowbellEvents: chunkCowbellEvents,
+        onProgress: (progress) => {
+          const completed = chunkIndex + progress;
+          const percent = 8 + (completed / chunkCount) * 72;
+          report(
+            options.onProgress,
+            "rendering",
+            {
+              kind: "renderingChunk",
+              chunk: chunkIndex + 1,
+              total: chunkCount,
+            },
+            percent,
+          );
+        },
+      });
+
+      const encodeStart = 82 + (chunkIndex / chunkCount) * 16;
+      const encodeSpan = 16 / chunkCount;
+      report(
+        options.onProgress,
+        "encoding",
+        {
+          kind: "encodingChunk",
+          chunk: chunkIndex + 1,
+          total: chunkCount,
+        },
+        encodeStart,
+      );
+      const chunkEncoded = await encodeAudioBufferWithFfmpeg(renderedChunk, {
+        format: "mp3",
+        bitrateKbps: options.bitrateKbps,
+        onProgress: (progress) => {
+          report(
+            options.onProgress,
+            "encoding",
+            {
+              kind: "encodingChunk",
+              chunk: chunkIndex + 1,
+              total: chunkCount,
+            },
+            encodeStart + progress * encodeSpan,
+          );
+        },
+      });
+      encodedChunks.push(chunkEncoded.bytes);
+    }
+
+    report(options.onProgress, "encoding", { kind: "combiningChunks" }, 98);
+    encoded = await concatMp3ChunksWithFfmpeg(encodedChunks);
+  } else {
+    const estimatedBytes =
+      renderedDurationSeconds *
+      sourceBuffer.sampleRate *
+      sourceBuffer.numberOfChannels *
+      4;
+    if (estimatedBytes > MAX_WAV_FLOAT32_RENDER_BYTES) {
+      throw new Error(WAV_TOO_LARGE_MESSAGE);
+    }
+
+    report(options.onProgress, "rendering", { kind: "renderingAudio" }, 8);
+
+    const rendered = await renderJukeboxAudio({
+      sourceBuffer,
+      segments: plan.segments,
+      durationSeconds: renderedDurationSeconds,
+      gain: options.gain ?? 1,
+      audioMode: options.audioMode,
+      audioIntensityPct: options.audioIntensityPct,
+      cowbellEvents,
+      onProgress: (progress) => {
+        const percent = 8 + progress * 72;
+        report(
+          options.onProgress,
+          "rendering",
+          { kind: "renderingAudio" },
+          percent,
+        );
+      },
+    });
+
+    report(
+      options.onProgress,
+      "encoding",
+      { kind: "encodingFormat", format: options.format.toUpperCase() },
+      82,
+    );
+
+    encoded = await encodeAudioBufferWithFfmpeg(rendered, {
+      format: options.format,
+      bitrateKbps: options.bitrateKbps,
+      onProgress: (progress) => {
+        const percent = 82 + progress * 18;
+        report(
+          options.onProgress,
+          "encoding",
+          { kind: "encodingFormat", format: options.format.toUpperCase() },
+          percent,
+        );
+      },
+    });
+  }
+
+  report(options.onProgress, "encoding", { kind: "finalizing" }, 100);
+
+  return {
+    ...encoded,
+    renderedDurationSeconds,
+    beatsPlanned: plan.segments.length,
+    segments: plan.segments,
+  };
+}
+
+export interface ExportRenderedAudioOptions {
+  buffer: AudioBuffer;
+  format: EncodedAudioFormat;
+  bitrateKbps?: number;
+  gain?: number;
+  onProgress?: (progress: JukeboxExportProgress) => void;
+}
+
+export interface ExportRenderedAudioResult {
+  bytes: Uint8Array;
+  extension: EncodedAudioFormat;
+  mimeType: string;
+  renderedDurationSeconds: number;
+}
+
+// A gain-scaled copy of `[start, start + frames)` of the buffer.
+function sliceBuffer(
+  buffer: AudioBuffer,
+  start: number,
+  frames: number,
+  gain: number,
+): AudioBuffer {
+  const out = createOutputBuffer(
+    buffer.numberOfChannels,
+    frames,
+    buffer.sampleRate,
+  );
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const src = buffer.getChannelData(channel).subarray(start, start + frames);
+    const dst = out.getChannelData(channel);
+    if (gain === 1) {
+      dst.set(src);
+      continue;
+    }
+    for (let frame = 0; frame < src.length; frame += 1) {
+      dst[frame] = (src[frame] as number) * gain;
+    }
+  }
+  return out;
+}
+
+// Encodes an already rendered track as a whole, in chunks for MP3.
+export async function exportRenderedAudio(
+  options: ExportRenderedAudioOptions,
+): Promise<ExportRenderedAudioResult> {
+  const { buffer } = options;
+  if (buffer.length === 0) {
+    throw new Error("Cannot encode empty audio buffer.");
+  }
+  const gain = clampGain(options.gain ?? 1);
+  const renderedDurationSeconds = buffer.duration;
+  let encoded;
+
+  if (options.format === "mp3") {
+    const chunkFrames = MP3_RENDER_CHUNK_SECONDS * buffer.sampleRate;
+    const chunkCount = Math.max(1, Math.ceil(buffer.length / chunkFrames));
+    const encodedChunks: Uint8Array[] = [];
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const start = chunkIndex * chunkFrames;
+      const frames = Math.min(chunkFrames, buffer.length - start);
+      const message = {
+        kind: "encodingChunk" as const,
+        chunk: chunkIndex + 1,
+        total: chunkCount,
+      };
+      const chunkStart = 8 + (chunkIndex / chunkCount) * 90;
+      const chunkSpan = 90 / chunkCount;
+      report(options.onProgress, "encoding", message, chunkStart);
+      const chunkEncoded = await encodeAudioBufferWithFfmpeg(
+        sliceBuffer(buffer, start, frames, gain),
+        {
+          format: "mp3",
+          bitrateKbps: options.bitrateKbps,
+          onProgress: (progress) => {
+            report(
+              options.onProgress,
+              "encoding",
+              message,
+              chunkStart + progress * chunkSpan,
+            );
+          },
+        },
+      );
+      encodedChunks.push(chunkEncoded.bytes);
+    }
+    report(options.onProgress, "encoding", { kind: "combiningChunks" }, 98);
+    encoded = await concatMp3ChunksWithFfmpeg(encodedChunks);
+  } else {
+    const estimatedBytes =
+      buffer.length * buffer.numberOfChannels * 4 * (gain === 1 ? 1 : 2);
+    if (estimatedBytes > MAX_WAV_FLOAT32_RENDER_BYTES) {
+      throw new Error(WAV_TOO_LARGE_MESSAGE);
+    }
+    const message = {
+      kind: "encodingFormat" as const,
+      format: options.format.toUpperCase(),
+    };
+    report(options.onProgress, "encoding", message, 8);
+    encoded = await encodeAudioBufferWithFfmpeg(
+      gain === 1 ? buffer : sliceBuffer(buffer, 0, buffer.length, gain),
+      {
+        format: options.format,
+        bitrateKbps: options.bitrateKbps,
+        onProgress: (progress) => {
+          report(options.onProgress, "encoding", message, 8 + progress * 90);
+        },
+      },
+    );
+  }
+
+  report(options.onProgress, "encoding", { kind: "finalizing" }, 100);
+  return { ...encoded, renderedDurationSeconds };
+}
+
+export interface ExportCanonizerAudioOptions {
+  sourceBuffer: AudioBuffer;
+  plan: CanonizerRenderPlan;
+  format: EncodedAudioFormat;
+  bitrateKbps?: number;
+  gain?: number;
+  onProgress?: (progress: JukeboxExportProgress) => void;
+}
+
+// Mixes the planned canon at the given gain and encodes it whole.
+export async function exportCanonizerAudio(
+  options: ExportCanonizerAudioOptions,
+): Promise<ExportRenderedAudioResult> {
+  const { sourceBuffer, plan } = options;
+  if (
+    options.format !== "mp3" &&
+    plan.durationSeconds * sourceBuffer.sampleRate * 2 * 4 >
+      MAX_WAV_FLOAT32_RENDER_BYTES
+  ) {
+    throw new Error(WAV_TOO_LARGE_MESSAGE);
+  }
+  const message = { kind: "renderingAudio" as const };
+  report(options.onProgress, "rendering", message, 2);
+  const buffer = await renderCanonizerAudio(sourceBuffer, plan, {
+    gain: options.gain,
+    onProgress: (progress) => {
+      report(options.onProgress, "rendering", message, 2 + progress * 6);
+    },
+  });
+  return exportRenderedAudio({
+    buffer,
+    format: options.format,
+    bitrateKbps: options.bitrateKbps,
+    onProgress: options.onProgress,
+  });
+}
+
+function projectSegmentsIntoWindow(
+  segments: PlannedJukeboxSegment[],
+  windowStart: number,
+  windowDuration: number,
+): PlannedJukeboxSegment[] {
+  const windowEnd = windowStart + windowDuration;
+  const projected: PlannedJukeboxSegment[] = [];
+
+  for (const segment of segments) {
+    const segmentStart = segment.outputStart;
+    const segmentEnd = segment.outputStart + segment.duration;
+    if (segmentEnd <= windowStart || segmentStart >= windowEnd) {
+      continue;
+    }
+    const clippedStart = Math.max(segmentStart, windowStart);
+    const clippedEnd = Math.min(segmentEnd, windowEnd);
+    const clippedDuration = clippedEnd - clippedStart;
+    if (clippedDuration <= 0) {
+      continue;
+    }
+    const sourceOffset = clippedStart - segmentStart;
+    projected.push({
+      ...segment,
+      outputStart: clippedStart - windowStart,
+      sourceStart: segment.sourceStart + sourceOffset,
+      duration: clippedDuration,
+    });
+  }
+
+  return projected;
+}

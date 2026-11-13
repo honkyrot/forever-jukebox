@@ -1,56 +1,42 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppContext } from "./context";
 import {
+  blurMouseActivatedControl,
   isEditableTarget,
   setAnalysisStatus,
-  setLoadingProgress,
+  setLoadingStep,
   showToast,
 } from "./ui";
+import { useAppStore } from "./store";
 import { setWindowUrl } from "./__tests__/test-utils";
 
-function createClassList() {
-  return {
-    add: vi.fn(),
-    remove: vi.fn(),
-  };
-}
 
 function createContext(): AppContext {
   return {
-    elements: {
-      analysisStatus: { textContent: "" },
-      analysisSpinner: { classList: createClassList() },
-      analysisProgress: { textContent: "" },
-      toast: {
-        classList: createClassList(),
-        innerHTML: "",
-        textContent: "",
-      },
-      canonizerFinish: { checked: false, addEventListener: vi.fn() },
-    } as unknown as AppContext["elements"],
     engine: {} as unknown as AppContext["engine"],
     player: {} as unknown as AppContext["player"],
     autocanonizer: {} as unknown as AppContext["autocanonizer"],
+    wubmachine: {} as unknown as AppContext["wubmachine"],
     jukebox: { refresh: vi.fn() } as unknown as AppContext["jukebox"],
     cowbellOverlay: {} as unknown as AppContext["cowbellOverlay"],
     defaultConfig: {} as unknown as AppContext["defaultConfig"],
-    state: {
-      toastTimer: null,
-      playMode: "jukebox",
-    } as unknown as AppContext["state"],
   };
 }
 
 class MockElement {
-  constructor(
-    public tagName: string,
-    public isContentEditable = false,
-  ) {}
-  addEventListener() {}
+  tagName: string;
+  isContentEditable: boolean;
+
+  constructor(tagName: string, isContentEditable = false) {
+    this.tagName = tagName;
+    this.isContentEditable = isContentEditable;
+  }
+  blur = vi.fn();
+  addEventListener = vi.fn();
   dispatchEvent() {
     return true;
   }
-  removeEventListener() {}
+  removeEventListener = vi.fn();
 }
 
 describe("ui helpers", () => {
@@ -59,26 +45,13 @@ describe("ui helpers", () => {
     (globalThis as any).HTMLElement = MockElement;
   });
 
-  it("sets analysis status and spinner", () => {
+  it("switches between a loading step and a status message", () => {
     const context = createContext();
-    setAnalysisStatus(context, "Working", true);
-    expect(context.elements.analysisStatus.textContent).toBe("Working");
-    expect(
-      context.elements.analysisSpinner.classList.remove,
-    ).toHaveBeenCalledWith("hidden");
-    setAnalysisStatus(context, "Done", false);
-    expect(
-      context.elements.analysisSpinner.classList.add,
-    ).toHaveBeenCalledWith("hidden");
-    expect(context.elements.analysisProgress.textContent).toBe("");
-  });
-
-  it("sets loading progress message and percentage", () => {
-    const context = createContext();
-    setLoadingProgress(context, 55.4, "Loading");
-    expect(context.elements.analysisProgress.textContent).toBe("55%");
-    setLoadingProgress(context, null, null);
-    expect(context.elements.analysisProgress.textContent).toBe("");
+    setLoadingStep(context, { task: "serverAnalysis", activeId: "beats", progress: 0.5 });
+    expect(useAppStore.getState().loadingStep?.activeId).toBe("beats");
+    setAnalysisStatus(context, () => "Done");
+    expect(useAppStore.getState().analysisStatusText()).toBe("Done");
+    expect(useAppStore.getState().loadingStep).toBeNull();
   });
 
   it("detects editable targets", () => {
@@ -88,25 +61,127 @@ describe("ui helpers", () => {
     expect(isEditableTarget(new MockElement("SPAN", true))).toBe(true);
   });
 
-  it("shows and hides toast", () => {
-    vi.useFakeTimers();
-    const context = createContext();
-    (globalThis.window as any).setTimeout = setTimeout;
-    (globalThis.window as any).clearTimeout = clearTimeout;
-    showToast(context, "Hi", { icon: "check" });
-    expect(context.elements.toast.innerHTML).toContain("check");
-    expect(context.elements.toast.classList.remove).toHaveBeenCalledWith("error");
-    expect(context.elements.toast.classList.remove).toHaveBeenCalledWith(
-      "hidden",
-    );
-    vi.runAllTimers();
-    expect(context.elements.toast.classList.add).toHaveBeenCalledWith("hidden");
-    vi.useRealTimers();
+  it("blurs mouse-activated controls", () => {
+    const target = new MockElement("BUTTON");
+    target.blur = vi.fn();
+    blurMouseActivatedControl({
+      currentTarget: target,
+      detail: 1,
+    } as unknown as Event);
+
+    expect(target.blur).toHaveBeenCalledOnce();
   });
 
-  it("shows error toast style", () => {
-    const context = createContext();
-    showToast(context, "Nope", { icon: "error", tone: "error" });
-    expect(context.elements.toast.classList.add).toHaveBeenCalledWith("error");
+  it("keeps focus for keyboard-activated controls", () => {
+    const target = new MockElement("BUTTON");
+    target.blur = vi.fn();
+    blurMouseActivatedControl({
+      currentTarget: target,
+      detail: 0,
+    } as unknown as Event);
+
+    expect(target.blur).not.toHaveBeenCalled();
+  });
+
+  describe("toasts", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      (globalThis.window as any).setTimeout = setTimeout;
+      (globalThis.window as any).clearTimeout = clearTimeout;
+      useAppStore.setState({ toasts: [] });
+    });
+
+    afterEach(() => {
+      vi.runAllTimers();
+      vi.useRealTimers();
+    });
+
+    it("shows and hides toast", () => {
+      showToast("Hi", { icon: "cloud_done" });
+      expect(useAppStore.getState().toasts).toEqual([
+        expect.objectContaining({
+          message: "Hi",
+          icon: "cloud_done",
+          tone: "default",
+          exiting: false,
+        }),
+      ]);
+      vi.advanceTimersByTime(2000);
+      expect(useAppStore.getState().toasts[0]?.exiting).toBe(true);
+      vi.advanceTimersByTime(200);
+      expect(useAppStore.getState().toasts).toEqual([]);
+    });
+
+    it("shows error toast style", () => {
+      showToast("Nope", { icon: "error", tone: "error" });
+      expect(useAppStore.getState().toasts).toEqual([
+        expect.objectContaining({
+          message: "Nope",
+          icon: "error",
+          tone: "error",
+          exiting: false,
+        }),
+      ]);
+    });
+
+    it("stacks up to three toasts oldest-first", () => {
+      showToast("One");
+      showToast("Two");
+      showToast("Three");
+      expect(
+        useAppStore.getState().toasts.map((t) => t.message),
+      ).toEqual(["One", "Two", "Three"]);
+    });
+
+    it("drops the oldest toast when a fourth arrives", () => {
+      showToast("One");
+      showToast("Two");
+      showToast("Three");
+      showToast("Four");
+      const toasts = useAppStore.getState().toasts;
+      expect(toasts.map((t) => t.message)).toEqual([
+        "One",
+        "Two",
+        "Three",
+        "Four",
+      ]);
+      expect(toasts[0]?.exiting).toBe(true);
+      vi.advanceTimersByTime(200);
+      expect(
+        useAppStore.getState().toasts.map((t) => t.message),
+      ).toEqual(["Two", "Three", "Four"]);
+    });
+
+    it("refreshes the timer for an identical consecutive message", () => {
+      showToast("Same");
+      vi.advanceTimersByTime(1000);
+      showToast("Same");
+      expect(useAppStore.getState().toasts).toHaveLength(1);
+      vi.advanceTimersByTime(1900);
+      expect(useAppStore.getState().toasts[0]?.exiting).toBe(false);
+      vi.advanceTimersByTime(300);
+      expect(useAppStore.getState().toasts).toEqual([]);
+    });
+
+    it("updates a keyed toast in place instead of stacking", () => {
+      showToast("Play velocity: +1", { key: "play-velocity" });
+      showToast("Other");
+      vi.advanceTimersByTime(1000);
+      showToast("Play velocity: +2", { key: "play-velocity" });
+      const toasts = useAppStore.getState().toasts;
+      expect(toasts.map((t) => t.message)).toEqual([
+        "Play velocity: +2",
+        "Other",
+      ]);
+      expect(toasts[0]?.exiting).toBe(false);
+      // The update refreshed the keyed toast's timer, so it outlives "Other".
+      vi.advanceTimersByTime(1900);
+      expect(
+        useAppStore.getState().toasts.map((t) => t.message),
+      ).toEqual(["Play velocity: +2"]);
+      expect(useAppStore.getState().toasts[0]?.exiting).toBe(false);
+      vi.advanceTimersByTime(300);
+      expect(useAppStore.getState().toasts).toEqual([]);
+    });
   });
 });

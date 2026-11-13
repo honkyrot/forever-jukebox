@@ -33,16 +33,43 @@ describe("errorDisplay", () => {
       { errorCode: "download_unavailable", sourceProvider: "soundcloud" },
     )).toBe("SoundCloud fetch failed.");
     expect(formatErrorForDisplay(
+      "ERROR: This video is not available on YouTube.",
+      { errorCode: "youtube_unavailable", sourceProvider: "youtube" },
+    )).toBe("YouTube fetch failed.");
+  });
+
+  it("explains a YouTube bot-check block", () => {
+    const blocked = "YouTube is temporarily blocking this server. Please try again later.";
+    expect(formatErrorForDisplay(
       Object.assign(new Error("Error: ERROR: Unable to reach YouTube"), {
         code: "youtube_unreachable",
       }),
       { sourceProvider: "youtube" },
-    )).toBe("YouTube fetch failed.");
+    )).toBe(blocked);
+    expect(formatErrorForDisplay(
+      "ERROR: Unable to reach YouTube",
+      { errorCode: "youtube_unreachable", sourceProvider: "youtube" },
+    )).toBe(blocked);
+  });
+
+  it("keeps the generic copy when the blocked code comes from another source", () => {
+    expect(formatErrorForDisplay(
+      "ERROR: Unable to reach YouTube",
+      { errorCode: "youtube_unreachable", sourceProvider: "soundcloud" },
+    )).toBe("SoundCloud fetch failed.");
   });
 
   it("falls back for unknown errors", () => {
     expect(formatErrorForDisplay(null, { fallback: "Load failed." }))
       .toBe("Load failed.");
+  });
+
+  it("reads plain object messages and never shows [object Object]", () => {
+    expect(cleanErrorMessage({ message: "Error: Track not found." }))
+      .toBe("Track not found.");
+    expect(cleanErrorMessage({ detail: 42 }, "Load failed.")).toBe("Load failed.");
+    expect(cleanErrorMessage(["bad input"])).toBe("bad input");
+    expect(cleanErrorMessage(new Event("error"), "Load failed.")).toBe("Load failed.");
   });
 
   it("infers supported providers from URLs", () => {

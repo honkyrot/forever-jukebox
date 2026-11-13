@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
-from api.favorites_db import init_favorites_db, save_favorites
+from api.favorites_db import (
+    init_favorites_db,
+    load_favorites,
+    save_favorites,
+    update_favorites,
+)
 from api.models import FavoriteTrack, FavoritesSyncRequest
 from api.routes import favorites as favorites_routes
 
@@ -111,5 +118,122 @@ class FavoritesSyncTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail, "Too many favorites (max 25).")
 
 
+class FavoriteTrackModelTests(unittest.TestCase):
+    def test_play_mode_and_tuning_round_trip(self) -> None:
+        # A favorite saved in autocanonizer mode (with anchor-branch tuning)
+        # must survive the store → reload cycle intact.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "favorites.db"
+            init_favorites_db(db_path)
+            favorite = FavoriteTrack(
+                uniqueSongId="youtube:1",
+                title="Track",
+                artist="Artist",
+                duration=180,
+                sourceType="youtube",
+                tuningParams="jb=1&thresh=30&ab=7",
+                playMode="autocanonizer",
+            )
+            with (
+                patch.dict(os.environ, {"ALLOW_FAVORITES_SYNC": "true"}, clear=True),
+                patch.object(favorites_routes, "FAVORITES_DB_PATH", db_path),
+                patch.object(
+                    favorites_routes, "create_unique_code", return_value="rt-code"
+                ),
+            ):
+                favorites_routes.create_favorites_sync(
+                    FavoritesSyncRequest(favorites=[favorite])
+                )
+                stored = load_favorites(db_path, "rt-code")
+
+        assert stored is not None
+        self.assertEqual(stored[0]["playMode"], "autocanonizer")
+        # the whole tuning string (including the `ab` anchor param) is opaque
+        # and round-trips as one modeled field
+        self.assertEqual(stored[0]["tuningParams"], "jb=1&thresh=30&ab=7")
+
+    def test_legacy_favorite_without_play_mode_defaults_to_none(self) -> None:
+        favorite = FavoriteTrack(
+            uniqueSongId="youtube:1", title="Track", artist="Artist"
+        )
+        self.assertIsNone(favorite.model_dump()["playMode"])
+
+    def test_unknown_fields_are_dropped(self) -> None:
+        # extra="ignore": the server stores only the fields it models, so a
+        # future/rogue client field never lands in the sync blob.
+        parsed = FavoriteTrack.model_validate(
+            {
+                "uniqueSongId": "youtube:1",
+                "title": "Track",
+                "artist": "Artist",
+                "playMode": "jukebox",
+                "somethingNew": "should-be-dropped",
+            }
+        )
+        dumped = parsed.model_dump()
+        self.assertNotIn("somethingNew", dumped)
+        self.assertEqual(dumped["playMode"], "jukebox")
+
+    def test_invalid_play_mode_is_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            FavoriteTrack.model_validate(
+                {
+                    "uniqueSongId": "youtube:1",
+                    "title": "Track",
+                    "artist": "Artist",
+                    "playMode": "bogus-mode",
+                }
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class FavoritesTimestampTests(unittest.TestCase):
+    def _row(self, db_path: Path, code: str) -> tuple[str, str]:
+        with sqlite3.connect(db_path) as conn:
+            return conn.execute(
+                "SELECT created_at, updated_at FROM favorites_sync WHERE code = ?",
+                (code,),
+            ).fetchone()
+
+    def test_save_sets_both_timestamps_and_update_bumps_only_updated_at(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "favorites.db"
+            init_favorites_db(db_path)
+            save_favorites(db_path, "code-a", [{"uniqueSongId": "a"}])
+            created, updated = self._row(db_path, "code-a")
+            self.assertEqual(created, updated)
+
+            self.assertTrue(update_favorites(db_path, "code-a", [{"uniqueSongId": "b"}]))
+            created_after, updated_after = self._row(db_path, "code-a")
+            self.assertEqual(created_after, created)
+            self.assertGreater(updated_after, updated)
+
+    def test_init_adds_updated_at_to_a_preexisting_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "favorites.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE favorites_sync (
+                        code TEXT PRIMARY KEY,
+                        payload TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO favorites_sync (code, payload, created_at) VALUES (?, ?, ?)",
+                    ("legacy", "[]", "2026-02-13T16:21:13+00:00"),
+                )
+                conn.commit()
+
+            init_favorites_db(db_path)
+
+            created, updated = self._row(db_path, "legacy")
+            self.assertEqual(updated, created)
+            # Idempotent: a second init must not disturb the backfilled value.
+            init_favorites_db(db_path)
+            self.assertEqual(self._row(db_path, "legacy")[1], created)

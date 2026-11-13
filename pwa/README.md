@@ -1,7 +1,3 @@
-# FORKER'S NOTE:
-I don't add additions here as I do not touch the PWA code.
-So don't expect parity between the web and PWA versions.
-
 # Forever Jukebox PWA
 
 Standalone, offline PWA for local audio analysis and playback.
@@ -13,8 +9,8 @@ Standalone, offline PWA for local audio analysis and playback.
 ## Quick start
 
 ```bash
+npm install   # once, at the repo root (npm workspaces)
 cd pwa
-npm install
 npm run dev
 ```
 
@@ -48,7 +44,7 @@ npm run test     # unit tests
 - Audio decode/resample for analysis: `ffmpeg.wasm` (mono PCM at 22.05kHz + 44.1kHz)
 - Playback buffer decode: Web Audio API (`decodeAudioData`) from ffmpeg-generated WAV
 - madmom worker consumes backend-parity arrays (`beat_times`, `beat_numbers`, `beat_confidences`)
-- madmom WASM package/models are from `madmom-beats-port v4.0.0`
+- madmom WASM package/models are from `madmom-beats-port v5.0.0`
 
 madmom WASM: [madmom-beats-port](https://github.com/creightonlinza/madmom-beats-port)
 
@@ -56,12 +52,14 @@ madmom WASM: [madmom-beats-port](https://github.com/creightonlinza/madmom-beats-
 
 - Analysis cache key: fingerprint (`name + size + lastModified + first-bytes hash`)
 - Backends: OPFS when available, otherwise IndexedDB
-- Cache controls and usage are available in the FAQ screen
+- Cache controls and usage are available in Settings
 
 ## Jukebox audio export
 
 - Export playable jukebox output directly from the Listen screen.
 - Export uses current tuning + deleted branches and a fresh seeded random run.
+- Autocanonizer mode exports one full pass of the canon; "Finish out the track" adds the
+  trailing voice's ending.
 - Formats:
   - MP3 (compressed)
   - WAV (lossless)
@@ -71,7 +69,7 @@ madmom WASM: [madmom-beats-port](https://github.com/creightonlinza/madmom-beats-
 
 ## Extras audio modes
 
-- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `eight_bit`, `lofi`, `underwater`, `cathedral`, `cowbell`, `swing`.
+- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `eight_bit`, `lofi`, `underwater`, `cathedral`, `cowbell`, `swing`, `instrumental`.
 - UI labels/tooltips:
   - Nightcore (Fast & Bright)
   - Daycore (Slow & Deep)
@@ -83,6 +81,15 @@ madmom WASM: [madmom-beats-port](https://github.com/creightonlinza/madmom-beats-
   - Cathedral (Cathedral Reverb)
   - More Cowbell
   - Swing (pre-renders a pitch-preserved swung buffer with Rubber Band WASM)
+  - Instrumental (pre-renders a vocals-removed buffer with the shared MDX-Net/ONNX
+    Runtime Web pipeline; desktop browsers with WebGPU only). The 27 MB runtime and the
+    67 MB model are fetched on first use, not at install, and cached from then on.
+- Swing and Instrumental renders are stored by analysis fingerprint (Cache Storage,
+  `fj-rendered-tracks`, WebM/Opus) so a track is only rendered once; browsers without a
+  WebCodecs Opus encoder store nothing. They follow the cached analysis: they count
+  toward its size and are removed with it, per track or all. Stored renders are capped
+  at 500 MB; loading a track drops the ones stored longest ago beyond that. A WAV export
+  renders afresh rather than using a stored copy.
 - URL param support: `am=<mode>` (example: `?am=nightcore`).
 - Branch stats toggle is stored in localStorage (`fj-branch-stats-enabled`).
 - Audio mode selection is URL-driven and not persisted in localStorage.

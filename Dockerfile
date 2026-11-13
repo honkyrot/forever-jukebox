@@ -1,18 +1,30 @@
 # syntax=docker/dockerfile:1.6
 
-FROM --platform=$BUILDPLATFORM node:20-slim AS web-build
-WORKDIR /app/web
-COPY web/package*.json ./
-RUN npm ci
-COPY web/ ./
-RUN npm run build
+FROM --platform=$BUILDPLATFORM node:20-slim AS frontend-build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY web/package.json web/
+COPY pwa/package.json pwa/
+COPY packages/shared/package.json packages/shared/
+# Lifecycle scripts are unnecessary here: esbuild's binary comes from its
+# @esbuild/* optional dependency and nothing else needs install scripts.
+RUN npm ci --ignore-scripts
+COPY packages/ packages/
+COPY web/ web/
+COPY pwa/ pwa/
+RUN npm run build --workspace=web && npm run build --workspace=pwa
 
-FROM --platform=$BUILDPLATFORM node:20-slim AS pwa-build
-WORKDIR /app/pwa
-COPY pwa/package*.json ./
-RUN npm ci
-COPY pwa/ ./
-RUN npm run build
+# PO token provider server for yt-dlp; version must match the pinned
+# bgutil-ytdlp-pot-provider plugin in api/requirements.txt.
+# amd64 + Debian bookworm so the canvas native dep matches the runtime stage.
+FROM --platform=linux/amd64 denoland/deno:debian AS bgutil-build
+ARG BGUTIL_POT_VERSION=2.0.0
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "${BGUTIL_POT_VERSION}" \
+      https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /bgutil
+WORKDIR /bgutil/server
+RUN deno install --allow-scripts=npm:canvas --frozen
 
 # Force amd64 so pip can use Essentia's manylinux x86_64 wheel (no source builds)
 FROM --platform=linux/amd64 python:3.11-slim-bookworm AS runtime
@@ -49,26 +61,31 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/python /app/engine/scripts/install_madmom_beats_lite.py --python /opt/venv/bin/python \
     && if /opt/venv/bin/pip show madmom >/dev/null 2>&1; then /opt/venv/bin/pip uninstall -y madmom && /opt/venv/bin/python /app/engine/scripts/install_madmom_beats_lite.py --python /opt/venv/bin/python; fi
 
-RUN curl -fsSL "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip" \
+RUN curl -fsSL --proto '=https' --proto-redir '=https' \
+      "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip" \
       -o /tmp/deno.zip \
     && unzip /tmp/deno.zip -d /usr/local/bin \
     && rm /tmp/deno.zip \
     && chmod +x /usr/local/bin/deno \
     && deno --version
 
+# Server plus the Deno cache it was installed with, so startup needs no
+# npm registry access (entrypoint sets DENO_DIR for the POT process)
+COPY --from=bgutil-build /bgutil/server /app/bgutil-pot/server
+COPY --from=bgutil-build /deno-dir /app/bgutil-pot/deno-dir
+
 # Now copy the actual source
 COPY api/ ./api/
 COPY engine/ ./engine/
-COPY --from=web-build /app/web/dist ./web/dist
-COPY --from=pwa-build /app/pwa/dist ./web/dist/offline
+COPY --from=frontend-build /app/web/dist ./web/dist
+COPY --from=frontend-build /app/pwa/dist ./web/dist/offline
 COPY docker/entrypoint.sh /app/entrypoint.sh
 
 RUN chmod +x /app/entrypoint.sh
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH="/app/api" \
-    ENGINE_REPO="/app/engine" \
-    NTFY_TOPIC_KEY=""
+    ENGINE_REPO="/app/engine"
 
 EXPOSE 8000
 ENTRYPOINT ["/app/entrypoint.sh"]

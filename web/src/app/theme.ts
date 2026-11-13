@@ -9,6 +9,7 @@ export function applyThemeVariables(theme: ThemeName) {
   Object.entries(themeVars).forEach(([key, value]) => {
     rootStyle.setProperty(key, value);
   });
+  rootStyle.colorScheme = theme;
 }
 
 export function resolveStoredTheme(): ThemeName {
@@ -20,14 +21,11 @@ export function resolveStoredTheme(): ThemeName {
 }
 
 export function applyTheme(context: AppContext, theme: ThemeName) {
-  const { elements, jukebox } = context;
+  const { jukebox } = context;
   applyThemeVariables(theme);
   document.body.classList.toggle("theme-light", theme === "light");
-  elements.themeLinks.forEach((link) => {
-    link.classList.toggle("active", link.dataset.theme === theme);
-  });
   localStorage.setItem(themeStorageKey, theme);
-  jukebox.refresh();
+  jukebox?.refresh();
 }
 
 export function applyStoredTheme(context: AppContext) {

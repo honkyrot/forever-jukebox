@@ -1,42 +1,45 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppContext } from "./context";
 import type { SearchDeps } from "./search";
-import { startYoutubeAnalysisFlow, tryLoadExistingTrackByName } from "./search";
+import {
+  showYoutubeMatches,
+  startYoutubeAnalysisFlow,
+  tryLoadExistingTrackByName,
+} from "./search";
+import { DEFAULT_SEARCH_RESULTS, useAppStore } from "./store";
 import { setWindowUrl } from "./__tests__/test-utils";
 
 vi.mock("./api", () => ({
   fetchJobByTrack: vi.fn(),
+  searchYoutube: vi.fn(),
   startYoutubeAnalysis: vi.fn(),
 }));
 
-vi.mock("./playback", () => ({
-  tryLoadCachedAudio: vi.fn(),
-}));
+vi.mock("./playback", () => {
+  let generation = 0;
+  return {
+    tryLoadCachedAudio: vi.fn(),
+    bumpLoadGeneration: vi.fn(() => {
+      generation += 1;
+      return generation;
+    }),
+    getLoadGeneration: vi.fn(() => generation),
+    isStaleLoad: vi.fn((g: number) => g !== generation),
+  };
+});
 
 let api: typeof import("./api");
 let playback: typeof import("./playback");
 
 function createContext(): AppContext {
   return {
-    elements: {
-      searchInput: { value: "" },
-      searchResults: { textContent: "" },
-      searchHint: { textContent: "" },
-      canonizerFinish: { checked: false, addEventListener: vi.fn() },
-    } as unknown as AppContext["elements"],
     engine: {} as unknown as AppContext["engine"],
     player: {} as unknown as AppContext["player"],
     autocanonizer: {} as unknown as AppContext["autocanonizer"],
+    wubmachine: {} as unknown as AppContext["wubmachine"],
     jukebox: { refresh: vi.fn() } as unknown as AppContext["jukebox"],
     cowbellOverlay: {} as unknown as AppContext["cowbellOverlay"],
     defaultConfig: {} as unknown as AppContext["defaultConfig"],
-    state: {
-      playMode: "jukebox",
-      lastTrackId: null,
-      lastJobId: null,
-      audioLoaded: false,
-      analysisLoaded: false,
-    } as unknown as AppContext["state"],
   };
 }
 
@@ -47,7 +50,7 @@ function createDeps(): SearchDeps {
     updateTrackUrl: vi.fn(),
     setAnalysisStatus: vi.fn(),
     showToast: vi.fn(),
-    setLoadingProgress: vi.fn(),
+    setLoadingStep: vi.fn(),
     pollAnalysis: vi.fn(),
     applyAnalysisResult: vi.fn(() => true),
     loadAudioFromJob: vi.fn(() => Promise.resolve(true)),
@@ -57,10 +60,34 @@ function createDeps(): SearchDeps {
   };
 }
 
+
+
+
+// Status setters receive LocalizedText thunks; evaluate them so assertions
+// can compare the resulting strings.
+function localizedCalls(mock: unknown): unknown[][] {
+  return (mock as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+    call.map((arg) =>
+      typeof arg === "function" ? (arg as () => unknown)() : arg,
+    ),
+  );
+}
+
+const initialStoreState = useAppStore.getState();
+
+beforeEach(() => {
+  useAppStore.setState(initialStoreState, true);
+});
+
 describe("search flows", () => {
   beforeEach(async () => {
     setWindowUrl("http://localhost/");
     vi.clearAllMocks();
+    useAppStore.setState({
+      searchQuery: "",
+      searchResults: DEFAULT_SEARCH_RESULTS,
+      searchHint: () => "Step 1: Find a Spotify track.",
+    });
     api = await import("./api");
     playback = await import("./playback");
     (playback.tryLoadCachedAudio as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -82,8 +109,31 @@ describe("search flows", () => {
       "Artist",
     );
     expect(result).toBe(true);
-    expect(deps.updateTrackUrl).toHaveBeenCalledWith("yt1");
+    expect(useAppStore.getState().lastTrackId).toBe("job1");
+    expect(deps.updateTrackUrl).toHaveBeenCalledWith("job1");
     expect(deps.applyAnalysisResult).toHaveBeenCalled();
+  });
+
+  it("does not carry current tuning into a newly selected existing track", async () => {
+    const context = createContext();
+    const deps = createDeps();
+    deps.onNormalTrackSelected = vi.fn();
+    useAppStore.setState({ tuningParams: "jb=1&thresh=30" });
+    (api.fetchJobByTrack as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "complete",
+      id: "job-with-analysis",
+      source_id: "yt-existing",
+      result: {},
+    });
+
+    await tryLoadExistingTrackByName(context, deps, "Song", "Artist");
+
+    expect(deps.onNormalTrackSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "job-with-analysis",
+        tuningParams: null,
+      }),
+    );
   });
 
   it("returns false for missing existing analysis so caller can continue to YouTube matching", async () => {
@@ -99,7 +149,9 @@ describe("search flows", () => {
     );
 
     expect(result).toBe(false);
-    expect(context.elements.searchResults.textContent).toBe(
+    const results = useAppStore.getState().searchResults;
+    expect(results.kind).toBe("message");
+    expect(results.kind === "message" && results.text()).toBe(
       "Checking existing analysis...",
     );
     expect(deps.applyAnalysisResult).not.toHaveBeenCalled();
@@ -126,7 +178,9 @@ describe("search flows", () => {
     );
 
     expect(result).toBe(true);
-    expect(deps.setLoadingProgress).toHaveBeenCalledWith(null, "Fetching audio");
+    expect(deps.setLoadingStep).toHaveBeenCalledWith(
+      expect.objectContaining({ activeId: "track" }),
+    );
     expect(deps.pollAnalysis).toHaveBeenCalledWith("job-processing");
     expect(deps.applyAnalysisResult).not.toHaveBeenCalled();
   });
@@ -149,25 +203,95 @@ describe("search flows", () => {
       "Artist",
     );
     expect(result).toBe(true);
-    expect(deps.setAnalysisStatus).toHaveBeenCalledWith(
+    expect(localizedCalls(deps.setAnalysisStatus)).toContainEqual([
       "YouTube fetch failed.",
-      false,
-    );
+    ]);
+    expect(useAppStore.getState().analysisRetryJobId).toBe("job-f");
     expect(deps.pollAnalysis).not.toHaveBeenCalled();
     expect(deps.applyAnalysisResult).not.toHaveBeenCalled();
   });
 
-  it("starts youtube analysis flow", async () => {
+  it("offers no retry link for a YouTube bot-check block", async () => {
     const context = createContext();
     const deps = createDeps();
+    (api.fetchJobByTrack as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "failed",
+      id: "job-b",
+      source_id: "yt-b",
+      error: "ERROR: Unable to reach YouTube",
+      error_code: "youtube_unreachable",
+      source_provider: "youtube",
+    });
+    await tryLoadExistingTrackByName(context, deps, "Song", "Artist");
+    expect(localizedCalls(deps.setAnalysisStatus)).toContainEqual([
+      "YouTube is temporarily blocking this server. Please try again later.",
+    ]);
+    expect(useAppStore.getState().analysisRetryJobId).toBeNull();
+  });
+
+  it("starts youtube analysis flow", async () => {
+    const context = createContext();
+    useAppStore.setState({ tuningParams: "jb=1" });
+    const deps = createDeps();
+    deps.onNormalTrackSelected = vi.fn();
     (api.startYoutubeAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "job2", status: "queued" });
     await startYoutubeAnalysisFlow(context, deps, "yt2", "Song", "Artist");
+    expect(deps.onNormalTrackSelected).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job2", tuningParams: null }),
+    );
     expect(api.startYoutubeAnalysis).toHaveBeenCalledWith({
       youtube_id: "yt2",
       title: "Song",
       artist: "Artist",
     });
-    expect(deps.updateTrackUrl).toHaveBeenCalledWith("yt2");
+    expect(useAppStore.getState().lastTrackId).toBe("job2");
+    expect(deps.updateTrackUrl).toHaveBeenCalledWith("job2");
     expect(deps.pollAnalysis).toHaveBeenCalledWith("job2");
+  });
+
+  it("polls the same job id when YouTube selection restarts an existing job", async () => {
+    const context = createContext();
+    const deps = createDeps();
+    const jobId = "a3f3c0dc73c6476c9db95c227f9206f2";
+    (api.startYoutubeAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: jobId,
+      status: "downloading",
+      source_id: "yt-retry",
+      source_provider: "youtube",
+    });
+
+    await startYoutubeAnalysisFlow(
+      context,
+      deps,
+      "yt-retry",
+      "Song",
+      "Artist",
+    );
+
+    expect(useAppStore.getState().lastJobId).toBe(jobId);
+    expect(deps.updateTrackUrl).toHaveBeenCalledWith(jobId);
+    expect(deps.pollAnalysis).toHaveBeenCalledWith(jobId);
+  });
+
+  it("publishes youtube matches to the search results store", async () => {
+    const context = createContext();
+    const deps = createDeps();
+    (api.searchYoutube as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "yt-match", title: "Match", duration: 123 },
+    ]);
+
+    await showYoutubeMatches(context, deps, "Song", "Artist", 123);
+
+    expect(deps.navigateToTab).toHaveBeenCalledWith("search", { replace: true });
+    expect(useAppStore.getState().searchResults).toEqual({
+      kind: "youtube",
+      items: [
+        {
+          item: { id: "yt-match", title: "Match", duration: 123 },
+          name: "Song",
+          artist: "Artist",
+        },
+      ],
+    });
   });
 });

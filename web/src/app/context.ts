@@ -1,76 +1,72 @@
-import type { JukeboxEngine } from "../engine";
+import type { JukeboxEngine } from "@forever-jukebox/shared";
 import type {
   BufferedAudioPlayer,
   JukeboxAudioMode,
-} from "../audio/BufferedAudioPlayer";
-import type { Edge } from "../engine/types";
-import type { getElements } from "./elements";
+} from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
+import type { Edge } from "@forever-jukebox/shared/types";
 import type { FavoriteTrack } from "./favorites";
+import type { PlaylistState } from "./playlist";
 import type { AppConfig } from "./api";
-import type { AutocanonizerController } from "../autocanonizer/AutocanonizerController";
-import type { JukeboxController } from "../jukebox/JukeboxController";
-import type { CowbellOverlayService } from "../audio/CowbellOverlayService";
+import type { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
+import type { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
+import type { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
 
 export type TabId = "top" | "search" | "play" | "faq";
 
-export type Elements = ReturnType<typeof getElements>;
+export type PlayMode = "jukebox" | "autocanonizer" | "wubmachine";
 
 export type AppState = {
   activeTabId: TabId;
   activeVizIndex: number;
-  playMode: "jukebox" | "autocanonizer";
-  topSongsTab: "top" | "trending" | "all-time" | "recent" | "favorites";
+  playMode: PlayMode;
+  topSongsTab: "top" | "trending" | "recent" | "reported" | "favorites";
   searchTab: "search" | "upload";
   favorites: FavoriteTrack[];
+  playlist: PlaylistState;
   favoritesSyncCode: string | null;
   playTimerMs: number;
   lastPlayStamp: number | null;
   lastBeatIndex: number | null;
+  autocanonizerMainSeconds: number;
+  autocanonizerOtherSeconds: number;
+  autocanonizerMainPan: number;
+  autocanonizerOtherPan: number;
+  wubMachineSeconds: number;
+  wubMachineDurationSec: number;
   vizData: ReturnType<JukeboxEngine["getVisualizationData"]>;
   isRunning: boolean;
   isPaused: boolean;
   audioLoaded: boolean;
   analysisLoaded: boolean;
   audioLoadInFlight: boolean;
-  autoComputedThreshold: number | null;
+  analysisPollInFlight: boolean;
   lastJobId: string | null;
   lastTrackId: string | null;
+  lastSourceId: string | null;
   lastSourceProvider: string | null;
   pendingAutoFavoriteId: string | null;
   lastPlayCountedJobId: string | null;
   shiftBranching: boolean;
+  freezeBeat: boolean;
   bringItHomeMode: boolean;
   branchStatsEnabled: boolean;
   jukeboxAudioMode: JukeboxAudioMode;
-  swingPreparing: boolean;
-  swingRenderToken: number;
+  audioIntensity: number;
+  audioModePreparing: boolean;
+  audioModeRenderToken: number;
   selectedEdge: Edge | null;
-  topSongsRefreshTimer: number | null;
-  topSongsLoaded: boolean;
-  trendingSongsLoaded: boolean;
-  allTimeSongsLoaded: boolean;
-  recentSongsLoaded: boolean;
   trackDurationSec: number | null;
   trackTitle: string | null;
   trackArtist: string | null;
-  toastTimer: number | null;
   deleteEligible: boolean;
   deleteEligibilityJobId: string | null;
   appConfig: AppConfig | null;
-  pollController: AbortController | null;
-  listenTimerId: number | null;
   sleepTimer: SleepTimerState;
-  sleepTimerTimeoutId: number | null;
-  wakeLock: WakeLockSentinel | null;
   tuningParams: string | null;
   deletedEdgeIds: number[];
   highlightAnchorBranch: boolean;
-  audioBalance: {
-    blue: number;
-    green: number;
-  };
-  autocanonizerMainTime?: number;
-  autocanonizerOtherTime?: number;
+  customAnchorEnabled: boolean;
 };
 
 export type SleepTimerState = {
@@ -80,12 +76,17 @@ export type SleepTimerState = {
 };
 
 export type AppContext = {
-  elements: Elements;
   engine: JukeboxEngine;
   player: BufferedAudioPlayer;
-  autocanonizer: AutocanonizerController;
-  jukebox: JukeboxController;
+  autocanonizer: AutocanonizerController | null;
+  wubmachine: WubMachineController | null;
+  jukebox: JukeboxController | null;
   cowbellOverlay: CowbellOverlayService;
   defaultConfig: ReturnType<JukeboxEngine["getConfig"]>;
-  state: AppState;
+};
+
+export type AttachedAppContext = AppContext & {
+  autocanonizer: AutocanonizerController;
+  wubmachine: WubMachineController;
+  jukebox: JukeboxController;
 };

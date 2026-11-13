@@ -7,23 +7,24 @@ from fastapi.responses import FileResponse
 
 from ..db import get_job
 from ..paths import DB_PATH, STORAGE_ROOT
-from ..utils import abs_storage_path
+from ..route_responses import NOT_FOUND
+from ..storage import get_store
 
 router = APIRouter()
 
 
-@router.get("/api/audio/{job_id}")
+@router.get("/api/audio/{job_id}", responses=NOT_FOUND)
 def get_audio(job_id: str):
     job = get_job(DB_PATH, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    input_path = abs_storage_path(STORAGE_ROOT, job.input_path)
-    if not input_path.exists():
+    response = get_store(STORAGE_ROOT).audio_response(job.id)
+    if response is None:
         raise HTTPException(status_code=404, detail="Audio missing")
-    return FileResponse(path=str(input_path))
+    return response
 
 
-@router.get("/api/logs/{job_id}")
+@router.get("/api/logs/{job_id}", responses=NOT_FOUND)
 def get_job_log(job_id: str):
     job = get_job(DB_PATH, job_id)
     if not job:

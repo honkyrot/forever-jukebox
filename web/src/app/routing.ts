@@ -1,4 +1,5 @@
 import type { AppContext } from "./context";
+import { useAppStore } from "./store";
 import type { PlaybackDeps } from "./playback";
 import { loadTrackById } from "./playback";
 import { hasTuningParamsInUrl } from "./tuning";
@@ -8,12 +9,6 @@ export async function handleRouteChange(
   deps: PlaybackDeps,
   pathname: string
 ) {
-  const legacyTrack = new URLSearchParams(window.location.search).get("track");
-  if (legacyTrack) {
-    deps.updateTrackUrl(legacyTrack, true);
-    await loadTrackById(context, deps, legacyTrack);
-    return;
-  }
   if (pathname.startsWith("/search")) {
     deps.navigateToTab("search", { replace: true });
     return;
@@ -34,20 +29,22 @@ export async function handleRouteChange(
       }
     }
     if (trackId) {
-      const { state } = context;
       const preserveUrlTuning = hasTuningParamsInUrl();
       if (
-        trackId === state.lastTrackId &&
-        (state.audioLoaded ||
-          state.analysisLoaded ||
-          state.audioLoadInFlight ||
-          state.isRunning)
+        trackId === useAppStore.getState().lastTrackId &&
+        (useAppStore.getState().audioLoaded ||
+          useAppStore.getState().analysisLoaded ||
+          useAppStore.getState().audioLoadInFlight ||
+          useAppStore.getState().isRunning)
       ) {
         deps.navigateToTab("play", { replace: true, trackId });
         return;
       }
       deps.navigateToTab("play", { replace: true, trackId });
-      await loadTrackById(context, deps, trackId, { preserveUrlTuning });
+      await loadTrackById(context, deps, trackId, {
+        preserveUrlTuning,
+        preservePlaylist: true,
+      });
       return;
     }
     deps.navigateToTab("top", { replace: true });

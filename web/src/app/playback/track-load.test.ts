@@ -1,0 +1,198 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppContext } from "../context";
+import { useAppStore } from "../store";
+
+vi.mock("../cache", () => ({
+  readCachedTrack: vi.fn(),
+  updateCachedTrack: vi.fn(),
+  moveCachedTrack: vi.fn(),
+  touchCachedTrack: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("./status-ui", () => ({
+  closeInfo: vi.fn(),
+  closeTuning: vi.fn(),
+  syncVolumeUI: vi.fn(),
+  updateListenTimeDisplay: vi.fn(),
+  updateTrackInfo: vi.fn(),
+  updateVizVisibility: vi.fn(),
+}));
+vi.mock("./instrumental", () => ({
+  maybePrepareInstrumentalMode: vi.fn(),
+}));
+vi.mock("./swing", () => ({ maybePrepareSwingMode: vi.fn() }));
+vi.mock("./transport", () => ({ stopPlayback: vi.fn() }));
+vi.mock("./wubmachine", () => ({
+  maybePrepareWubMachine: vi.fn(),
+  resetWubMachine: vi.fn(),
+  setWubMachineAnalysis: vi.fn(),
+}));
+vi.mock("../tuning", async (importActual) => ({
+  ...(await importActual<typeof import("../tuning")>()),
+  clearTuningParamsFromUrl: vi.fn(),
+  getTuningParamsStringFromUrl: vi.fn(() => null),
+  resetAudioModeToOff: vi.fn(),
+  syncTuningParamsState: vi.fn(),
+}));
+vi.mock("../playlist", async (importActual) => ({
+  ...(await importActual<typeof import("../playlist")>()),
+  savePlaylist: vi.fn(),
+}));
+vi.mock("../api", async (importActual) => ({
+  ...(await importActual<typeof import("../api")>()),
+  fetchAnalysis: vi.fn(),
+}));
+
+import { fetchAnalysis } from "../api";
+import { readCachedTrack } from "../cache";
+import { maybePrepareInstrumentalMode } from "./instrumental";
+import { maybePrepareSwingMode } from "./swing";
+import { updateTrackInfo, updateVizVisibility } from "./status-ui";
+import { loadTrackByJobId, tryLoadCachedAudio, type PlaybackDeps } from "./track-load";
+
+const initialStoreState = useAppStore.getState();
+const readCachedTrackMock = vi.mocked(readCachedTrack);
+
+type TestAppContext = AppContext & {
+  autocanonizer: NonNullable<AppContext["autocanonizer"]>;
+};
+
+function createContext() {
+  const decodedBuffer = { duration: 12 } as AudioBuffer;
+  const context = {
+    player: {
+      decode: vi.fn(async () => {}),
+      getBuffer: vi.fn(() => decodedBuffer),
+      getContext: vi.fn(() => "audio-context"),
+    },
+    autocanonizer: { setAudio: vi.fn() },
+  } as unknown as TestAppContext;
+  return { context, decodedBuffer };
+}
+
+describe("tryLoadCachedAudio", () => {
+  beforeEach(() => {
+    useAppStore.setState(initialStoreState, true);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("loads cached audio on a hit and takes the fast path", async () => {
+    const { context, decodedBuffer } = createContext();
+    const audio = new ArrayBuffer(8);
+    readCachedTrackMock.mockResolvedValue({ audio, jobId: "job-xyz" } as never);
+    useAppStore.setState({
+      audioLoaded: false,
+      audioLoadInFlight: true,
+      lastJobId: null,
+    });
+
+    const result = await tryLoadCachedAudio(context, "track-1");
+
+    expect(result).toBe(true);
+    expect(readCachedTrackMock).toHaveBeenCalledWith("track-1");
+    expect(context.player.decode).toHaveBeenCalledWith(audio);
+    // Restores the cached job id and marks the track loaded.
+    expect(useAppStore.getState().lastJobId).toBe("job-xyz");
+    expect(context.autocanonizer.setAudio).toHaveBeenCalledWith(
+      decodedBuffer,
+      "audio-context",
+    );
+    expect(useAppStore.getState().audioLoaded).toBe(true);
+    expect(useAppStore.getState().audioLoadInFlight).toBe(false);
+    // Swing prep runs on the cached buffer; viz/info refresh.
+    expect(maybePrepareSwingMode).toHaveBeenCalledWith(context);
+    expect(maybePrepareInstrumentalMode).toHaveBeenCalledWith(context);
+    expect(updateVizVisibility).toHaveBeenCalled();
+    expect(updateTrackInfo).toHaveBeenCalledWith(context);
+  });
+
+  it("falls back to lastJobId=null when the cache entry has no job id", async () => {
+    const { context } = createContext();
+    readCachedTrackMock.mockResolvedValue({
+      audio: new ArrayBuffer(4),
+    } as never);
+    useAppStore.setState({ lastJobId: "stale" });
+
+    await tryLoadCachedAudio(context, "track-1");
+
+    expect(useAppStore.getState().lastJobId).toBeNull();
+  });
+
+  it("returns false on a cache miss without touching the player", async () => {
+    const { context } = createContext();
+    readCachedTrackMock.mockResolvedValue(null as never);
+
+    const result = await tryLoadCachedAudio(context, "track-1");
+
+    expect(result).toBe(false);
+    expect(context.player.decode).not.toHaveBeenCalled();
+    expect(useAppStore.getState().audioLoaded).toBe(false);
+  });
+
+  it("returns false when the entry exists but has no audio", async () => {
+    const { context } = createContext();
+    readCachedTrackMock.mockResolvedValue({ jobId: "job" } as never);
+
+    const result = await tryLoadCachedAudio(context, "track-1");
+
+    expect(result).toBe(false);
+    expect(context.player.decode).not.toHaveBeenCalled();
+  });
+
+  it("returns false and swallows when the cache read throws", async () => {
+    const { context } = createContext();
+    readCachedTrackMock.mockRejectedValue(new Error("idb failure"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await tryLoadCachedAudio(context, "track-1");
+
+    expect(result).toBe(false);
+    expect(useAppStore.getState().audioLoaded).toBe(false);
+    warn.mockRestore();
+  });
+});
+
+// Every property is a no-op function that returns another stub.
+function deepStub(): never {
+  const stub: object = new Proxy(() => stub, {
+    get: (_target, key) => (key === "then" ? undefined : stub),
+  });
+  return stub as never;
+}
+
+describe("loadTrackByJobId", () => {
+  const jobId = "5efa4421f5924eee8aac43d997e9aa5a";
+
+  beforeEach(() => {
+    useAppStore.setState(initialStoreState, true);
+    vi.clearAllMocks();
+    readCachedTrackMock.mockResolvedValue(null as never);
+  });
+
+  it("reports a missing job when the API has no such job", async () => {
+    vi.mocked(fetchAnalysis).mockResolvedValue(null);
+    const onJobMissing = vi.fn();
+
+    const loaded = await loadTrackByJobId(deepStub(), deepStub() as PlaybackDeps, jobId, {
+      onJobMissing,
+    });
+
+    expect(loaded).toBe(false);
+    expect(onJobMissing).toHaveBeenCalledOnce();
+  });
+
+  it("does not report a missing job when the request fails otherwise", async () => {
+    vi.mocked(fetchAnalysis).mockRejectedValue(new Error("Request failed (500)"));
+    const onJobMissing = vi.fn();
+
+    const loaded = await loadTrackByJobId(deepStub(), deepStub() as PlaybackDeps, jobId, {
+      onJobMissing,
+    });
+
+    expect(loaded).toBe(false);
+    expect(onJobMissing).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,356 @@
+import type { PlayMode } from "./context";
+import { storedPlayMode } from "./favorites";
+import i18n from "./i18n";
+
+export type PlaylistSourceType = "youtube" | "soundcloud" | "bandcamp" | "upload";
+
+export type PlaylistTrack = {
+  id: string;
+  sourceType: PlaylistSourceType;
+  title: string;
+  artist: string;
+  duration: number | null;
+  tuningParams?: string | null;
+  // Play mode to load this track in. Absent means jukebox (the default), so
+  // previously saved playlists and search/top tracks need no data migration.
+  playMode?: PlayMode;
+};
+
+export type PlaylistState = {
+  tracks: PlaylistTrack[];
+  currentIndex: number;
+  // Position to resume from when the playlist is inactive after a reload.
+  resumeIndex?: number;
+};
+
+export type PlaylistAddStatus =
+  | "added"
+  | "duplicate"
+  | "full"
+  | "invalid";
+
+export const PLAYLIST_STORAGE_KEY = "fj-playlist";
+export const PLAYLIST_MAX_TRACKS = 25;
+
+export function emptyPlaylist(): PlaylistState {
+  return { tracks: [], currentIndex: -1 };
+}
+
+export function playlistTrackKey(track: Pick<PlaylistTrack, "id" | "sourceType">) {
+  return `${track.sourceType}:${track.id.trim()}`;
+}
+
+export function isPlaylistActive(playlist: PlaylistState) {
+  return (
+    playlist.currentIndex >= 0 &&
+    playlist.currentIndex < playlist.tracks.length
+  );
+}
+
+export function hasInactiveSavedPlaylist(playlist: PlaylistState) {
+  return playlist.tracks.length >= 2 && !isPlaylistActive(playlist);
+}
+
+// Index of the track to resume, or null when active or out of range.
+export function getResumeIndex(playlist: PlaylistState): number | null {
+  if (isPlaylistActive(playlist)) {
+    return null;
+  }
+  const index = playlist.resumeIndex;
+  if (
+    typeof index !== "number" ||
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= playlist.tracks.length
+  ) {
+    return null;
+  }
+  return index;
+}
+
+export function hasPlaylistControls(playlist: PlaylistState) {
+  return playlist.tracks.length > 1;
+}
+
+export function hasActivePlaylistControls(playlist: PlaylistState) {
+  return hasPlaylistControls(playlist) && isPlaylistActive(playlist);
+}
+
+export function canMovePlaylistPrevious(playlist: PlaylistState) {
+  return hasActivePlaylistControls(playlist) && playlist.currentIndex > 0;
+}
+
+export function canMovePlaylistNext(playlist: PlaylistState) {
+  return (
+    hasActivePlaylistControls(playlist) &&
+    playlist.currentIndex < playlist.tracks.length - 1
+  );
+}
+
+export function normalizePlaylistTrack(track: PlaylistTrack): PlaylistTrack | null {
+  const id = typeof track.id === "string" ? track.id.trim() : "";
+  if (!id || !isPlaylistSourceType(track.sourceType)) {
+    return null;
+  }
+  const title =
+    typeof track.title === "string" && track.title.trim()
+      ? track.title.trim()
+      : i18n.t("common.untitled");
+  const artist = typeof track.artist === "string" ? track.artist.trim() : "";
+  const duration =
+    typeof track.duration === "number" && Number.isFinite(track.duration)
+      ? track.duration
+      : null;
+  const tuningParams =
+    typeof track.tuningParams === "string" && track.tuningParams.trim()
+      ? track.tuningParams
+      : null;
+  const normalized: PlaylistTrack = {
+    id,
+    sourceType: track.sourceType,
+    title,
+    artist,
+    duration,
+  };
+  if (tuningParams) {
+    normalized.tuningParams = tuningParams;
+  }
+  // Keeps existing saved playlists byte-for-byte unchanged.
+  const playMode = storedPlayMode(track.playMode ?? "jukebox");
+  if (playMode) {
+    normalized.playMode = playMode;
+  }
+  return normalized;
+}
+
+export function addPlaylistTrack(
+  playlist: PlaylistState,
+  currentTrack: PlaylistTrack | null,
+  track: PlaylistTrack,
+): { playlist: PlaylistState; status: PlaylistAddStatus } {
+  const normalizedTrack = normalizePlaylistTrack(track);
+  const normalizedCurrent = currentTrack
+    ? normalizePlaylistTrack(currentTrack)
+    : null;
+  if (!normalizedTrack) {
+    return { playlist, status: "invalid" };
+  }
+  const existingTracks = playlist.tracks;
+  const existingKeys = new Set(existingTracks.map(playlistTrackKey));
+  if (existingKeys.has(playlistTrackKey(normalizedTrack))) {
+    return { playlist, status: "duplicate" };
+  }
+  if (existingTracks.length === 0) {
+    if (!normalizedCurrent) {
+      // Unreachable through the UI: add buttons only render once a track is
+      // loaded (body.playlist-add-enabled). Kept as a defensive guard.
+      return { playlist, status: "invalid" };
+    }
+    if (playlistTrackKey(normalizedCurrent) === playlistTrackKey(normalizedTrack)) {
+      return { playlist, status: "duplicate" };
+    }
+    return {
+      playlist: {
+        tracks: [normalizedCurrent, normalizedTrack],
+        currentIndex: 0,
+      },
+      status: "added",
+    };
+  }
+  if (existingTracks.length >= PLAYLIST_MAX_TRACKS) {
+    return { playlist, status: "full" };
+  }
+  return {
+    playlist: {
+      tracks: [...existingTracks, normalizedTrack],
+      currentIndex: playlist.currentIndex,
+    },
+    status: "added",
+  };
+}
+
+export function activatePlaylistTrack(
+  playlist: PlaylistState,
+  index: number,
+): PlaylistState {
+  if (index < 0 || index >= playlist.tracks.length) {
+    return playlist;
+  }
+  return { ...playlist, currentIndex: index };
+}
+
+export function replaceActivePlaylistTrack(
+  playlist: PlaylistState,
+  track: PlaylistTrack,
+): PlaylistState {
+  if (!isPlaylistActive(playlist)) {
+    return emptyPlaylist();
+  }
+  const normalized = normalizePlaylistTrack(track);
+  if (!normalized) {
+    return playlist;
+  }
+  const currentIndex = playlist.currentIndex;
+  const nextTracks = playlist.tracks.slice();
+  nextTracks[currentIndex] = normalized;
+  const replacementKey = playlistTrackKey(normalized);
+  const duplicateIndex = nextTracks.findIndex(
+    (candidate, index) =>
+      index !== currentIndex && playlistTrackKey(candidate) === replacementKey,
+  );
+  let nextCurrentIndex = currentIndex;
+  if (duplicateIndex >= 0) {
+    nextTracks.splice(duplicateIndex, 1);
+    if (duplicateIndex < nextCurrentIndex) {
+      nextCurrentIndex -= 1;
+    }
+  }
+  return { tracks: nextTracks, currentIndex: nextCurrentIndex };
+}
+
+export function removePlaylistTrack(
+  playlist: PlaylistState,
+  index: number,
+): PlaylistState {
+  if (index < 0 || index >= playlist.tracks.length) {
+    return playlist;
+  }
+  if (index === playlist.currentIndex) {
+    return playlist;
+  }
+  const nextTracks = playlist.tracks.filter((_, itemIndex) => itemIndex !== index);
+  const nextCurrentIndex =
+    playlist.currentIndex > index
+      ? playlist.currentIndex - 1
+      : playlist.currentIndex;
+  const next: PlaylistState = { tracks: nextTracks, currentIndex: nextCurrentIndex };
+  const resumeIndex = playlist.resumeIndex;
+  if (typeof resumeIndex === "number" && resumeIndex !== index) {
+    next.resumeIndex = resumeIndex > index ? resumeIndex - 1 : resumeIndex;
+  }
+  return next;
+}
+
+// The current and resume positions follow their tracks, so a move never
+// changes what is playing or what "Continue listening" resumes.
+export function movePlaylistTrack(
+  playlist: PlaylistState,
+  from: number,
+  to: number,
+): PlaylistState {
+  const count = playlist.tracks.length;
+  if (
+    !Number.isInteger(from) ||
+    !Number.isInteger(to) ||
+    from < 0 ||
+    from >= count ||
+    to < 0 ||
+    to >= count ||
+    from === to
+  ) {
+    return playlist;
+  }
+  const nextTracks = playlist.tracks.slice();
+  const [moved] = nextTracks.splice(from, 1);
+  nextTracks.splice(to, 0, moved);
+  const next: PlaylistState = {
+    tracks: nextTracks,
+    currentIndex: indexAfterMove(playlist.currentIndex, from, to),
+  };
+  if (typeof playlist.resumeIndex === "number") {
+    next.resumeIndex = indexAfterMove(playlist.resumeIndex, from, to);
+  }
+  return next;
+}
+
+function indexAfterMove(index: number, from: number, to: number) {
+  if (index === from) {
+    return to;
+  }
+  if (from < to && index > from && index <= to) {
+    return index - 1;
+  }
+  if (to < from && index >= to && index < from) {
+    return index + 1;
+  }
+  return index;
+}
+
+function parseStoredPlaylistTracks(parsed: PlaylistTrack[] | { tracks?: PlaylistTrack[] }) {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  return Array.isArray(parsed.tracks) ? parsed.tracks : [];
+}
+
+export function loadPlaylist(): PlaylistState {
+  const raw = localStorage.getItem(PLAYLIST_STORAGE_KEY);
+  if (!raw) {
+    return emptyPlaylist();
+  }
+  try {
+    const parsed = JSON.parse(raw) as {
+      tracks?: PlaylistTrack[];
+      lastIndex?: number;
+    };
+    const rawTracks = parseStoredPlaylistTracks(parsed);
+    const tracks = normalizePlaylistTracks(rawTracks).slice(0, PLAYLIST_MAX_TRACKS);
+    if (tracks.length === 0) {
+      localStorage.removeItem(PLAYLIST_STORAGE_KEY);
+      return emptyPlaylist();
+    }
+    const lastIndex = Array.isArray(parsed) ? undefined : parsed.lastIndex;
+    const resumeIndex =
+      typeof lastIndex === "number" &&
+      Number.isInteger(lastIndex) &&
+      lastIndex >= 0 &&
+      lastIndex < tracks.length
+        ? lastIndex
+        : 0;
+    return { tracks, currentIndex: -1, resumeIndex };
+  } catch {
+    return emptyPlaylist();
+  }
+}
+
+export function savePlaylist(playlist: PlaylistState) {
+  if (playlist.tracks.length === 0) {
+    localStorage.removeItem(PLAYLIST_STORAGE_KEY);
+    return;
+  }
+  const tracks = playlist.tracks.slice(0, PLAYLIST_MAX_TRACKS);
+  const lastIndex = isPlaylistActive(playlist)
+    ? Math.min(playlist.currentIndex, tracks.length - 1)
+    : getResumeIndex(playlist);
+  localStorage.setItem(
+    PLAYLIST_STORAGE_KEY,
+    JSON.stringify(lastIndex === null ? { tracks } : { tracks, lastIndex }),
+  );
+}
+
+function normalizePlaylistTracks(tracks: PlaylistTrack[]) {
+  const seen = new Set<string>();
+  const normalized: PlaylistTrack[] = [];
+  for (const track of tracks) {
+    const item = normalizePlaylistTrack(track);
+    if (!item) {
+      continue;
+    }
+    const key = playlistTrackKey(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(item);
+  }
+  return normalized;
+}
+
+function isPlaylistSourceType(value: unknown): value is PlaylistSourceType {
+  return (
+    value === "youtube" ||
+    value === "soundcloud" ||
+    value === "bandcamp" ||
+    value === "upload"
+  );
+}

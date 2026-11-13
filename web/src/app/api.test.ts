@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFavoritesSync,
   deleteJob,
+  dismissTrackReport,
+  fetchReportedTracks,
+  reportTrack,
   fetchAnalysis,
   searchSpotify,
   searchYoutube,
@@ -10,6 +13,7 @@ import {
   fetchRecentSongs,
   fetchAppConfig,
   fetchFavoritesSync,
+  retryJob,
   updateFavoritesSync,
   fetchJobByTrack,
   fetchJobBySource,
@@ -49,10 +53,17 @@ describe("api", () => {
     configureMaxFavorites(null);
   });
 
-  it("returns null on 404 analysis", async () => {
-    (fetch as any).mockResolvedValue(createResponse(404, {}));
+  it("returns null when the API reports the job missing", async () => {
+    (fetch as any).mockResolvedValue(
+      createResponse(404, { detail: "Job not found" }),
+    );
     const result = await fetchAnalysis("missing");
     expect(result).toBeNull();
+  });
+
+  it("throws on a 404 that is not the API's missing-job answer", async () => {
+    (fetch as any).mockResolvedValue(createResponse(404, "<html>Not Found</html>"));
+    await expect(fetchAnalysis("missing")).rejects.toThrow("Request failed (404)");
   });
 
   it("parses analysis in progress", async () => {
@@ -89,6 +100,24 @@ describe("api", () => {
   it("throws on non-ok response", async () => {
     (fetch as any).mockResolvedValue(createResponse(500, {}, false));
     await expect(fetchAnalysis("err")).rejects.toThrow("Request failed");
+  });
+
+  it("retries a job by id", async () => {
+    (fetch as any).mockResolvedValue(
+      createResponse(202, {
+        status: "downloading",
+        id: "job-retry",
+        source_provider: "soundcloud",
+      }),
+    );
+
+    const result = await retryJob("job-retry");
+
+    expect(result?.status).toBe("downloading");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/jobs/job-retry/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("fetches top songs", async () => {
@@ -396,6 +425,36 @@ describe("api", () => {
     await expect(deleteJob("job1", "secret")).resolves.toBeUndefined();
 
     expect(fetch).toHaveBeenCalledWith("/api/jobs/job1", {
+      method: "DELETE",
+      headers: { "X-Admin-Key": "secret" },
+    });
+  });
+
+  it("reports a track with the chosen reason", async () => {
+    (fetch as any).mockResolvedValueOnce(createResponse(200, { status: "ok" }));
+
+    await expect(reportTrack("job1", "bad_audio")).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledWith("/api/reports/job1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "bad_audio" }),
+    });
+  });
+
+  it("sends the admin key when listing and dismissing reports", async () => {
+    const items = [
+      { id: "job1", reason: "other", reported_at: "2026-09-01T00:00:00+00:00" },
+    ];
+    (fetch as any).mockResolvedValueOnce(createResponse(200, { items }));
+    await expect(fetchReportedTracks("secret")).resolves.toEqual(items);
+    expect(fetch).toHaveBeenCalledWith("/api/reports", {
+      headers: { "X-Admin-Key": "secret" },
+    });
+
+    (fetch as any).mockResolvedValueOnce(createResponse(200, { status: "ok" }));
+    await expect(dismissTrackReport("job1", "secret")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenLastCalledWith("/api/reports/job1", {
       method: "DELETE",
       headers: { "X-Admin-Key": "secret" },
     });

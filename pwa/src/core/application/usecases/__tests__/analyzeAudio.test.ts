@@ -62,6 +62,30 @@ describe("AnalyzeAudioUseCase", () => {
     expect(cache.set).toHaveBeenCalled();
   });
 
+  it("returns the analysis when the cache write fails", async () => {
+    const analysisPort: AnalysisPort = {
+      analyze: vi.fn(async () => analysis),
+    };
+    const cache: AnalysisCachePort = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {
+        throw new Error("quota");
+      }),
+      clear: vi.fn(async () => undefined),
+    };
+    const decoder: AudioDecoderPort = {
+      decode: vi.fn(async () => makeDecodedAudio()),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const usecase = new AnalyzeAudioUseCase(analysisPort, cache, decoder);
+    const result = await usecase.execute({ file: makeFile() });
+    warn.mockRestore();
+
+    expect(result.analysis).toEqual(analysis);
+    expect(result.fromCache).toBe(false);
+  });
+
   it("returns cached analysis when available", async () => {
     const analysisPort: AnalysisPort = {
       analyze: vi.fn(async () => analysis),
@@ -82,7 +106,7 @@ describe("AnalyzeAudioUseCase", () => {
     expect(analysisPort.analyze).not.toHaveBeenCalled();
   });
 
-  it("reports mapped overall progress percentages in monotonic order", async () => {
+  it("reports progress within each stage", async () => {
     const analysisPort: AnalysisPort = {
       analyze: vi.fn(async ({ onProgress }) => {
         onProgress?.({ stage: "beats", progress: 0.4, message: "Detecting beats" });
@@ -101,26 +125,19 @@ describe("AnalyzeAudioUseCase", () => {
       decode: vi.fn(async () => makeDecodedAudio()),
     };
 
-    const reported: Array<{ stage: string; progress: number }> = [];
+    const reported: Array<{ stage: string; progress: number | null }> = [];
     const usecase = new AnalyzeAudioUseCase(analysisPort, cache, decoder);
     await usecase.execute({
       file: makeFile(),
       onProgress: (progress) => {
-        reported.push({ stage: progress.stage, progress: progress.progress });
+        reported.push(progress);
       },
     });
 
-    expect(reported[0]).toEqual({ stage: "loading", progress: 0 });
-    expect(reported.some((entry) => entry.stage === "beats" && entry.progress === 40)).toBe(true);
-    expect(reported.some((entry) => entry.stage === "segments" && entry.progress === 85)).toBe(
-      true
-    );
-    expect(reported.some((entry) => entry.stage === "building" && entry.progress === 92.5)).toBe(
-      true
-    );
-    expect(reported[reported.length - 1]).toEqual({ stage: "ready", progress: 100 });
-    for (let i = 1; i < reported.length; i += 1) {
-      expect(reported[i].progress).toBeGreaterThanOrEqual(reported[i - 1].progress);
-    }
+    expect(reported[0]).toEqual({ stage: "loading", progress: null });
+    expect(reported).toContainEqual({ stage: "beats", progress: 1 });
+    expect(reported).toContainEqual({ stage: "segments", progress: 1 });
+    expect(reported).toContainEqual({ stage: "building", progress: 0.5 });
+    expect(reported[reported.length - 1]).toEqual({ stage: "ready", progress: null });
   });
 });

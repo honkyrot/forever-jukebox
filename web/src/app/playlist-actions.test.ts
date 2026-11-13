@@ -1,0 +1,656 @@
+import { beforeEach, describe, expect, it, vi  } from "vitest";
+import type { AppContext, AppState } from "./context";
+import {
+  loadTrackById,
+  loadTrackByJobId,
+  togglePlayback,
+  type PlaybackDeps,
+} from "./playback";
+import { trackEvent } from "./analytics";
+import { setPlayMode } from "./playback-ui";
+import { PLAYLIST_MAX_TRACKS, emptyPlaylist, type PlaylistTrack } from "./playlist";
+import { setAppRuntime, setPlaybackDeps } from "./runtime";
+import { useAppStore } from "./store";
+import { showToast } from "./ui";
+import {
+  addToPlaylist,
+  advanceAutocanonizerOnEnded,
+  clearPlaylist,
+  handleNormalTrackSelected,
+  loadPlaylistIndex,
+  movePlaylistIndex,
+  playlistNext,
+  playlistPrevious,
+  removePlaylistIndex,
+  resetPlaylistActionsForTest,
+  selectPlaylistIndex,
+} from "./playlist-actions";
+import { setWindowUrl } from "./__tests__/test-utils";
+import { DEFAULT_JUKEBOX_CONFIG } from "@forever-jukebox/shared";
+
+vi.mock("./ui", async (importActual) => ({
+  ...(await importActual<typeof import("./ui")>()),
+  showToast: vi.fn(),
+}));
+vi.mock("./playback", async (importActual) => ({
+  ...(await importActual<typeof import("./playback")>()),
+  loadTrackById: vi.fn(async () => true),
+  loadTrackByJobId: vi.fn(async () => true),
+  togglePlayback: vi.fn(),
+}));
+vi.mock("./playback-ui", () => ({
+  setPlayMode: vi.fn(),
+}));
+vi.mock("./analytics", () => ({
+  trackEvent: vi.fn(),
+}));
+
+
+function setLocalStorage() {
+  const store = new Map<string, string>();
+  globalThis.localStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    },
+  } as Storage;
+}
+
+function track(id: string, sourceType: PlaylistTrack["sourceType"] = "youtube") {
+  return {
+    id,
+    sourceType,
+    title: `Track ${id}`,
+    artist: "Artist",
+    duration: null,
+  } satisfies PlaylistTrack;
+}
+
+
+const initialStoreState = useAppStore.getState();
+
+beforeEach(() => {
+  useAppStore.setState(initialStoreState, true);
+});
+
+function createDeps(overrides?: Partial<AppState>) {
+  if (overrides) {
+    useAppStore.setState(overrides);
+  }
+  const context = {
+    defaultConfig: { ...DEFAULT_JUKEBOX_CONFIG },
+  } as unknown as AppContext;
+  const playbackDeps: PlaybackDeps = {
+    setActiveTab: vi.fn(),
+    navigateToTab: vi.fn(),
+    updateTrackUrl: vi.fn(),
+    setAnalysisStatus: vi.fn(),
+    setLoadingStep: vi.fn(),
+  };
+  setAppRuntime(context);
+  setPlaybackDeps(playbackDeps);
+  return { context, playbackDeps };
+}
+
+describe("playlist handlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetPlaylistActionsForTest();
+    vi.mocked(loadTrackById).mockResolvedValue(true);
+    vi.mocked(loadTrackByJobId).mockResolvedValue(true);
+    setLocalStorage();
+    setWindowUrl("http://localhost/listen");
+  });
+
+  it("adds with current track and reports duplicate/full toasts", () => {
+    createDeps({
+      lastTrackId: "current",
+      lastSourceProvider: "youtube",
+      trackTitle: "Current",
+    } as Partial<AppState>);
+    addToPlaylist(track("next"), "top");
+    expect(useAppStore.getState().playlist.tracks.map((item) => item.id)).toEqual([
+      "current",
+      "next",
+    ]);
+
+    addToPlaylist(track("next"), "top");
+    expect(showToast).toHaveBeenCalledWith(
+            "Already in playlist",
+    );
+
+    useAppStore.setState({
+      playlist: {
+      tracks: Array.from({ length: PLAYLIST_MAX_TRACKS }, (_, index) => track(`${index}`)),
+      currentIndex: 0,
+    }
+    });
+    addToPlaylist(track("extra"), "top");
+    expect(showToast).toHaveBeenCalledWith(
+            "Playlist is full.",
+    );
+  });
+
+  it("rejects an add with no current track without toasting success", () => {
+    createDeps();
+    addToPlaylist(track("next"), "top");
+
+    expect(showToast).toHaveBeenCalledWith(
+            "Track cannot be added to playlist.",
+    );
+  });
+
+  it("uses the job id as an upload when adding the current uploaded track", () => {
+    const jobId = "a3f3c0dc73c6476c9db95c227f9206f2";
+    createDeps({
+      lastTrackId: null,
+      lastJobId: jobId,
+      lastSourceProvider: "upload",
+      trackTitle: "Upload",
+    } as Partial<AppState>);
+    addToPlaylist(track("next"), "top");
+
+    expect(useAppStore.getState().playlist.tracks[0]).toMatchObject({
+      id: jobId,
+      sourceType: "upload",
+    });
+  });
+
+  it("uses provider source ids when adding the current provider track", () => {
+    createDeps({
+      lastTrackId: "soundcloud:source-1",
+      lastSourceProvider: "soundcloud",
+      trackTitle: "Provider Track",
+    } as Partial<AppState>);
+    addToPlaylist(track("next"), "top");
+
+    expect(useAppStore.getState().playlist.tracks[0]).toMatchObject({
+      id: "source-1",
+      sourceType: "soundcloud",
+    });
+  });
+
+  it("shows an invalid message for malformed playlist tracks", () => {
+    createDeps({
+      lastTrackId: "current",
+      lastSourceProvider: "youtube",
+      trackTitle: "Current",
+    } as Partial<AppState>);
+    addToPlaylist({ ...track(""), id: "" }, "top");
+
+    expect(showToast).toHaveBeenCalledWith(
+            "Track cannot be added to playlist.",
+    );
+  });
+
+  it("replaces inactive saved playlists with the selected track", () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: -1 },
+    } as Partial<AppState>);
+    handleNormalTrackSelected(track("outside"));
+
+    expect(useAppStore.getState().playlist).toEqual({
+      tracks: [track("outside")],
+      currentIndex: 0,
+    });
+  });
+
+  it("closes the modal when a removal drops below two tracks", () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+      playlistModalOpen: true,
+    } as Partial<AppState>);
+    removePlaylistIndex(1);
+
+    expect(useAppStore.getState().playlist).toEqual({
+      tracks: [track("a")],
+      currentIndex: 0,
+    });
+    expect(useAppStore.getState().playlistModalOpen).toBe(false);
+  });
+
+  it("moves a playlist entry and saves the new order", () => {
+    createDeps({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 1,
+      },
+    } as Partial<AppState>);
+    movePlaylistIndex(0, 2);
+
+    const playlist = useAppStore.getState().playlist;
+    expect(playlist.tracks.map((item) => item.id)).toEqual(["b", "c", "a"]);
+    expect(playlist.currentIndex).toBe(0);
+    const stored = JSON.parse(localStorage.getItem("fj-playlist") ?? "{}") as {
+      tracks: PlaylistTrack[];
+    };
+    expect(stored.tracks.map((item) => item.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("keeps a move made during a load that then fails, and rolls back by track", async () => {
+    createDeps({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+    let finishLoad: (loaded: boolean) => void = () => {};
+    vi.mocked(loadTrackById).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishLoad = resolve;
+        }),
+    );
+    const load = loadPlaylistIndex(2);
+    movePlaylistIndex(2, 0);
+    finishLoad(false);
+    await load;
+
+    const playlist = useAppStore.getState().playlist;
+    expect(playlist.tracks.map((item) => item.id)).toEqual(["c", "a", "b"]);
+    expect(playlist.tracks[playlist.currentIndex].id).toBe("a");
+  });
+
+  it("does not roll back a failed load once another track replaced it", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    let finishLoad: (loaded: boolean) => void = () => {};
+    vi.mocked(loadTrackById).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishLoad = resolve;
+        }),
+    );
+    const load = loadPlaylistIndex(1);
+    handleNormalTrackSelected(track("z"));
+    finishLoad(false);
+    await load;
+
+    const playlist = useAppStore.getState().playlist;
+    expect(playlist.tracks.map((item) => item.id)).toEqual(["a", "z"]);
+    expect(playlist.currentIndex).toBe(1);
+  });
+
+  it("replaces the active playlist item on normal track selection", () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 1 },
+    } as Partial<AppState>);
+    handleNormalTrackSelected(track("outside"));
+
+    expect(useAppStore.getState().playlist.currentIndex).toBe(1);
+    expect(useAppStore.getState().playlist.tracks.map((item) => item.id)).toEqual([
+      "a",
+      "outside",
+    ]);
+  });
+
+  it("loads playlist items with playlist load options and blocks while busy", async () => {
+    const deps = createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    await loadPlaylistIndex(1);
+
+    expect(loadTrackById).toHaveBeenCalledWith(
+      deps.context,
+      deps.playbackDeps,
+      "b",
+      {
+        preserveUrlTuning: true,
+        playlistLoad: true,
+        selectedTrack: track("b"),
+      },
+    );
+
+    useAppStore.setState({ audioLoadInFlight: true });
+    await loadPlaylistIndex(0);
+    expect(loadTrackById).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves active track tuning before skipping and restores it when returning", async () => {
+    createDeps({
+      playMode: "jukebox",
+      tuningParams: "jb=1&thresh=25",
+      playlist: {
+        tracks: [track("a"), { ...track("b"), tuningParams: "lg=1" }],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+
+    await loadPlaylistIndex(1);
+
+    expect(useAppStore.getState().playlist.tracks[0]?.tuningParams).toBe(
+      "jb=1&thresh=25",
+    );
+    expect(useAppStore.getState().tuningParams).toBe("lg=1");
+    expect(window.location.search).toBe("?lg=1");
+
+    await loadPlaylistIndex(0);
+
+    expect(useAppStore.getState().tuningParams).toBe("jb=1&thresh=25");
+    expect(window.location.search).toBe("?jb=1&thresh=25");
+  });
+
+  it("uses defaults when skipping to a playlist track without saved tuning", async () => {
+    createDeps({
+      playMode: "jukebox",
+      tuningParams: "jb=1&thresh=25",
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+
+    await loadPlaylistIndex(1);
+
+    expect(useAppStore.getState().playlist.tracks[0]?.tuningParams).toBe(
+      "jb=1&thresh=25",
+    );
+    expect(useAppStore.getState().tuningParams).toBeNull();
+    expect(window.location.search).toBe("");
+  });
+
+  it("does not snapshot temporary tuning over a favorite's saved tuning", async () => {
+    createDeps({
+      playMode: "jukebox",
+      tuningParams: "thresh=50",
+      favorites: [
+        {
+          uniqueSongId: "a",
+          sourceType: "youtube",
+          title: "Track a",
+          artist: "Artist",
+          duration: null,
+          tuningParams: "jb=1",
+        },
+      ],
+      playlist: {
+        tracks: [{ ...track("a"), tuningParams: "jb=1" }, track("b")],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+
+    await loadPlaylistIndex(1);
+
+    expect(useAppStore.getState().playlist.tracks[0]?.tuningParams).toBe(
+      "jb=1",
+    );
+
+    await loadPlaylistIndex(0);
+
+    expect(useAppStore.getState().tuningParams).toBe("jb=1");
+    expect(window.location.search).toBe("?jb=1");
+  });
+
+  it("does not snapshot temporary jukebox tuning over an autocanonizer favorite mode", async () => {
+    createDeps({
+      playMode: "jukebox",
+      tuningParams: "thresh=50",
+      favorites: [
+        {
+          uniqueSongId: "a",
+          sourceType: "youtube",
+          title: "Track a",
+          artist: "Artist",
+          duration: null,
+          playMode: "autocanonizer",
+        },
+      ],
+      playlist: {
+        tracks: [
+          { ...track("a"), playMode: "autocanonizer" as const },
+          track("b"),
+        ],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+
+    await loadPlaylistIndex(1);
+
+    expect(useAppStore.getState().playlist.tracks[0]?.tuningParams).toBeUndefined();
+    expect(useAppStore.getState().playlist.tracks[0]?.playMode).toBe(
+      "autocanonizer",
+    );
+  });
+
+  it("rolls back playlist activation when a playlist item load fails", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+      isRunning: false,
+    } as Partial<AppState>);
+    vi.mocked(loadTrackById).mockResolvedValueOnce(false);
+    const loaded = await loadPlaylistIndex(1, { playAfterLoad: true });
+
+    expect(loaded).toBe(false);
+    expect(useAppStore.getState().playlist.currentIndex).toBe(0);
+    expect(togglePlayback).not.toHaveBeenCalled();
+  });
+
+  it("blocks rapid playlist skips while a playlist load is pending", () => {
+    createDeps({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+    vi.mocked(loadTrackById).mockImplementation(
+      () =>
+        new Promise<boolean>(() => {
+          // Keep the first load pending.
+        }),
+    );
+    playlistNext();
+    playlistNext();
+
+    expect(loadTrackById).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not load or close the modal for the current playlist item", async () => {
+    useAppStore.setState({ playlistModalOpen: true });
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    await loadPlaylistIndex(0, { closeModal: true });
+
+    expect(loadTrackById).not.toHaveBeenCalled();
+    expect(useAppStore.getState().playlistModalOpen).toBe(true);
+  });
+
+  it("closes the playlist modal immediately after selecting a playlist item", async () => {
+    useAppStore.setState({ playlistModalOpen: true });
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    let resolveLoad: (value: boolean) => void = () => {};
+    vi.mocked(loadTrackById).mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+    const loadPromise = loadPlaylistIndex(1, { closeModal: true });
+
+    expect(useAppStore.getState().playlistModalOpen).toBe(false);
+
+    resolveLoad(true);
+    await loadPromise;
+  });
+
+  it("applies the per-track play mode when loading a playlist track", async () => {
+    const autocanonTrack = { ...track("b"), playMode: "autocanonizer" as const };
+    createDeps({
+      playlist: { tracks: [track("a"), autocanonTrack], currentIndex: 0 },
+    } as Partial<AppState>);
+    await loadPlaylistIndex(1);
+
+    expect(setPlayMode).toHaveBeenCalledWith("autocanonizer");
+  });
+
+  it("defaults a playlist track without a stored mode to jukebox", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    await loadPlaylistIndex(1);
+
+    expect(setPlayMode).toHaveBeenCalledWith("jukebox");
+  });
+
+  it("advances autocanonizer to the next playlist track when available", async () => {
+    const deps = createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    const advanced = await advanceAutocanonizerOnEnded();
+
+    expect(advanced).toBe(true);
+    expect(loadTrackById).toHaveBeenCalledOnce();
+    expect(togglePlayback).toHaveBeenCalledWith(deps.context);
+  });
+
+  it("does not report autocanonizer advance when the playlist load fails", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+    vi.mocked(loadTrackById).mockResolvedValueOnce(false);
+    const advanced = await advanceAutocanonizerOnEnded();
+
+    expect(advanced).toBe(false);
+    expect(togglePlayback).not.toHaveBeenCalled();
+  });
+
+  it("does not advance autocanonizer without a next playlist track", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 1 },
+    } as Partial<AppState>);
+    await expect(advanceAutocanonizerOnEnded()).resolves.toBe(false);
+    expect(loadTrackById).not.toHaveBeenCalled();
+  });
+
+  it("clears the playlist down to the current track from the modal action", () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 1 },
+      playlistModalOpen: true,
+    } as Partial<AppState>);
+    clearPlaylist();
+
+    expect(useAppStore.getState().playlist).toEqual({
+      tracks: [track("b")],
+      currentIndex: 0,
+    });
+    expect(useAppStore.getState().playlistModalOpen).toBe(false);
+  });
+
+  it("empties an inactive saved playlist from the modal action", () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: -1, resumeIndex: 0 },
+    } as Partial<AppState>);
+    clearPlaylist();
+
+    expect(useAppStore.getState().playlist).toEqual(emptyPlaylist());
+  });
+  it("reports a playlist add with its source and resulting size", () => {
+    createDeps({
+      lastTrackId: "current",
+      lastSourceProvider: "youtube",
+      trackTitle: "Current",
+    } as Partial<AppState>);
+    addToPlaylist(track("next"), "favorites");
+
+    expect(trackEvent).toHaveBeenCalledWith("playlist_add", {
+      ui_source: "favorites",
+      track_id: "next",
+      size: 2,
+    });
+  });
+
+  it("does not report rejected playlist adds", () => {
+    createDeps({
+      lastTrackId: "current",
+      lastSourceProvider: "youtube",
+      trackTitle: "Current",
+    } as Partial<AppState>);
+    addToPlaylist(track("next"), "top");
+    vi.mocked(trackEvent).mockClear();
+
+    addToPlaylist(track("next"), "top");
+    useAppStore.setState({
+      playlist: {
+        tracks: Array.from({ length: PLAYLIST_MAX_TRACKS }, (_, index) => track(`${index}`)),
+        currentIndex: 0,
+      },
+    });
+    addToPlaylist(track("extra"), "top");
+
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("reports each user-driven playlist navigation", () => {
+    createDeps({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 1,
+      },
+    } as Partial<AppState>);
+
+    playlistNext();
+    expect(trackEvent).toHaveBeenCalledWith("playlist_navigate", {
+      method: "next",
+    });
+
+    resetPlaylistActionsForTest();
+    useAppStore.setState({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 1,
+      },
+    });
+    playlistPrevious();
+    expect(trackEvent).toHaveBeenCalledWith("playlist_navigate", {
+      method: "prev",
+    });
+
+    resetPlaylistActionsForTest();
+    useAppStore.setState({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 1,
+      },
+    });
+    selectPlaylistIndex(2);
+    expect(trackEvent).toHaveBeenCalledWith("playlist_navigate", {
+      method: "pick",
+    });
+  });
+
+  it("does not report the automatic advance when a track ends", async () => {
+    createDeps({
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    } as Partial<AppState>);
+
+    await advanceAutocanonizerOnEnded();
+
+    expect(useAppStore.getState().playlist.currentIndex).toBe(1);
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not report a skip that is blocked by a pending load", () => {
+    createDeps({
+      playlist: {
+        tracks: [track("a"), track("b"), track("c")],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+    vi.mocked(loadTrackById).mockImplementation(
+      () =>
+        new Promise<boolean>(() => {
+          // Keep the first load pending.
+        }),
+    );
+    playlistNext();
+    playlistNext();
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+});

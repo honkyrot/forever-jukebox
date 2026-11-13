@@ -1,0 +1,93 @@
+import {
+  safeLocalStorageGet,
+  safeLocalStorageSet,
+} from "@/shared/utils/safeStorage";
+import {
+  VOLUME_STORAGE_KEY,
+  parseStoredVolumePct,
+} from "@forever-jukebox/shared/audio/volume";
+import {
+  DEFAULT_VISUALIZATION_INDEX,
+  VISUALIZATION_LABELS,
+} from "@forever-jukebox/shared/constants/visualization";
+
+const CANONIZER_FINISH_STORAGE_KEY = "fj-canonizer-finish";
+const WUB_MACHINE_LOOP_STORAGE_KEY = "fj-wub-machine-loop";
+const VISUALIZATION_STORAGE_KEY = "fj-viz";
+const ANCHOR_HIGHLIGHT_STORAGE_KEY = "fj-highlight-anchor-branch";
+const BRANCH_STATS_STORAGE_KEY = "fj-branch-stats-enabled";
+const CUSTOM_ANCHOR_STORAGE_KEY = "fj-custom-anchor-enabled";
+
+export function coerceVisualizationIndex(index: number) {
+  if (
+    Number.isFinite(index) &&
+    index >= 0 &&
+    index < VISUALIZATION_LABELS.length
+  ) {
+    return index;
+  }
+  return DEFAULT_VISUALIZATION_INDEX;
+}
+
+export function resolveStoredVisualizationIndex() {
+  const raw = safeLocalStorageGet(VISUALIZATION_STORAGE_KEY);
+  if (raw !== null) {
+    const parsed = Number.parseInt(raw, 10);
+    return coerceVisualizationIndex(parsed);
+  }
+  return DEFAULT_VISUALIZATION_INDEX;
+}
+
+export function storeVisualizationIndex(index: number) {
+  safeLocalStorageSet(VISUALIZATION_STORAGE_KEY, String(index));
+}
+
+export function resolveStoredFinishOutSong(): boolean {
+  return safeLocalStorageGet(CANONIZER_FINISH_STORAGE_KEY) === "true";
+}
+
+export function storeFinishOutSong(enabled: boolean) {
+  safeLocalStorageSet(CANONIZER_FINISH_STORAGE_KEY, String(enabled));
+}
+
+export function resolveStoredWubMachineLoop(): boolean {
+  return safeLocalStorageGet(WUB_MACHINE_LOOP_STORAGE_KEY) === "true";
+}
+
+export function storeWubMachineLoop(enabled: boolean) {
+  safeLocalStorageSet(WUB_MACHINE_LOOP_STORAGE_KEY, String(enabled));
+}
+
+export function resolveStoredAnchorHighlight(): boolean {
+  const stored = safeLocalStorageGet(ANCHOR_HIGHLIGHT_STORAGE_KEY);
+  return stored === "1" || stored === "true";
+}
+
+export function resolveStoredBranchStatsEnabled(): boolean {
+  const stored = safeLocalStorageGet(BRANCH_STATS_STORAGE_KEY);
+  return stored === "1" || stored === "true";
+}
+
+export function storeAnchorHighlight(enabled: boolean) {
+  safeLocalStorageSet(ANCHOR_HIGHLIGHT_STORAGE_KEY, enabled ? "1" : "0");
+}
+
+export function storeBranchStatsEnabled(enabled: boolean) {
+  safeLocalStorageSet(BRANCH_STATS_STORAGE_KEY, enabled ? "1" : "0");
+}
+
+export function resolveStoredCustomAnchorEnabled(): boolean {
+  return safeLocalStorageGet(CUSTOM_ANCHOR_STORAGE_KEY) === "1";
+}
+
+export function storeCustomAnchorEnabled(enabled: boolean) {
+  safeLocalStorageSet(CUSTOM_ANCHOR_STORAGE_KEY, enabled ? "1" : "0");
+}
+
+export function resolveStoredVolume(): number {
+  return parseStoredVolumePct(safeLocalStorageGet(VOLUME_STORAGE_KEY));
+}
+
+export function storeVolume(volume: number) {
+  safeLocalStorageSet(VOLUME_STORAGE_KEY, String(volume));
+}

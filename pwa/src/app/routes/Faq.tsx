@@ -1,127 +1,104 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  clearAllAnalysisCache,
-  getAnalysisCacheBytes,
-} from "@/core/infrastructure/cache/analysisCache";
+import type { ReactNode } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { SocialLinks } from "@forever-jukebox/shared/ui/SocialLinks";
 
-function formatMegabytes(bytes: number) {
-  const mb = Math.max(0, bytes) / (1024 * 1024);
-  const rounded = mb.toFixed(1);
-  return rounded.endsWith(".0") ? rounded.slice(0, -2) : rounded;
+// Sharing a name makes the browser keep one FAQ section open at a time.
+function FaqItem({
+  title,
+  open,
+  children,
+}: {
+  title: string;
+  open?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details name="faq" open={open}>
+      <summary>
+        <h2>{title}</h2>
+      </summary>
+      {children}
+    </details>
+  );
 }
 
 export function Faq() {
-  const [usageBytes, setUsageBytes] = useState(0);
-  const [isLoadingUsage, setIsLoadingUsage] = useState(true);
-  const [isClearing, setIsClearing] = useState(false);
-  const [cacheMessage, setCacheMessage] = useState<string | null>(null);
-
-  const usageMb = useMemo(() => formatMegabytes(usageBytes), [usageBytes]);
-
-  const refreshUsage = useCallback(async () => {
-    setIsLoadingUsage(true);
-    try {
-      const bytes = await getAnalysisCacheBytes();
-      setUsageBytes(bytes);
-    } catch (err) {
-      console.warn(`Failed to load cache usage: ${String(err)}`);
-      setUsageBytes(0);
-    } finally {
-      setIsLoadingUsage(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshUsage();
-  }, [refreshUsage]);
-
-  const onClearCache = useCallback(async () => {
-    setIsClearing(true);
-    setCacheMessage(null);
-    try {
-      await clearAllAnalysisCache();
-      await refreshUsage();
-    } catch (err) {
-      console.warn(`Failed to clear analysis cache: ${String(err)}`);
-      setCacheMessage("Unable to clear analysis cache.");
-    } finally {
-      setIsClearing(false);
-    }
-  }, [refreshUsage]);
-
+  const { t } = useTranslation();
   return (
     <section className="panel panel--faq">
-      <h1>FAQ</h1>
+      <h1>{t("common.faq")}</h1>
       <div className="faq">
-        <h2>What is The Forever Jukebox?</h2>
-        <p>
-          The Forever Jukebox is an open-source modernization of Paul Lamere’s{" "}
-          <a
-            href="https://musicmachinery.com/2012/11/12/the-infinite-jukebox/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Infinite Jukebox
-          </a>{" "}
-          and{" "}
-          <a
-            href="https://musicmachinery.com/2014/03/18/how-the-autocanonizer-works/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Autocanonizer
-          </a>{" "}
-          — rebuilt from the ground up by{" "}
-          <a href="https://creighton.dev" target="_blank" rel="noreferrer">
-            Creighton Linza
-          </a>
-          . It generates a forever-evolving version of any song.
-        </p>
-
-        <h2>How does it work?</h2>
-        <p>
-          The app analyzes your provided audio to estimate beats, segments, and
-          related features. Those features drive beat-synchronous playback. On
-          each beat, the player may jump to a different, sonically similar point
-          based on timbre, loudness, segment duration, and beat position. The
-          visualization maps the possible jump paths.
-          <br />
-          <br />
-          The full source code is available in the{" "}
-          <a
-            href="https://github.com/creightonlinza/forever-jukebox/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            forever-jukebox
-          </a>{" "}
-          repository.
-        </p>
-
-        <h2>How can I tune the Jukebox?</h2>
-        <ul>
-          <li>
-            Open the Tune panel to adjust thresholds and branch probability.
-          </li>
-          <li>Use the checkboxes to allow or restrict certain branch types.</li>
-          <li>Select a branch in the visualization and delete it.</li>
-        </ul>
-
-        <h2>Where is analysis stored?</h2>
-        <p>
-          Analysis is stored locally in your browser. You can clear individual
-          track analysis on the Home screen, or all cached analysis by clicking
-          the button below:
-        </p>
-        <button
-          className="tab-btn"
-          type="button"
-          disabled={isClearing || isLoadingUsage || usageBytes <= 0}
-          onClick={onClearCache}
-        >
-          {isClearing ? "Clearing..." : `Clear ${usageMb}MB`}
-        </button>
-        {cacheMessage ? <p>{cacheMessage}</p> : null}
+        <SocialLinks
+          className="faq-socials"
+          labels={{
+            community: t("faq.communityLinks"),
+            reddit: t("faq.reddit"),
+            discord: t("faq.discord"),
+            github: t("faq.github"),
+          }}
+        />
+        <FaqItem title={t("faq.whatTitle")} open>
+          <p>
+            <Trans
+              i18nKey="faq.whatBody"
+              components={{
+                infinite: <a href="https://musicmachinery.com/2012/11/12/the-infinite-jukebox/" target="_blank" rel="noreferrer">Infinite Jukebox</a>,
+                canon: <a href="https://musicmachinery.com/2014/03/18/how-the-autocanonizer-works/" target="_blank" rel="noreferrer">Autocanonizer</a>,
+                author: <a href="https://creighton.dev" target="_blank" rel="noreferrer">Creighton Linza</a>,
+              }}
+            />
+          </p>
+          <p>
+            <Trans
+              i18nKey="faq.playModesBody"
+              components={{
+                wub: <a href="https://github.com/psobot/wub-machine" target="_blank" rel="noreferrer">Wub Machine</a>,
+              }}
+            />
+          </p>
+        </FaqItem>
+        <FaqItem title={t("faq.howTitle")}>
+          <p>{t("faq.howBody")}</p>
+          <p>
+            <Trans
+              i18nKey="faq.sourceBody"
+              components={{
+                repo: <a href="https://github.com/creightonlinza/forever-jukebox/" target="_blank" rel="noreferrer">forever-jukebox</a>,
+              }}
+            />
+          </p>
+        </FaqItem>
+        <FaqItem title={t("faq.tuneTitle")}>
+          <ul>
+            <li>{t("faq.tuneOpen")}</li>
+            <li>{t("faq.tuneThreshold")}</li>
+            <li>{t("faq.tuneProbability")}</li>
+            <li>{t("faq.tuneTypes")}</li>
+            <li>{t("faq.tuneDelete")}</li>
+          </ul>
+        </FaqItem>
+        <FaqItem title={t("faq.modesTitle")}>
+          <ul>
+            <li><Trans i18nKey="faq.modesTempo" /></li>
+            <li><Trans i18nKey="faq.modes8d" /></li>
+            <li><Trans i18nKey="faq.modes8bit" /></li>
+            <li><Trans i18nKey="faq.modesLofi" /></li>
+            <li><Trans i18nKey="faq.modesUnderwater" /></li>
+            <li><Trans i18nKey="faq.modesCathedral" /></li>
+            <li>
+              <Trans
+                i18nKey="faq.modesRemix"
+                components={{
+                  remix: <a href="https://github.com/echonest/remix" target="_blank" rel="noreferrer">Echo Nest Remix</a>,
+                }}
+              />
+            </li>
+            <li><Trans i18nKey="faq.modesInstrumental" /></li>
+          </ul>
+        </FaqItem>
+        <FaqItem title={t("faq.storageTitle")}>
+          <p>{t("faq.storageBody")}</p>
+        </FaqItem>
       </div>
     </section>
   );

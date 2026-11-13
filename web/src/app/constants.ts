@@ -1,24 +1,20 @@
-export const ANALYSIS_POLL_INTERVAL_MS = 3000;
-export const LISTEN_TIMER_INTERVAL_MS = 200;
-export const TOP_SONGS_REFRESH_MS = 250;
-export const TOP_SONGS_LIMIT = 25;
-export const BEAT_SELECT_RADIUS_PX = 8;
-export const EDGE_SELECT_RADIUS_PX = 8;
-export const MAX_EDGE_SAMPLES = 300;
-export const MAX_EDGES_BASE = 2500;
-export const BEAT_AVOID_RADIUS_PX = 6;
-export const VISUALIZATION_LABELS = [
-  "Arc",
-  "Classic",
-  "Galaxy",
-  "Grid",
-  "Infinite",
-  "Wave",
-  "Spiral",
-  "Random",
-] as const;
+export {
+  BEAT_AVOID_RADIUS_PX,
+  BEAT_SELECT_RADIUS_PX,
+  DEFAULT_VISUALIZATION_INDEX,
+  EDGE_SELECT_RADIUS_PX,
+  MAX_EDGE_SAMPLES,
+  MAX_EDGES_BASE,
+  VISUALIZATION_LABELS,
+  visualizationSeparatesPairedEdges,
+} from "@forever-jukebox/shared/constants/visualization";
 
-export const DEFAULT_VISUALIZATION_INDEX = Math.max(
-  0,
-  VISUALIZATION_LABELS.indexOf("Classic")
-);
+export const ANALYSIS_POLL_INTERVAL_MS = 1000;
+export const LISTEN_TIMER_INTERVAL_MS = 200;
+export const TOP_SONGS_LIMIT = 25;
+
+// localStorage keys for the viz controls. Shared so the writer (playback-ui)
+// and the reader (VizTop's checkbox seed) can never drift apart.
+export const VIZ_STORAGE_KEY = "fj-viz";
+export const CANONIZER_FINISH_KEY = "fj-canonizer-finish";
+export const WUB_MACHINE_LOOP_KEY = "fj-wub-machine-loop";

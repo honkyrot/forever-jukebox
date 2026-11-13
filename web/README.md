@@ -1,8 +1,8 @@
-# The Forever Jukebox Web UI (TypeScript)
+# Forever Jukebox Web UI (TypeScript)
 
 ## Run
 ```bash
-npm install
+npm install   # once, at the repo root (npm workspaces)
 npm run dev
 ```
 
@@ -11,6 +11,20 @@ Lint:
 ```bash
 npm run lint
 ```
+
+## Tests
+
+```bash
+npm test              # unit tests (vitest)
+npm run test:e2e      # full-app Playwright e2e (boots ../dev.sh if needed)
+npm run test:e2e:ui   # interactive Playwright runner
+```
+
+The e2e suite drives the real UI against a real backend and discovers its
+fixture tracks from `/api/top` at runtime, so the backend needs at least
+three analyzed tracks (plus Spotify credentials for the search specs). See
+[`e2e/README.md`](./e2e/README.md) for running against a deployed
+environment and the opt-in YouTube ingest flow.
 
 Audio is decoded into a single in-memory buffer before playback to avoid stalls on jumps,
 and jumps are scheduled at beat boundaries.
@@ -21,7 +35,7 @@ Audio results are cached locally in IndexedDB when available; browsers may evict
 data under storage pressure.
 
 ## Extras audio modes
-- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `eight_bit`, `lofi`, `underwater`, `cathedral`, `cowbell`, `swing`.
+- Available modes: `off`, `nightcore`, `daycore`, `vaporwave`, `eight_d`, `eight_bit`, `lofi`, `underwater`, `cathedral`, `cowbell`, `swing`, `instrumental`.
 - UI labels/tooltips:
   - Normal
   - Nightcore (Fast & Bright)
@@ -33,10 +47,36 @@ data under storage pressure.
   - Underwater (Heavy Low-Pass)
   - Cathedral (Cathedral Reverb)
   - More Cowbell
-  - Swing (pre-renders a pitch-preserved swung buffer with Rubber Band WASM)
+  - Swing (pre-renders a pitch-preserved swung buffer with Rubber Band WASM; the render
+    is stored per track, see below)
+  - Instrumental (pre-renders a vocals-removed buffer; see below)
 - More Cowbell and Swing are beat-aware remix toys inspired by Echo Nest Remix:
   https://github.com/echonest/remix
 - Shared listen URLs can include `am=<mode>` (for example `am=nightcore`).
+
+### Instrumental mode
+`instrumental` removes vocals in the browser with the UVR MDX-Net Inst HQ 3 model on ONNX
+Runtime Web. The pipeline lives in `packages/shared/src/audio/instrumental*.ts` and is
+shared with the PWA.
+
+- Desktop browsers with WebGPU only. It is hidden on phones and tablets, where the model
+  exhausts memory, and without WebGPU, where it takes several times the track's length.
+- The worker and runtime load when the mode is selected. The model (67 MB) downloads from
+  Hugging Face on first use and is kept in Cache Storage (`fj-instrumental-models`).
+- A failed render shows a toast and returns to Normal mode.
+
+### Stored renders
+Instrumental and Swing renders are kept in Cache Storage (`fj-rendered-tracks`,
+`packages/shared/src/audio/renderedTrackCache.ts`) so a track is only rendered once.
+
+- Stored as WebM/Opus at 160 kbps (about 5 MB per 3-minute track), encoded with
+  WebCodecs. Browsers without that encoder store nothing and render each time. Entries
+  are decoded with `decodeAudioData`, the same path as streamed tracks.
+- A Swing render is tied to the beat grid and swing amount it was made from; a changed
+  analysis renders again.
+- A stored render counts as part of its track in the audio cache: toward the size in
+  Settings and the 500 MB cap, and it is removed with the track's cached audio,
+  including on eviction.
 
 ## Keyboard shortcuts
 - Space: play/pause while on the Listen tab.
@@ -46,6 +86,9 @@ data under storage pressure.
 - Left/Right: cycle selected branch.
 - A: set/reset the selected backward branch as the anchor branch.
 - Delete: remove a selected branch (click a branch in the visualization first).
+- Custom anchor editor (turn on in Extras, then "Set custom anchor"): drag the two dots
+  to any beats; Left/Right move the selected end by a beat, Shift+Left/Right by a bar;
+  Enter or Escape closes the editor. Shared as `ab=<from>-<to>` beat indexes; `ab=<id>` still pins a branch.
 
 ## Analysis format (inferred)
 This app expects a JSON object with top-level arrays matching the analysis schema:
@@ -93,7 +136,7 @@ use admin mode only on trusted instances and devices.
 - A "last branch point" is computed to avoid dead-ends; that beat always branches.
 
 ## Core components
-- `web/src/engine/analysis.ts` preprocesses quanta + overlapping segments.
-- `web/src/engine/graph.ts` builds the jump graph and branch thresholds.
-- `web/src/engine/JukeboxEngine.ts` runs playback + random branching.
-- `web/src/audio/BufferedAudioPlayer.ts` buffers audio and handles jumps.
+- `packages/shared/src/engine/analysis.ts` preprocesses quanta + overlapping segments.
+- `packages/shared/src/engine/graph.ts` builds the jump graph and branch thresholds.
+- `packages/shared/src/engine/JukeboxEngine.ts` runs playback + random branching.
+- `packages/shared/src/audio/BufferedAudioPlayer.ts` buffers audio and handles jumps.

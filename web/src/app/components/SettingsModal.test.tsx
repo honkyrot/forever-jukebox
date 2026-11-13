@@ -1,0 +1,312 @@
+import { Profiler } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { trackEvent } from "../analytics";
+import { setSleepTimer } from "../playback";
+import { useAppStore } from "../store";
+import { SettingsButton } from "./Hero";
+import { SettingsModal } from "./SettingsModal";
+
+vi.mock("../analytics", () => ({
+  trackEvent: vi.fn(),
+}));
+vi.mock("../cache", () => ({
+  getCachedAudioBytes: vi.fn(async () => 12.5 * 1024 * 1024),
+  clearCachedAudio: vi.fn(async () => {}),
+}));
+vi.mock("../playback", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../playback")>();
+  return { ...actual, setSleepTimer: vi.fn() };
+});
+
+const FIFTEEN_MIN = 15 * 60 * 1000;
+
+function select() {
+  return document.getElementById("sleep-timer-select") as HTMLSelectElement;
+}
+
+describe("SettingsModal", () => {
+  beforeEach(() => {
+    act(() => {
+      useAppStore.setState({
+        settingsModalOpen: false,
+        feedbackModalOpen: false,
+        theme: "dark",
+        sleepTimer: {
+          configuredDurationMs: null,
+          endTimeMs: null,
+          remainingMs: 0,
+        },
+      });
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the configured timer when opened", () => {
+    act(() => {
+      useAppStore.setState({
+        sleepTimer: {
+          configuredDurationMs: FIFTEEN_MIN,
+          endTimeMs: 1,
+          remainingMs: FIFTEEN_MIN,
+        },
+      });
+    });
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    expect(select().value).toBe(String(FIFTEEN_MIN));
+  });
+
+  it("resets the pending select when the configured timer changes externally while open", () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    expect(select().value).toBe("off");
+
+    // An external control sets the timer while this modal is open.
+    act(() => {
+      useAppStore.setState({
+        sleepTimer: {
+          configuredDurationMs: FIFTEEN_MIN,
+          endTimeMs: 1,
+          remainingMs: FIFTEEN_MIN,
+        },
+      });
+    });
+    expect(select().value).toBe(String(FIFTEEN_MIN));
+
+    // The timer expires: configured goes back to null, select resets to off.
+    act(() => {
+      useAppStore.setState({
+        sleepTimer: {
+          configuredDurationMs: null,
+          endTimeMs: null,
+          remainingMs: 0,
+        },
+      });
+    });
+    expect(select().value).toBe("off");
+  });
+
+  it("keeps an unsaved selection when only the countdown ticks", () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({
+        settingsModalOpen: true,
+        sleepTimer: {
+          configuredDurationMs: FIFTEEN_MIN,
+          endTimeMs: 1,
+          remainingMs: FIFTEEN_MIN,
+        },
+      });
+    });
+    // User picks a different option but hasn't pressed Set yet.
+    act(() => {
+      const node = select();
+      node.value = "off";
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(select().value).toBe("off");
+
+    // A countdown tick (only remainingMs changes) must not clobber the choice.
+    act(() => {
+      useAppStore.setState({
+        sleepTimer: {
+          configuredDurationMs: FIFTEEN_MIN,
+          endTimeMs: 1,
+          remainingMs: FIFTEEN_MIN - 1000,
+        },
+      });
+    });
+    expect(select().value).toBe("off");
+  });
+
+  it("does not re-render on countdown ticks while closed", () => {
+    let renders = 0;
+    render(
+      <Profiler id="sleep-timer" onRender={() => (renders += 1)}>
+        <SettingsModal />
+      </Profiler>,
+    );
+    // Configuring the timer is allowed to re-render once (configured changed).
+    act(() => {
+      useAppStore.setState({
+        sleepTimer: {
+          configuredDurationMs: FIFTEEN_MIN,
+          endTimeMs: 999,
+          remainingMs: FIFTEEN_MIN,
+        },
+      });
+    });
+    const afterConfigure = renders;
+
+    // Per-second ticks change only remainingMs; while closed this must not
+    // re-render (the regression: subscribing to the whole sleepTimer object).
+    for (const remainingMs of [FIFTEEN_MIN - 1000, FIFTEEN_MIN - 2000]) {
+      act(() => {
+        useAppStore.setState({
+          sleepTimer: { configuredDurationMs: FIFTEEN_MIN, endTimeMs: 999, remainingMs },
+        });
+      });
+    }
+    expect(renders).toBe(afterConfigure);
+  });
+
+  it("sets the chosen timer via the playback action", async () => {
+    (setSleepTimer as Mock).mockClear();
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.selectOptions(select(), String(FIFTEEN_MIN));
+    await userEvent.click(document.getElementById("sleep-timer-set")!);
+    expect(setSleepTimer).toHaveBeenCalledWith(FIFTEEN_MIN);
+    expect(useAppStore.getState().settingsModalOpen).toBe(false);
+  });
+
+  it("associates the timer label with the select", () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    expect(screen.getByLabelText("Timer")).toBe(select());
+  });
+
+  it("applies theme changes immediately", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(
+      document.querySelector<HTMLInputElement>(
+        'input[name="settings-theme"][value="light"]',
+      )!,
+    );
+    expect(useAppStore.getState().theme).toBe("light");
+  });
+
+  it("closes from the backdrop", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(document.getElementById("settings-modal")!);
+    expect(useAppStore.getState().settingsModalOpen).toBe(false);
+  });
+
+  it("discards an uncommitted timer choice when closed", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.selectOptions(select(), String(FIFTEEN_MIN));
+    await userEvent.click(document.getElementById("settings-close")!);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    expect(select().value).toBe("off");
+  });
+  it("reports the chosen sleep timer duration in minutes", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.selectOptions(select(), String(FIFTEEN_MIN));
+    await userEvent.click(document.getElementById("sleep-timer-set")!);
+
+    expect(trackEvent).toHaveBeenCalledWith("sleep_timer", {
+      duration_min: "15",
+    });
+  });
+
+  it("reports a cleared sleep timer as off", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(document.getElementById("sleep-timer-set")!);
+
+    expect(trackEvent).toHaveBeenCalledWith("sleep_timer", {
+      duration_min: "off",
+    });
+  });
+
+  it("reports the selected theme", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(
+      document.querySelector<HTMLInputElement>(
+        'input[name="settings-theme"][value="light"]',
+      )!,
+    );
+
+    expect(trackEvent).toHaveBeenCalledWith("theme", { theme: "light" });
+  });
+
+  it("swaps settings for the feedback dialog from the bug button", async () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(document.getElementById("settings-report-bug")!);
+
+    const state = useAppStore.getState();
+    expect(state.settingsModalOpen).toBe(false);
+    expect(state.feedbackModalOpen).toBe(true);
+  });
+
+  it("focuses Close, not the bug button, when opened", () => {
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    expect(document.activeElement).toBe(
+      document.getElementById("settings-close"),
+    );
+  });
+
+  it("hands focus to the settings gear before opening the feedback dialog", async () => {
+    render(
+      <>
+        <SettingsButton id="settings-open" />
+        <SettingsModal />
+      </>,
+    );
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    await userEvent.click(document.getElementById("settings-report-bug")!);
+
+    // The feedback modal captures this element as its focus-restore target,
+    // so it has to be one that outlives the settings modal.
+    expect(document.activeElement).toBe(
+      document.getElementById("settings-open"),
+    );
+  });
+
+  it("shows the cached-audio size and clears it", async () => {
+    const cache = await import("../cache");
+    render(<SettingsModal />);
+    act(() => {
+      useAppStore.setState({ settingsModalOpen: true });
+    });
+    const button = await screen.findByText("Clear 12.5MB");
+    await userEvent.click(button);
+    expect(cache.clearCachedAudio).toHaveBeenCalled();
+    await waitFor(() => {
+      const toasts = useAppStore.getState().toasts;
+      expect(toasts[toasts.length - 1]?.message).toBe(
+        "Cached audio cleared.",
+      );
+    });
+  });
+});

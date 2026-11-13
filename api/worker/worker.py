@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import multiprocessing
 from datetime import datetime, timezone
@@ -18,12 +21,14 @@ from api.db import (
     set_job_progress,
     set_job_status,
 )
-from api.routes.jobs_runtime import failure_code_for, log_event
-from api.utils import abs_storage_path, get_logger
+from api.routes.jobs_runtime import failure_code_for, log_event, maybe_notify_youtube_failures
+from api.storage import S3Store, StorageError, backup_databases, discard_job_files, get_store
+from api.utils import get_logger
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 STORAGE_ROOT = (APP_ROOT / "storage").resolve()
 DB_PATH = STORAGE_ROOT / "jobs.db"
+FAVORITES_DB_PATH = STORAGE_ROOT / "favorites.db"
 
 ENGINE_REPO = Path(os.environ.get("ENGINE_REPO", ""))
 
@@ -41,6 +46,13 @@ def _env_int(key: str, default: int) -> int:
 WORKER_COUNT = _env_int("WORKER_COUNT", 1)
 
 API_PROGRESS_END = 100
+# Back-off before claiming more work after the bucket fails, so an outage doesn't spin the queue.
+STORAGE_RETRY_DELAY_S = 30.0
+# Storage errors a job may hit before it fails; counted per worker process, reset on restart.
+STORAGE_RETRY_LIMIT = 5
+# How often a running machine checks whether its database backups are due.
+BACKUP_CHECK_INTERVAL_S = 3600.0
+_storage_failures: dict[str, int] = {}
 logger = get_logger("foreverjukebox.worker")
 
 
@@ -70,20 +82,38 @@ def _worker_env() -> dict[str, str]:
     return env
 
 
-def run_job(job_id: str, input_path: str, output_path: str) -> None:
+def run_job(
+    job_id: str,
+    title: str | None = None,
+    artist: str | None = None,
+) -> float | None:
+    """Analyse the job's audio and store the result; returns the track duration if known."""
     if not ENGINE_REPO.exists():
         raise RuntimeError("ENGINE_REPO is not set or missing")
 
     env = _worker_env()
+    store = get_store(STORAGE_ROOT)
+    with store.local_audio(job_id) as input_abs:
+        if input_abs is None:
+            raise JobFailure("Audio file is missing")
+        output_abs = store.analysis_output_path(job_id)
+        output_abs.parent.mkdir(parents=True, exist_ok=True)
+        _run_engine(job_id, input_abs, output_abs, env, title, artist)
+    if not output_abs.is_file():
+        return None
+    duration_s = _track_duration_seconds(output_abs)
+    store.save_analysis(job_id, compress_analysis(output_abs))
+    return duration_s
 
-    input_abs = abs_storage_path(STORAGE_ROOT, input_path)
-    if not input_abs.exists():
-        candidates = sorted((STORAGE_ROOT / "audio").glob(f"{job_id}.*"))
-        if candidates:
-            input_abs = candidates[0]
-    output_abs = abs_storage_path(STORAGE_ROOT, output_path)
-    output_abs.parent.mkdir(parents=True, exist_ok=True)
 
+def _run_engine(
+    job_id: str,
+    input_abs: Path,
+    output_abs: Path,
+    env: dict[str, str],
+    title: str | None,
+    artist: str | None,
+) -> None:
     def map_engine_progress(value: int) -> int:
         return max(0, min(API_PROGRESS_END, int(value)))
 
@@ -95,6 +125,10 @@ def run_job(job_id: str, input_path: str, output_path: str) -> None:
         "-o",
         str(output_abs),
     ]
+    if title:
+        cmd.extend(["--title", title])
+    if artist:
+        cmd.extend(["--artist", artist])
 
     proc = subprocess.Popen(
         cmd,
@@ -125,25 +159,15 @@ def run_job(job_id: str, input_path: str, output_path: str) -> None:
         raise JobFailure(message, output_lines)
 
 
-def apply_track_metadata(output_path: str, title: str | None, artist: str | None) -> None:
-    if not title and not artist:
-        return
-    result_path = abs_storage_path(STORAGE_ROOT, output_path)
-    if not result_path.exists():
-        return
-    try:
-        data = json.loads(result_path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    track = data.get("track") if isinstance(data, dict) else None
-    if not isinstance(track, dict):
-        track = {}
-        data["track"] = track
-    if title:
-        track["title"] = title
-    if artist:
-        track["artist"] = artist
-    result_path.write_text(json.dumps(data), encoding="utf-8")
+def compress_analysis(plain_path: Path) -> Path:
+    """Replace a plain analysis JSON file with its gzipped sibling."""
+    gz_path = plain_path.with_name(plain_path.name + ".gz")
+    tmp_path = gz_path.with_name(gz_path.name + ".tmp")
+    with plain_path.open("rb") as src, gzip.open(tmp_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    tmp_path.replace(gz_path)
+    plain_path.unlink()
+    return gz_path
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -170,12 +194,9 @@ def _completion_elapsed_ms(job) -> int | None:
     )
 
 
-def _extract_track_duration_seconds(output_path: str) -> float | None:
-    result_path = abs_storage_path(STORAGE_ROOT, output_path)
-    if not result_path.exists():
-        return None
+def _track_duration_seconds(plain_path: Path) -> float | None:
     try:
-        data = json.loads(result_path.read_text(encoding="utf-8"))
+        data = json.loads(plain_path.read_text(encoding="utf-8"))
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -191,7 +212,7 @@ def _extract_track_duration_seconds(output_path: str) -> float | None:
     return None
 
 
-def cleanup_failed_job(job, error: Exception) -> None:
+def cleanup_failed_job(job, error: Exception, discard_files: bool = True) -> None:
     log_dir = STORAGE_ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{job.id}.log"
@@ -204,14 +225,8 @@ def cleanup_failed_job(job, error: Exception) -> None:
             log_file.write("\n--- Engine output ---\n")
             for line in output_lines:
                 log_file.write(line)
-    if job.input_path:
-        input_path = abs_storage_path(STORAGE_ROOT, job.input_path)
-        if input_path.is_file():
-            input_path.unlink()
-    if job.output_path:
-        output_path = abs_storage_path(STORAGE_ROOT, job.output_path)
-        if output_path.is_file():
-            output_path.unlink()
+    if discard_files:
+        discard_job_files(get_store(STORAGE_ROOT), job.id)
     set_job_status(DB_PATH, job.id, "failed", str(error))
     log_event(
         "job_failed",
@@ -223,6 +238,19 @@ def cleanup_failed_job(job, error: Exception) -> None:
     logger.info("Job %s failed: %s (log: %s)", job.id, error, log_path)
 
 
+def handle_storage_error(job, error: StorageError) -> None:
+    """Requeue the job with its stored audio; fail it, keeping the audio, after repeated errors."""
+    attempts = _storage_failures.pop(job.id, 0) + 1
+    if attempts >= STORAGE_RETRY_LIMIT:
+        cleanup_failed_job(job, error, discard_files=False)
+        return
+    _storage_failures[job.id] = attempts
+    logger.warning("Job %s requeued after storage error (%s): %s", job.id, attempts, error)
+    set_job_progress(DB_PATH, job.id, 25)
+    set_job_status(DB_PATH, job.id, "queued", None)
+    log_event("job_requeued", job_id=job.id, source=job.source_provider or "unknown")
+
+
 def run_worker_loop() -> None:
     init_db(DB_PATH)
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -231,27 +259,58 @@ def run_worker_loop() -> None:
     (STORAGE_ROOT / "logs").mkdir(parents=True, exist_ok=True)
 
     while True:
+        maybe_notify_youtube_failures(DB_PATH)
         job = claim_next_job(DB_PATH)
         if not job:
             time.sleep(1.0)
             continue
         try:
-            run_job(job.id, job.input_path, job.output_path)
-            apply_track_metadata(job.output_path, job.track_title, job.track_artist)
+            duration_s = run_job(job.id, job.track_title, job.track_artist)
             set_job_progress(DB_PATH, job.id, 100)
+        except StorageError as exc:
+            handle_storage_error(job, exc)
+            time.sleep(STORAGE_RETRY_DELAY_S)
+            continue
         except Exception as exc:
+            _storage_failures.pop(job.id, None)
             cleanup_failed_job(job, exc)
             continue
+        _storage_failures.pop(job.id, None)
         set_job_status(DB_PATH, job.id, "complete", None)
         log_event(
             "job_completed",
             job_id=job.id,
             source=job.source_provider or "unknown",
-            duration_s=_extract_track_duration_seconds(job.output_path),
+            duration_s=duration_s,
             elapsed_ms=_completion_elapsed_ms(job),
         )
 
+
+def run_backup_checks(store: S3Store) -> None:
+    """Back up the databases whenever a check finds them due; failures retry at the next check."""
+    while True:
+        try:
+            for name in backup_databases(store, (DB_PATH, FAVORITES_DB_PATH)):
+                logger.info("Backed up %s to the bucket", name)
+        except Exception:
+            logger.warning("Database backup failed", exc_info=True)
+        time.sleep(BACKUP_CHECK_INTERVAL_S)
+
+
+def start_backup_thread() -> None:
+    """Database backups only run with bucket storage; local storage keeps none.
+
+    Start it after forking worker processes, so no child copies a thread holding a lock.
+    """
+    store = get_store(STORAGE_ROOT)
+    if isinstance(store, S3Store):
+        threading.Thread(
+            target=run_backup_checks, args=(store,), name="db-backup", daemon=True
+        ).start()
+
+
 def main() -> None:
+    get_store(STORAGE_ROOT)
     init_db(DB_PATH)
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     (STORAGE_ROOT / "audio").mkdir(parents=True, exist_ok=True)
@@ -262,6 +321,7 @@ def main() -> None:
         logger.info("Recovered %s stalled processing job(s) back to queue", recovered_jobs)
 
     if WORKER_COUNT <= 1:
+        start_backup_thread()
         run_worker_loop()
         return
 
@@ -271,6 +331,7 @@ def main() -> None:
         proc = multiprocessing.Process(target=run_worker_loop, name=f"worker-{idx + 1}")
         proc.start()
         procs.append(proc)
+    start_backup_thread()
 
     try:
         for proc in procs:

@@ -13,24 +13,13 @@ let playbackModule: typeof import("./playback");
 
 function createContext(): AppContext {
   return {
-    elements: {
-      canonizerFinish: { checked: false, addEventListener: vi.fn() },
-    } as unknown as AppContext["elements"],
     engine: {} as unknown as AppContext["engine"],
     player: {} as unknown as AppContext["player"],
     autocanonizer: {} as unknown as AppContext["autocanonizer"],
+    wubmachine: {} as unknown as AppContext["wubmachine"],
     jukebox: { refresh: vi.fn() } as unknown as AppContext["jukebox"],
     cowbellOverlay: {} as unknown as AppContext["cowbellOverlay"],
     defaultConfig: {} as unknown as AppContext["defaultConfig"],
-    state: {
-      playMode: "jukebox",
-      lastTrackId: null,
-      lastJobId: null,
-      audioLoaded: false,
-      analysisLoaded: false,
-      audioLoadInFlight: false,
-      isRunning: false,
-    } as unknown as AppContext["state"],
   };
 }
 
@@ -40,7 +29,7 @@ function createDeps(): PlaybackDeps {
     navigateToTab: vi.fn(),
     updateTrackUrl: vi.fn(),
     setAnalysisStatus: vi.fn(),
-    setLoadingProgress: vi.fn(),
+    setLoadingStep: vi.fn(),
   };
 }
 
@@ -49,15 +38,6 @@ describe("routing", () => {
     setWindowUrl("http://localhost/");
     playbackModule = await import("./playback");
     vi.clearAllMocks();
-  });
-
-  it("handles legacy track param", async () => {
-    setWindowUrl("http://localhost/?track=abc123");
-    const context = createContext();
-    const deps = createDeps();
-    await handleRouteChange(context, deps, "/");
-    expect(deps.updateTrackUrl).toHaveBeenCalledWith("abc123", true);
-    expect(playbackModule.loadTrackById).toHaveBeenCalled();
   });
 
   it("loads youtube id from /listen and preserves tuning params", async () => {
@@ -73,7 +53,7 @@ describe("routing", () => {
       context,
       deps,
       "abc123def45",
-      { preserveUrlTuning: true },
+      { preservePlaylist: true, preserveUrlTuning: true },
     );
   });
 
@@ -87,7 +67,7 @@ describe("routing", () => {
       context,
       deps,
       jobId,
-      { preserveUrlTuning: false },
+      { preservePlaylist: true, preserveUrlTuning: false },
     );
   });
 

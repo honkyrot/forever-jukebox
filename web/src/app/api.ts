@@ -1,4 +1,5 @@
-import type { TrackMeta } from "../engine/types";
+import { readWithProgress } from "@forever-jukebox/shared/net/readWithProgress";
+import type { TrackMeta } from "@forever-jukebox/shared/types";
 import type { FavoriteTrack } from "./favorites";
 import { maxFavorites } from "./favorites";
 
@@ -49,6 +50,7 @@ export type SpotifySearchItem = {
   name?: string;
   artist?: string;
   duration?: number;
+  image?: string | null;
 };
 
 export type YoutubeSearchItem = {
@@ -63,15 +65,24 @@ export type TopSongItem = {
   artist?: string;
   source_id?: string;
   source_provider?: string;
-  play_count?: number;
 };
 
-export type RecentSongItem = TopSongItem;
+export type TrackReportReason = "wrong_track" | "bad_audio" | "other";
+
+export type ReportedTrackItem = {
+  id: string;
+  title?: string | null;
+  artist?: string | null;
+  source_provider?: string | null;
+  reason: string;
+  reported_at: string;
+};
 
 export type AppConfig = {
   allow_user_upload: boolean;
   allow_user_url: boolean;
   allow_favorites_sync?: boolean;
+  allow_track_reports?: boolean;
   max_upload_size?: number | null;
   allowed_upload_exts?: string[] | null;
   max_track_length?: number | null;
@@ -138,10 +149,12 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
   }
   const status = typeof data.status === "string" ? data.status : null;
   const id = typeof data.id === "string" ? data.id : undefined;
-  const sourceId =
-    typeof data.source_id === "string"
-      ? data.source_id
-      : (typeof data.youtube_id === "string" ? data.youtube_id : undefined);
+  let sourceId: string | undefined;
+  if (typeof data.source_id === "string") {
+    sourceId = data.source_id;
+  } else if (typeof data.youtube_id === "string") {
+    sourceId = data.youtube_id;
+  }
   const sourceProvider =
     typeof data.source_provider === "string" ? data.source_provider : undefined;
   const createdAt =
@@ -201,12 +214,20 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
   return null;
 }
 
+// The API's 404 detail for a job id it has no row for.
+const JOB_NOT_FOUND_DETAIL = "Job not found";
+
+// Null only when the API says the job does not exist; any other 404 (a proxy or a
+// missing route) throws like other failed requests.
 export async function fetchAnalysis(jobId: string, signal?: AbortSignal) {
   const response = await fetch(`/api/analysis/${encodeURIComponent(jobId)}`, {
     signal,
   });
   if (response.status === 404) {
-    return null;
+    const data: unknown = await response.json().catch(() => null);
+    if (extractApiError(data)?.message === JOB_NOT_FOUND_DETAIL) {
+      return null;
+    }
   }
   if (!response.ok) {
     const error = new Error(`Request failed (${response.status})`);
@@ -217,7 +238,18 @@ export async function fetchAnalysis(jobId: string, signal?: AbortSignal) {
   return parseAnalysisResponse(data);
 }
 
-export async function fetchAudio(jobId: string, signal?: AbortSignal) {
+export async function retryJob(jobId: string) {
+  const data = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+  });
+  return parseAnalysisResponse(data);
+}
+
+export async function fetchAudio(
+  jobId: string,
+  signal?: AbortSignal,
+  onProgress?: (fraction: number) => void,
+) {
   const response = await fetch(`/api/audio/${encodeURIComponent(jobId)}`, {
     signal,
   });
@@ -226,7 +258,7 @@ export async function fetchAudio(jobId: string, signal?: AbortSignal) {
     (error as Error & { status?: number }).status = response.status;
     throw error;
   }
-  return response.arrayBuffer();
+  return readWithProgress(response, onProgress);
 }
 
 export async function startYoutubeAnalysis(payload: {
@@ -278,12 +310,8 @@ export async function searchYoutube(query: string, duration: number) {
   return Array.isArray(data?.items) ? (data.items as YoutubeSearchItem[]) : [];
 }
 
-export async function fetchTopSongs(limit: number, sortBy?: string, offset: number = 0) {
-  let url = `/api/top?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`;
-  if (sortBy) {
-    url += `&sort_by=${encodeURIComponent(sortBy)}`;
-  }
-  const data = await fetchJson(url);
+export async function fetchTopSongs(limit: number) {
+  const data = await fetchJson(`/api/top?limit=${encodeURIComponent(limit)}`);
   return Array.isArray(data?.items) ? (data.items as TopSongItem[]) : [];
 }
 
@@ -294,7 +322,7 @@ export async function fetchTrendingSongs() {
 
 export async function fetchRecentSongs(limit: number) {
   const data = await fetchJson(`/api/recent?limit=${encodeURIComponent(limit)}`);
-  return Array.isArray(data?.items) ? (data.items as RecentSongItem[]) : [];
+  return Array.isArray(data?.items) ? (data.items as TopSongItem[]) : [];
 }
 
 export async function fetchAppConfig(): Promise<AppConfig> {
@@ -322,6 +350,28 @@ export async function deleteJob(jobId: string, adminKey?: string | null) {
     (error as Error & { status?: number }).status = response.status;
     throw error;
   }
+}
+
+export async function reportTrack(jobId: string, reason: TrackReportReason) {
+  await fetchJson(`/api/reports/${encodeURIComponent(jobId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function fetchReportedTracks(adminKey: string) {
+  const data = await fetchJson("/api/reports", {
+    headers: { "X-Admin-Key": adminKey },
+  });
+  return Array.isArray(data?.items) ? (data.items as ReportedTrackItem[]) : [];
+}
+
+export async function dismissTrackReport(jobId: string, adminKey: string) {
+  await fetchJson(`/api/reports/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+    headers: { "X-Admin-Key": adminKey },
+  });
 }
 
 export async function fetchJobBySource(

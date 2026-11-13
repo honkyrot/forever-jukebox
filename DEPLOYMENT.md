@@ -61,3 +61,58 @@ Notes:
 - Do not delete `jobs.db-journal`, `jobs.db-wal`, or `jobs.db-shm` while the app is
   running. Stop the API and workers first so SQLite can finish recovery/checkpointing.
 - Dependency updates (`yt-dlp`, `madmom-beats-lite`, `deno`) happen during image build/deploy; container startup performs no network updates.
+- `yt-dlp` tracks the nightly channel, so the image carries whichever nightly was current when the
+  pip layer was built. That layer is keyed on `api/requirements.txt`, which does not change between
+  nightlies, so use `fly deploy --no-cache` (or `docker build --no-cache`) to pull a newer one.
+- The container runs a [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
+  server on `127.0.0.1:4416` so yt-dlp can fetch YouTube PO tokens without a browser;
+  the yt-dlp plugin auto-detects it. The pip plugin pin in `api/requirements.txt` and
+  `BGUTIL_POT_VERSION` in the `Dockerfile` must be bumped together. Local dev needs no
+  setup (yt-dlp degrades gracefully without the server); to get tokens locally, run
+  `docker run --rm -d -p 127.0.0.1:4416:4416 brainicism/bgutil-ytdlp-pot-provider:2.0.0`.
+
+## Optional: S3-compatible object storage
+
+By default audio and analysis live under `api/storage/` next to the SQLite databases and
+logs. They can live in a private S3-compatible bucket instead, so local disk only holds the
+databases and logs. Nothing changes unless `STORAGE_BACKEND=s3` is set.
+
+The bucket must be unversioned (deletes are plain deletes and only free space without old
+versions) and support virtual-hosted-style URLs, presigned GET URLs and CORS. The app reads
+these settings, which are ignored until `STORAGE_BACKEND=s3` is set:
+
+- `BUCKET_NAME`
+- `AWS_ENDPOINT_URL_S3`: the provider's S3 endpoint
+- `AWS_REGION`: optional, defaults to `auto`
+- `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+
+1. Create a bucket and set those values. On Fly.io, `fly storage create -a <app> -n <bucket>`
+   creates a [Tigris](https://fly.io/docs/tigris/) bucket and sets all five as app secrets;
+   leave Tigris snapshots off.
+2. Allow browsers to read presigned audio URLs (the web player fetches `/api/audio/{id}`,
+   which redirects to the bucket):
+
+   ```bash
+   aws s3api put-bucket-cors --endpoint-url "$AWS_ENDPOINT_URL_S3" --bucket "$BUCKET_NAME" \
+     --cors-configuration '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","HEAD"],"AllowedHeaders":["*"],"MaxAgeSeconds":3000}]}'
+   ```
+
+3. Copy existing files with the app's credentials, from `/app/api` on the machine:
+   `python scripts/sync_storage.py push`, then `... verify`. Re-running `push` uploads only
+   new files; `prune --apply` removes objects for jobs deleted since an earlier push, and
+   `verify --repair` re-uploads anything missing or mismatched.
+4. Set `STORAGE_BACKEND=s3` (on Fly.io, `fly secrets set STORAGE_BACKEND=s3`).
+5. Once the app runs on the bucket and `verify` is clean, the local copies under
+   `api/storage/audio/` and `api/storage/analysis/` are unused. Delete them, or move the
+   databases and `logs/` to a new, smaller volume, to reclaim the space.
+
+With S3 storage enabled, `/api/audio/{id}` answers with a 307 redirect to a 10-minute
+presigned URL, analysis is still returned inline by `/api/analysis/{id}`, and downloads in
+progress use a scratch directory on the machine's own disk. To move back to local storage, run
+`sync_storage.py pull` and unset `STORAGE_BACKEND`.
+
+The worker also keeps a gzipped snapshot of `jobs.db` and `favorites.db` in the bucket, at
+`backups/<name>.gz`. While the machine runs it checks hourly and replaces a snapshot once it is a
+day old, so the bucket only holds the latest copy; mirror the bucket (for example with
+`rclone sync --backup-dir`) to keep older ones. To restore, stop the app, gunzip the snapshot
+over the database file, and remove any `-wal`/`-shm` files beside it.

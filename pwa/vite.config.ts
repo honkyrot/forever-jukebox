@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import pkg from "./package.json";
 import { fileURLToPath } from "node:url";
+import en from "./src/app/locales/en.json";
 
 export default defineConfig(({ command }) => {
   const isDev = command === "serve";
@@ -30,6 +31,14 @@ export default defineConfig(({ command }) => {
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
+    optimizeDeps: {
+      // Only imported inside the essentia worker; pre-bundle them so the dev
+      // server doesn't discover them mid-analysis and reload the page.
+      include: [
+        "essentia.js/dist/essentia.js-core.es.js",
+        "essentia.js/dist/essentia-wasm.es.js",
+      ],
+    },
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -45,18 +54,23 @@ export default defineConfig(({ command }) => {
       react(),
       VitePWA({
         injectRegister: null,
-        // Avoid forced app reloads during long-running analysis/playback.
-        // Updates are applied on next launch/reload instead of mid-session.
-        registerType: "prompt",
-        includeAssets: ["favicon.png", "favicon-512.png", "worker.js", "madmom/**"],
+        // "autoUpdate" makes the new service worker skipWaiting + clientsClaim,
+        // so it activates promptly instead of getting stuck in the waiting state
+        // (which previously left installed clients frozen on a stale version).
+        // Because we register manually in main.tsx with no controllerchange
+        // handler, the page is NOT force-reloaded mid-session: the refreshed
+        // precache surfaces on the next navigation/launch, preserving
+        // long-running analysis/playback.
+        registerType: "autoUpdate",
+        includeAssets: ["favicon.png", "favicon-512.png", "worker.js", "madmom/**", "badges/**"],
         devOptions: {
           enabled: command === "serve",
           suppressWarnings: command === "serve",
         },
         manifest: {
-          name: "The Forever Jukebox",
-          short_name: "The Forever Jukebox",
-          description: "Offline-first Forever Jukebox for local audio.",
+          name: en.common.appName,
+          short_name: en.common.appName,
+          description: en.manifest.description,
           id: appBase,
           start_url: appBase,
           scope: appBase,
@@ -83,8 +97,21 @@ export default defineConfig(({ command }) => {
             ? {}
             : {
                 maximumFileSizeToCacheInBytes: 40 * 1024 * 1024,
+                cleanupOutdatedCaches: true,
                 globPatterns: ["**/*.{js,css,html,wasm,json,webmanifest,png,svg,ico,ttf,woff,woff2,wav}"],
+                // The ONNX runtime only serves the desktop-only Instrumental
+                // mode, so it is fetched on first use rather than at install.
+                globIgnores: ["**/ort-wasm-*.wasm"],
                 runtimeCaching: [
+                  {
+                    urlPattern: ({ url }) => /\/ort-wasm-[^/]*\.wasm$/.test(url.pathname),
+                    handler: "CacheFirst",
+                    // One runtime build at a time; an upgrade evicts the old file.
+                    options: {
+                      cacheName: "fj-onnx-runtime",
+                      expiration: { maxEntries: 1 },
+                    },
+                  },
                   {
                     urlPattern: ({ request }) =>
                       request.mode === "navigate" ||

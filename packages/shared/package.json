@@ -1,0 +1,47 @@
+{
+  "name": "@forever-jukebox/shared",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/engine/index.ts",
+    "./types": "./src/engine/types.ts",
+    "./audio/*": "./src/audio/*.ts",
+    "./autocanonizer/*": "./src/autocanonizer/*.ts",
+    "./wubmachine/*": "./src/wubmachine/*.ts",
+    "./viz/*": "./src/viz/*.ts",
+    "./background": "./src/background/backgroundTimer.ts",
+    "./constants/visualization": "./src/constants/visualization.ts",
+    "./ui/toastQueue": "./src/ui/toastQueue.ts",
+    "./ui/CustomAnchorEditor": "./src/ui/CustomAnchorEditor.tsx",
+    "./ui/SocialLinks": "./src/ui/SocialLinks.tsx",
+    "./ui/LoadingProgress": "./src/ui/LoadingProgress.tsx",
+    "./ui/jobProgress": "./src/ui/jobProgress.ts",
+    "./net/readWithProgress": "./src/net/readWithProgress.ts",
+    "./ui/useModalKeyboard": "./src/ui/useModalKeyboard.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"vitest.config.ts\"",
+    "fixtures:manifest": "node scripts/update-parity-manifest.mjs"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.30.0",
+    "rubberband-wasm": "^3.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/react": "^18.3.31",
+    "eslint": "^9.36.0",
+    "globals": "^16.4.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.44.1",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.3"
+  }
+}

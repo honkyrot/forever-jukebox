@@ -7,23 +7,33 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
+import time
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from ..db import (
-    delete_job,
+    claim_notify_state,
+    first_youtube_success_after,
     get_job,
+    get_notify_state,
+    latest_youtube_success,
+    restart_stalled_download,
     set_job_progress,
     set_job_status,
-    update_job_input_path,
+    set_notify_state,
     update_job_track_metadata,
+    youtube_jobs_finished_between,
 )
 from ..env import env_positive_float
 from ..paths import DB_PATH, STORAGE_ROOT
-from ..utils import abs_storage_path, get_logger
+from ..storage import discard_job_files, get_store
+from ..utils import get_logger
 from ..ytdlp_config import apply_ejs_config
 
 ERROR_ENGINE = "ERROR: Analysis engine encountered an issue."
@@ -38,16 +48,29 @@ ERROR_YOUTUBE_UNREACHABLE = "ERROR: Unable to reach YouTube"
 ERROR_YOUTUBE_LIVE = "ERROR: Live YouTube videos are not supported."
 ERROR_TRACK_TOO_LONG = "ERROR: This track exceeds the server length limit."
 ERROR_GENERIC = "ERROR: Something went wrong. Please try again or report an issue on GitHub."
+# Lowercase yt-dlp error text shared by classification, notification, and retry.
+HTTP_403_ERROR_TEXT = "http error 403"
+
 ERROR_CODE_ANALYSIS_MISSING = "analysis_missing"
 ERROR_CODE_NO_BEATS_DETECTED = "no_beats_detected"
 ERROR_CODE_YOUTUBE_LIVE = "youtube_live"
 ANALYSIS_MISSING_MESSAGE = "Analysis missing"
 NTFY_TOPIC_ENV = "NTFY_TOPIC_KEY"
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-ALLOWED_UPLOAD_EXTS = {".m4a", ".webm", ".mp3", ".wav", ".flac", ".ogg", ".aac"}
+DEFAULT_MAX_UPLOAD_MB = 20
+ALLOWED_UPLOAD_EXTS = {".m4a", ".webm", ".mp3", ".wav", ".flac", ".ogg", ".aac", ".opus", ".aiff"}
 
 logger = get_logger()
+
+
+def max_upload_bytes() -> int:
+    """Upload size cap in whole megabytes: MAX_UPLOAD_MB when at least 1, else 20 MB."""
+    value = env_positive_float("MAX_UPLOAD_MB")
+    if value is None or not math.isfinite(value) or value < 1:
+        return DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
+    return int(value) * 1024 * 1024
+
+
 YOUTUBE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{11}$")
 SOURCE_HOST_PROVIDER = (
     ("youtu.be", "youtube"),
@@ -137,10 +160,6 @@ def _provider_from_info(info: dict, source_url: str) -> str | None:
     return _provider_for_host(urlsplit(source_url).hostname)
 
 
-def _source_id_for_provider(provider: str, raw_id: str) -> str:
-    return raw_id
-
-
 def source_info_is_live(info: dict) -> bool:
     live_status = info.get("live_status")
     if isinstance(live_status, str) and live_status.lower() == "is_live":
@@ -177,10 +196,9 @@ def resolve_source_info(source_url: str) -> SourceInfo:
     raw_id = info.get("id")
     if not isinstance(raw_id, str) or not raw_id.strip():
         raise ValueError("Unable to resolve source id")
-    source_id = _source_id_for_provider(provider, raw_id.strip())
     return SourceInfo(
         provider=provider,
-        source_id=source_id,
+        source_id=raw_id.strip(),
         source_url=canonical_url,
         duration_s=_coerce_duration(info.get("duration")),
     )
@@ -208,7 +226,7 @@ def normalize_job_error(raw: str | None) -> str:
     if "video unavailable" in lowered or "this video is not available" in lowered:
         return ERROR_YOUTUBE_UNAVAILABLE
     if (
-        "http error 403" in lowered
+        HTTP_403_ERROR_TEXT in lowered
         or "[download]" in lowered
         or "unable to download video data" in lowered
         or "premieres in" in lowered
@@ -274,6 +292,11 @@ def is_retryable_download_error(raw: str | None) -> bool:
         ERROR_YOUTUBE_UNREACHABLE,
         ERROR_GENERIC,
     }
+
+
+# A failure that retrying the same source won't fix; a different source for the track may work.
+def is_terminal_job_failure(job) -> bool:
+    return job.status == "failed" and not is_retryable_download_error(job.error)
 
 
 def sanitize_title(filename: str | None) -> str:
@@ -390,21 +413,39 @@ def parse_timestamp(value: str | None) -> datetime | None:
 def should_recycle_job(job) -> bool:
     if job.status != "downloading":
         return False
+    updated_at = parse_timestamp(job.updated_at)
+    if updated_at is not None and updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
     log_path = STORAGE_ROOT / "logs" / f"{job.id}.log"
     if log_path.exists():
-        return True
-    updated_at = parse_timestamp(job.updated_at)
+        if updated_at is None:
+            return True
+        try:
+            log_updated_at = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
+        except FileNotFoundError:
+            pass
+        else:
+            if log_updated_at >= updated_at:
+                return True
     if updated_at is None:
         return False
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
     age_s = (datetime.now(timezone.utc) - updated_at).total_seconds()
     return job.progress >= 25 and age_s > 30
 
 
-def recycle_job(job) -> None:
-    delete_job(DB_PATH, job.id)
+def recycle_job(job) -> str | None:
+    """Restart a stalled download in place, returning the new ownership stamp.
+
+    Artifacts from the abandoned attempt are dropped so the retry starts clean.
+    None means another writer already moved the job on.
+    """
+    owner = restart_stalled_download(DB_PATH, job.id, job.updated_at)
+    if owner is None:
+        logger.info("Skipped recycling job %s (already moved on)", job.id)
+        return None
+    discard_job_files(get_store(STORAGE_ROOT), job.id, analysis=False)
     logger.info("Recycling stale job %s (%s)", job.id, job.status)
+    return owner
 
 
 def message_for_progress(status: str, progress: int | None) -> str | None:
@@ -414,68 +455,200 @@ def message_for_progress(status: str, progress: int | None) -> str | None:
         return None
     if progress is None or progress < 10:
         return "Processing"
-    if progress < 90:
+    # The engine reports building the output from 95.
+    if progress < 95:
         return "Analyzing"
     return "Wrapping up"
 
 
-def _is_youtube_source_id(source_provider: str | None, source_id: str | None) -> bool:
-    if source_provider != "youtube":
-        return False
-    if not source_id:
-        return False
-    return bool(YOUTUBE_ID_RE.fullmatch(source_id))
+# Signals that a YouTube download failed because YouTube refused to serve
+# us (broken signatures, IP flagging, rate limiting) rather than because the
+# video itself is bad. Checked in order; first match wins.
+YOUTUBE_BLOCK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("403", (HTTP_403_ERROR_TEXT, "unable to download video data")),
+    ("bot-check", ("sign in to confirm", "not a bot")),
+    ("429", ("http error 429", "too many requests")),
+    ("blocked", ("content isn't available",)),
+    ("network", ("timed out", "connection reset", "unable to connect")),
+)
+
+# Age restriction is a property of the video, not a block signal.
+AGE_RESTRICTED_PATTERNS = (
+    "sign in to confirm your age",
+    "inappropriate for some users",
+    "age-restricted",
+    "age restriction",
+)
+
+NOTIFY_DIGEST_INTERVAL_S = 6 * 3600.0
+NOTIFY_FAILURE_THRESHOLD = 3
+NOTIFY_CHECK_INTERVAL_S = 60.0
+# Instant the last digest period closed; the next period starts there.
+NOTIFY_PERIOD_START_KEY = "youtube_digest_period_start"
+# "<newest failure>|<last success before it>" from a digest with no success after it;
+# empty once recovery is reported.
+NOTIFY_RECOVERY_PENDING_KEY = "youtube_recovery_pending"
+# curl caps itself; subprocess gets a wider guard so curl exits on its own first.
+NTFY_TIMEOUT_S = 10.0
+
+_next_notify_check_monotonic = 0.0
 
 
-def _notify_youtube_issue(
-    raw: str | None,
-    source_provider: str | None,
-    source_id: str | None,
-    job_id: str,
-) -> None:
+def youtube_block_signal(raw: str | None) -> str | None:
     if not raw:
-        return
-    if not _is_youtube_source_id(source_provider, source_id):
-        return
-    topic_key = os.environ.get(NTFY_TOPIC_ENV)
-    if not topic_key:
-        return
+        return None
     lowered = raw.lower()
-    age_restricted = (
-        "sign in to confirm your age" in lowered
-        or "inappropriate for some users" in lowered
-        or "age-restricted" in lowered
-        or "age restriction" in lowered
-    )
-    if age_restricted:
-        return
-    issues: list[str] = []
-    if "http error 403" in lowered or "unable to download video data" in lowered:
-        issues.append("403: Forbidden")
-    if "sign in to confirm" in lowered or "not a bot" in lowered:
-        issues.append("Sign in to confirm you're not a bot")
-    if not issues:
-        return
-    video_label = source_id or "unknown"
-    log_path = f"/api/logs/{job_id}"
-    message = (
-        "[Forever Jukebox] Youtube error on "
-        + video_label
-        + ": "
-        + " or ".join(issues)
-        + " - "
-        + log_path
-    )
-    topic_url = f"ntfy.sh/{topic_key}"
+    if any(pattern in lowered for pattern in AGE_RESTRICTED_PATTERNS):
+        return None
+    for label, patterns in YOUTUBE_BLOCK_PATTERNS:
+        if any(pattern in lowered for pattern in patterns):
+            return label
+    return None
+
+
+def _send_ntfy(topic_key: str, message: str) -> bool:
+    """Post to ntfy, capped by a timeout so a stalled call cannot block a caller."""
     try:
-        subprocess.run(
-            ["curl", "-d", message, topic_url],
+        result = subprocess.run(
+            [
+                "curl",
+                "--max-time",
+                str(int(NTFY_TIMEOUT_S)),
+                "-d",
+                message,
+                f"ntfy.sh/{topic_key}",
+            ],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            timeout=NTFY_TIMEOUT_S * 2,
         )
     except Exception:
+        return False
+    return result.returncode == 0
+
+
+def _fmt_clock(moment: datetime) -> str:
+    return f"{moment.hour:02d}:{moment.minute:02d}"
+
+
+MONTH_ABBREVIATIONS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _fmt_moment(moment: datetime) -> str:
+    return f"{MONTH_ABBREVIATIONS[moment.month - 1]} {moment.day} {_fmt_clock(moment)}"
+
+
+def _utc_moment(iso: str | None) -> datetime | None:
+    moment = parse_timestamp(iso)
+    if moment is None:
+        return None
+    return moment.astimezone(timezone.utc) if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _fmt_utc(iso: str) -> str:
+    moment = _utc_moment(iso)
+    return f"{_fmt_moment(moment)} UTC" if moment else iso
+
+
+def _fmt_span(first_iso: str, last_iso: str) -> str:
+    first = _utc_moment(first_iso)
+    last = _utc_moment(last_iso)
+    if first is None or last is None:
+        return f"{first_iso}\u2013{last_iso}"
+    if first.date() != last.date():
+        return f"{_fmt_moment(first)}\u2013{_fmt_moment(last)} UTC"
+    if _fmt_clock(first) == _fmt_clock(last):
+        return f"{_fmt_moment(first)} UTC"
+    return f"{_fmt_moment(first)}\u2013{_fmt_clock(last)} UTC"
+
+
+def _notify_youtube_recovery(db_path: Path, topic_key: str, now: datetime) -> None:
+    """Report the first YouTube success after a digest that had none to report."""
+    pending = get_notify_state(db_path, NOTIFY_RECOVERY_PENDING_KEY)
+    if not pending:
         return
+    newest_failure, _, previous_success = pending.partition("|")
+    first_success = first_youtube_success_after(db_path, newest_failure, now.isoformat())
+    if first_success is None:
+        return
+    if not claim_notify_state(db_path, NOTIFY_RECOVERY_PENDING_KEY, pending, ""):
+        return
+    message = f"[Forever Jukebox] YouTube recovered: download succeeded {_fmt_utc(first_success)}"
+    if previous_success:
+        message += f", first since {_fmt_utc(previous_success)}"
+    if not _send_ntfy(topic_key, f"{message}."):
+        # Re-arm so a later check retries the ping.
+        claim_notify_state(db_path, NOTIFY_RECOVERY_PENDING_KEY, "", pending)
+        return
+    log_event("ntfy_youtube_recovered")
+
+
+def maybe_notify_youtube_failures(db_path: Path = DB_PATH) -> None:
+    """Close a digest period every NOTIFY_DIGEST_INTERVAL_S and report its blocked YouTube failures.
+
+    A period runs from the close of the previous one to now. Its digest goes
+    out only when at least NOTIFY_FAILURE_THRESHOLD failures in it are still
+    marked failed. A digest with no success after its newest failure is
+    followed by one recovery ping at the first success. Safe to call every
+    worker-loop iteration; the DB is only queried every
+    NOTIFY_CHECK_INTERVAL_S, and concurrent workers claim each send.
+    """
+    global _next_notify_check_monotonic
+    topic_key = os.environ.get(NTFY_TOPIC_ENV)
+    if not topic_key:
+        return
+    mono = time.monotonic()
+    if mono < _next_notify_check_monotonic:
+        return
+    _next_notify_check_monotonic = mono + NOTIFY_CHECK_INTERVAL_S
+    now = datetime.now(timezone.utc)
+    try:
+        _notify_youtube_recovery(db_path, topic_key, now)
+    except sqlite3.Error as exc:
+        log_event("ntfy_youtube_recovery_check_failed", error=str(exc))
+    stored_start = get_notify_state(db_path, NOTIFY_PERIOD_START_KEY)
+    period_start = _utc_moment(stored_start)
+    if period_start is not None and (now - period_start).total_seconds() < NOTIFY_DIGEST_INTERVAL_S:
+        return
+    since = period_start or now - timedelta(seconds=NOTIFY_DIGEST_INTERVAL_S)
+    finished = youtube_jobs_finished_between(db_path, since.isoformat(), now.isoformat())
+    if not claim_notify_state(db_path, NOTIFY_PERIOD_START_KEY, stored_start, now.isoformat()):
+        return
+    blocked = [
+        (updated_at, label)
+        for updated_at, status, error in finished
+        if status == "failed" and (label := youtube_block_signal(error)) is not None
+    ]
+    if len(blocked) < NOTIFY_FAILURE_THRESHOLD:
+        return
+    first_failure = blocked[0][0]
+    newest_failure = blocked[-1][0]
+    completes = [updated_at for updated_at, status, _ in finished if status == "complete"]
+    attempts = len(blocked) + sum(1 for at in completes if first_failure <= at <= newest_failure)
+    recovered = sum(1 for at in completes if at > newest_failure)
+    last_success = max(completes) if completes else latest_youtube_success(db_path, now.isoformat())
+    if recovered:
+        noun = "success" if recovered == 1 else "successes"
+        recovery = f"Recovered: {recovered} {noun} since, last {_fmt_utc(last_success)}."
+    elif last_success:
+        recovery = f"No successful download since {_fmt_utc(last_success)}."
+    else:
+        recovery = "No successful download on record."
+    if not recovered:
+        set_notify_state(
+            db_path, NOTIFY_RECOVERY_PENDING_KEY, f"{newest_failure}|{last_success or ''}"
+        )
+    counts = Counter(label for _, label in blocked)
+    breakdown = ", ".join(f"{label} x{count}" for label, count in counts.most_common())
+    message = (
+        f"[Forever Jukebox] YouTube: {len(blocked)} of {attempts} failed "
+        f"{_fmt_span(first_failure, newest_failure)} ({breakdown}). {recovery}"
+    )
+    _send_ntfy(topic_key, message)
+    log_event(
+        "ntfy_youtube_failures", count=len(blocked), attempts=attempts, recovered=recovered
+    )
 
 
 def _write_failure_log(job_id: str, message: str) -> None:
@@ -485,21 +658,44 @@ def _write_failure_log(job_id: str, message: str) -> None:
     log_path.write_text(f"Job failed: {message}\n", encoding="utf-8")
 
 
+class _OwnershipLost(RuntimeError):
+    """Raised to abort a download whose job was restarted under a new attempt."""
+
+
+def job_taken_over(job_id: str, owner: str | None, job=None) -> bool:
+    """True when the job exists under a different stamp than `owner`.
+
+    A missing row is not a takeover: nobody owns that id, so its leftovers are
+    safe to clear. Pass `job` to reuse a row the caller already read.
+    """
+    if owner is None:
+        return False
+    if job is None:
+        job = get_job(DB_PATH, job_id)
+    return job is not None and job.created_at != owner
+
+
 def cleanup_failure(
     job_id: str,
     message: str,
-    source_id: str | None = None,
     source_provider: str | None = None,
+    owner: str | None = None,
 ) -> None:
-    _notify_youtube_issue(message, source_provider, source_id, job_id)
-    _write_failure_log(job_id, message)
-    for candidate in (STORAGE_ROOT / "audio").glob(f"{job_id}.*"):
-        if candidate.is_file():
-            candidate.unlink()
-    result_path = STORAGE_ROOT / "analysis" / f"{job_id}.json"
-    if result_path.is_file():
-        result_path.unlink()
-    set_job_status(DB_PATH, job_id, "failed", message)
+    job = get_job(DB_PATH, job_id)
+    if job_taken_over(job_id, owner, job):
+        # A newer attempt owns the job; its artifacts and status are not ours
+        # to touch.
+        logger.info("Discarded stale download failure for job %s", job_id)
+        return
+    if job is not None:
+        _write_failure_log(job_id, message)
+    discard_job_files(get_store(STORAGE_ROOT), job_id)
+    if job is None:
+        # Deleted mid-download: artifacts are cleared, and there is no row left
+        # to mark failed or report on.
+        logger.info("Cleared artifacts for deleted job %s", job_id)
+        return
+    set_job_status(DB_PATH, job_id, "failed", message, owner)
     log_event(
         "job_failed",
         job_id=job_id,
@@ -510,37 +706,68 @@ def cleanup_failure(
     logger.info("Job %s failed: %s", job_id, message)
 
 
-def delete_job_artifacts(job_id: str, job, storage_root: Path = STORAGE_ROOT) -> None:
-    paths: list[Path] = []
-    if job and job.input_path:
-        paths.append(abs_storage_path(storage_root, job.input_path))
-    if job and job.output_path:
-        paths.append(abs_storage_path(storage_root, job.output_path))
-    paths.append(storage_root / "logs" / f"{job_id}.log")
-    for path in paths:
-        if path.is_file():
-            path.unlink()
-    for candidate in (storage_root / "audio").glob(f"{job_id}.*"):
-        if candidate.is_file():
-            candidate.unlink()
-    for candidate in (storage_root / "analysis").glob(f"{job_id}.*"):
-        if candidate.is_file():
-            candidate.unlink()
+def delete_job_artifacts(job_id: str, storage_root: Path = STORAGE_ROOT) -> None:
+    log_path = storage_root / "logs" / f"{job_id}.log"
+    if log_path.is_file():
+        log_path.unlink()
+    store = get_store(storage_root)
+    store.delete_audio(job_id)
+    store.delete_analysis(job_id)
+
+
+HTTP_403_RETRY_DELAY_S = 3.0
+
+
+def _is_http_403_error(exc: Exception) -> bool:
+    return HTTP_403_ERROR_TEXT in str(exc).lower()
+
+
+def _download_with_403_retry(
+    ydl_cls: type,
+    ydl_opts: dict,
+    source_url: str,
+    job_id: str,
+    source_provider: str | None,
+    on_retry: Callable[[], None] | None = None,
+) -> object:
+    """Download via yt-dlp, retrying once on HTTP 403.
+
+    A fresh extraction re-signs the media URLs and re-requests the PO token,
+    which usually clears a transient 403. on_retry runs before the second
+    attempt so the caller can discard first-attempt state.
+    """
+    try:
+        with ydl_cls(ydl_opts) as ydl:
+            return ydl.extract_info(source_url, download=True)
+    except Exception as exc:
+        if not _is_http_403_error(exc):
+            raise
+        log_event(
+            "download_403_retry",
+            job_id=job_id,
+            source=source_provider or "unknown",
+        )
+        if on_retry is not None:
+            on_retry()
+        time.sleep(HTTP_403_RETRY_DELAY_S)
+        with ydl_cls(ydl_opts) as ydl:
+            return ydl.extract_info(source_url, download=True)
 
 
 def download_source_audio(
     job_id: str,
     source_url: str,
-    source_id: str | None = None,
     source_provider: str | None = None,
+    owner: str | None = None,
 ) -> None:
     try:
         from yt_dlp import YoutubeDL
     except Exception:
-        cleanup_failure(job_id, "yt-dlp is not available", source_id, source_provider)
+        cleanup_failure(job_id, "yt-dlp is not available", source_provider, owner)
         return
 
-    audio_dir = STORAGE_ROOT / "audio"
+    store = get_store(STORAGE_ROOT)
+    audio_dir = store.audio_dir()
     audio_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(audio_dir / f"{job_id}.%(ext)s")
 
@@ -562,7 +789,8 @@ def download_source_audio(
         progress = int(round(ratio * 25))
         if progress != last_progress["value"]:
             last_progress["value"] = progress
-            set_job_progress(DB_PATH, job_id, progress)
+            if not set_job_progress(DB_PATH, job_id, progress, owner):
+                raise _OwnershipLost(job_id)
 
     ydl_opts = {
         "quiet": True,
@@ -571,9 +799,10 @@ def download_source_audio(
         "noplaylist": True,
         "max_filesize": 100 * 1024 * 1024,
         "outtmpl": outtmpl,
+        # A restarted attempt reuses the job id, so it must replace whatever the
+        # abandoned attempt left behind rather than adopt it as finished.
+        "overwrites": True,
         "progress_hooks": [progress_hook],
-        "extractaudio": True,
-        "audioformat": "m4a",
     }
 
     def match_filter(info_dict: dict, *, incomplete: bool) -> str | None:
@@ -592,11 +821,28 @@ def download_source_audio(
 
     ydl_opts["match_filter"] = match_filter
     apply_ejs_config(ydl_opts)
+
+    def discard_first_attempt() -> None:
+        # Drop attempt 1's partial files so the retry downloads from scratch
+        # instead of resuming a stale .part, and let the progress bar restart.
+        last_progress["value"] = -1
+        if not set_job_progress(DB_PATH, job_id, 0, owner):
+            raise _OwnershipLost(job_id)
+        for candidate in audio_dir.glob(f"{job_id}.*"):
+            if candidate.is_file():
+                candidate.unlink()
+
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(source_url, download=True)
+        info = _download_with_403_retry(
+            YoutubeDL,
+            ydl_opts,
+            source_url,
+            job_id,
+            source_provider,
+            on_retry=discard_first_attempt,
+        )
     except Exception as exc:  # pragma: no cover - network call
-        cleanup_failure(job_id, str(exc), source_id, source_provider)
+        cleanup_failure(job_id, str(exc), source_provider, owner)
         return
 
     job = get_job(DB_PATH, job_id)
@@ -628,20 +874,34 @@ def download_source_audio(
                 break
 
     if not input_path:
-        cleanup_failure(job_id, "Download failed", source_id, source_provider)
+        cleanup_failure(job_id, "Download failed", source_provider, owner)
         return
 
+    # Normalize the downloaded file to audio/<id>.<ext> so it can be located
+    # later by globbing on the job id (the extension is not stored in the DB).
     input_path_obj = Path(input_path)
     suffix = input_path_obj.suffix or ".audio"
-    relative_path = Path("audio") / f"{job_id}{suffix}"
-    target_path = (STORAGE_ROOT / relative_path).resolve()
+    target_path = (audio_dir / f"{job_id}{suffix}").resolve()
+    if job_taken_over(job_id, owner):
+        # The shared path belongs to the newer attempt now, so only this
+        # attempt's own file may be discarded.
+        logger.info("Discarded stale download for job %s", job_id)
+        if input_path_obj.resolve() != target_path and input_path_obj.is_file():
+            input_path_obj.unlink()
+        return
     if input_path_obj.resolve() != target_path:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(input_path_obj), str(target_path))
-    update_job_input_path(DB_PATH, job_id, str(relative_path))
-    set_job_progress(DB_PATH, job_id, 25)
-    set_job_status(DB_PATH, job_id, "queued", None)
+    try:
+        store.save_audio(job_id, target_path)
+    except Exception as exc:
+        cleanup_failure(job_id, f"Audio upload failed: {exc}", source_provider, owner)
+        return
+    if not set_job_progress(DB_PATH, job_id, 25, owner):
+        logger.info("Discarded stale download for job %s", job_id)
+        return
+    set_job_status(DB_PATH, job_id, "queued", None, owner)
 
 
-def download_youtube_audio(job_id: str, youtube_id: str) -> None:
-    download_source_audio(job_id, source_url_from_youtube_id(youtube_id), youtube_id, "youtube")
+def download_youtube_audio(job_id: str, youtube_id: str, owner: str | None = None) -> None:
+    download_source_audio(job_id, source_url_from_youtube_id(youtube_id), "youtube", owner)

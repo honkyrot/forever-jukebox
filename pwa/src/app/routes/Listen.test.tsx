@@ -3,34 +3,76 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createRoot, Root } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { Listen } from "./Listen";
-import { getOrCreateSwingBuffer } from "@/shared/jukebox/audio/swingBufferCache";
-import { renderSwingBuffer } from "@/shared/jukebox/audio/swingRenderer";
+import { VISUALIZATION_LABELS } from "@forever-jukebox/shared/constants/visualization";
+import { getOrCreateSwingBuffer } from "@forever-jukebox/shared/audio/swingBufferCache";
+import { renderSwingBuffer } from "@forever-jukebox/shared/audio/swingRenderer";
+import { markStoredCopy } from "@forever-jukebox/shared/audio/renderedTrackCache";
+import { setFileHandle } from "@/core/infrastructure/cache/fileHandleStore";
+import {
+  cancelInstrumentalRender,
+  isInstrumentalModeAvailable,
+  renderInstrumentalBuffer,
+} from "@forever-jukebox/shared/audio/instrumentalRenderer";
 
 const exportMocks = vi.hoisted(() => ({
   exportJukeboxAudio: vi.fn(),
+  exportCanonizerAudio: vi.fn(),
+  exportRenderedAudio: vi.fn(),
   pickBinaryExportFile: vi.fn(),
   saveExportBinary: vi.fn(),
+}));
+const wubMachineMocks = vi.hoisted(() => ({
+  renderWubMachineBuffer: vi.fn(),
 }));
 
 const mockAppState = {
   file: null as File | null,
+  fileHandle: null as FileSystemFileHandle | null,
   setIsListenLoading: vi.fn<(loading: boolean) => void>(),
+  isSettingsOpen: false,
+  setIsSettingsOpen: vi.fn<(isOpen: boolean) => void>(),
 };
 
 type MockAutocanonizerInstance = {
   setFinishOutSong: ReturnType<typeof vi.fn>;
+  planRender: ReturnType<typeof vi.fn>;
+  setStreamPans: ReturnType<typeof vi.fn>;
+  setVolume: ReturnType<typeof vi.fn>;
+  startAtIndex: ReturnType<typeof vi.fn>;
+  emitBeat: (
+    index: number,
+    cursorTimes: { mainSeconds: number; otherSeconds: number },
+  ) => void;
+  emitSelect: (index: number) => void;
 };
 
 const autocanonizerInstances: MockAutocanonizerInstance[] = [];
+type MockWubMachineInstance = {
+  setRemix: ReturnType<typeof vi.fn>;
+  setLoop: ReturnType<typeof vi.fn>;
+  setVolume: ReturnType<typeof vi.fn>;
+  play: ReturnType<typeof vi.fn>;
+  pause: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  emitTick: (seconds: number) => void;
+  emitEnded: () => void;
+  emitSelect: (seconds: number) => void;
+};
+const wubMachineInstances: MockWubMachineInstance[] = [];
 type MockPlayerInstance = {
   emitEnded: () => void;
   getAudioMode: () => string;
+  getVolume: () => number;
 };
 const playerInstances: MockPlayerInstance[] = [];
 type MockJukeboxControllerInstance = {
   emitEdgeSelect: (edge: unknown) => void;
   setData: ReturnType<typeof vi.fn>;
   setSelectedEdgeActive: ReturnType<typeof vi.fn>;
+  update: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
+  setAnchorEdit: ReturnType<typeof vi.fn>;
+  setOnAnchorEditCommit: ReturnType<typeof vi.fn>;
 };
 const jukeboxControllerInstances: MockJukeboxControllerInstance[] = [];
 type MockEngineInstance = {
@@ -39,10 +81,33 @@ type MockEngineInstance = {
   stopJukebox: ReturnType<typeof vi.fn>;
   startJukebox: ReturnType<typeof vi.fn>;
   play: ReturnType<typeof vi.fn>;
+  clearDeletedEdges: ReturnType<typeof vi.fn>;
   setUserAnchorEdge: ReturnType<typeof vi.fn>;
   getUserAnchorEdgeId: ReturnType<typeof vi.fn>;
+  getUserAnchorEdge: ReturnType<typeof vi.fn>;
+  getConfig: () => {
+    justLongBranches: boolean;
+    minLongBranchPercent?: number;
+  };
+  getLastJumpWasBranch: ReturnType<typeof vi.fn>;
+  getPlayVelocity: ReturnType<typeof vi.fn>;
+  setPlayVelocity: ReturnType<typeof vi.fn>;
+  setFreezeCurrentBeat: ReturnType<typeof vi.fn>;
+  setForceBranch: ReturnType<typeof vi.fn>;
+  getVisualizationData: () => {
+    beats: typeof mockAnalysis.beats;
+    edges: any[];
+  };
+  emitUpdate: (state: any) => void;
 };
 const engineInstances: MockEngineInstance[] = [];
+// Edges the mock engine reports from getVisualizationData; set before
+// renderListen so they are picked up when the route syncs viz data on load.
+let mockVizEdges: unknown[] = [];
+// Beats the engine mock reports to the viz; null falls back to the analysis beats.
+let mockVizBeats: typeof mockAnalysis.beats | null = null;
+
+const ARC_VIZ_INDEX = VISUALIZATION_LABELS.indexOf("Arc");
 
 const mockAnalysis = {
   sections: [{ start: 0, duration: 4, confidence: 1 }],
@@ -77,17 +142,32 @@ vi.mock("@/core/infrastructure/analysis/AnalysisWorkerClient", () => ({
 
 vi.mock("@/core/infrastructure/audio/AudioDecoder", () => ({
   AudioDecoder: class AudioDecoder {
-    constructor(_context: unknown) {}
+    readonly context: unknown;
+
+    constructor(context: unknown) {
+      this.context = context;
+    }
   },
 }));
 
 vi.mock("@/core/infrastructure/cache/analysisCache", () => ({
   createAnalysisCache: () => ({}),
+  getAnalysisCacheBytes: vi.fn(async () => 12.5 * 1024 * 1024),
+  clearAllAnalysisCache: vi.fn(async () => {}),
+  trimRenderedTracks: vi.fn(async () => {}),
+}));
+
+vi.mock("@/core/infrastructure/cache/fileHandleStore", () => ({
+  setFileHandle: vi.fn(async () => {}),
 }));
 
 vi.mock("@/core/application/usecases/analyzeAudio", () => ({
   AnalyzeAudioUseCase: class AnalyzeAudioUseCase {
-    constructor(_port: unknown, _cache: unknown, _decoder: unknown) {}
+    readonly dependencies: unknown[];
+
+    constructor(port: unknown, cache: unknown, decoder: unknown) {
+      this.dependencies = [port, cache, decoder];
+    }
 
     async execute({ onProgress }: { onProgress?: (value: any) => void }) {
       onProgress?.({ stage: "loading", progress: 0, message: "Loading file" });
@@ -95,21 +175,22 @@ vi.mock("@/core/application/usecases/analyzeAudio", () => ({
       return {
         analysis: mockAnalysis,
         audioBuffer: {} as AudioBuffer,
+        fingerprint: "fp-test",
         fromCache: false,
       };
     }
   },
 }));
 
-vi.mock("@/shared/jukebox/audio/BufferedAudioPlayer", () => ({
+vi.mock("@forever-jukebox/shared/audio/BufferedAudioPlayer", () => ({
   BufferedAudioPlayer: class BufferedAudioPlayer {
-    private volume = 0.5;
+    private volume = 1;
     private onEnded: (() => void) | null = null;
     private audioMode = "off";
     constructor() {
       playerInstances.push(this);
     }
-    async loadBuffer(_buffer: AudioBuffer) {}
+    loadBuffer = vi.fn(async (_buffer: AudioBuffer) => undefined);
     getContext() {
       return {
         destination: {},
@@ -129,8 +210,8 @@ vi.mock("@/shared/jukebox/audio/BufferedAudioPlayer", () => ({
     getSourceBuffer() {
       return {} as AudioBuffer;
     }
-    stop() {}
-    seek(_time: number) {}
+    stop = vi.fn();
+    seek = vi.fn((_time: number) => undefined);
     isPlaying() {
       return false;
     }
@@ -140,13 +221,16 @@ vi.mock("@/shared/jukebox/audio/BufferedAudioPlayer", () => ({
     getVolume() {
       return this.volume;
     }
-    setJukeboxAudioMode(mode: string) {
+    setJukeboxAudioMode = vi.fn((mode: string, _intensityPct?: number) => {
       this.audioMode = mode;
-    }
+    });
     getJukeboxAudioMode() {
       return this.audioMode;
     }
-    setRenderedJukeboxAudioBuffer(_mode: string, _buffer: AudioBuffer) {}
+    setJukeboxAudioModeIntensity = vi.fn((_intensityPct: number) => undefined);
+    setRenderedJukeboxAudioBuffer = vi.fn(
+      (_mode: string, _buffer: AudioBuffer) => undefined,
+    );
     getRenderedJukeboxAudioBuffer(_mode: string) {
       return null;
     }
@@ -159,11 +243,23 @@ vi.mock("@/shared/jukebox/audio/BufferedAudioPlayer", () => ({
     getAudioMode() {
       return this.audioMode;
     }
-    async dispose() {}
+    dispose = vi.fn(async () => undefined);
   },
 }));
 
-vi.mock("@/shared/jukebox/audio/swingBufferCache", () => ({
+vi.mock("@forever-jukebox/shared/audio/CowbellOverlayService", () => ({
+  CowbellOverlayService: class CowbellOverlayService {
+    enable = vi.fn();
+    disable = vi.fn();
+    setVolume = vi.fn();
+    setSectionStartBeatIndices = vi.fn();
+    cancelScheduledHits = vi.fn();
+    handleBeatEnter = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+
+vi.mock("@forever-jukebox/shared/audio/swingBufferCache", () => ({
   getOrCreateSwingBuffer: vi.fn(
     (
       _sourceBuffer: AudioBuffer,
@@ -173,12 +269,68 @@ vi.mock("@/shared/jukebox/audio/swingBufferCache", () => ({
   ),
 }));
 
-vi.mock("@/shared/jukebox/audio/swingRenderer", () => ({
+vi.mock("@forever-jukebox/shared/audio/swingRenderer", () => ({
   renderSwingBuffer: vi.fn(async () => ({ duration: 4 }) as AudioBuffer),
 }));
 
-vi.mock("@/shared/jukebox/export", () => ({
+vi.mock("@forever-jukebox/shared/audio/instrumentalRenderer", () => ({
+  isInstrumentalModeAvailable: vi.fn(() => true),
+  renderInstrumentalBuffer: vi.fn(async () => ({ duration: 4 }) as AudioBuffer),
+  cancelInstrumentalRender: vi.fn(),
+}));
+
+vi.mock("@/shared/export", () => ({
   exportJukeboxAudio: exportMocks.exportJukeboxAudio,
+  exportCanonizerAudio: exportMocks.exportCanonizerAudio,
+  exportRenderedAudio: exportMocks.exportRenderedAudio,
+}));
+
+vi.mock("@forever-jukebox/shared/wubmachine/wubMachineRender", () => ({
+  renderWubMachineBuffer: wubMachineMocks.renderWubMachineBuffer,
+}));
+
+vi.mock("@forever-jukebox/shared/wubmachine/WubMachineController", () => ({
+  WubMachineController: class WubMachineController {
+    private onTick: ((seconds: number) => void) | null = null;
+    private onEnded: (() => void) | null = null;
+    private onSelect: ((seconds: number) => void) | null = null;
+    private remix: AudioBuffer | null = null;
+    constructor(_layer: HTMLElement) {
+      wubMachineInstances.push(this);
+    }
+    setVisible = vi.fn((_visible: boolean) => undefined);
+    resizeNow = vi.fn();
+    setOnTick(handler: ((seconds: number) => void) | null) {
+      this.onTick = handler;
+    }
+    setOnEnded(handler: (() => void) | null) {
+      this.onEnded = handler;
+    }
+    setOnSelect(handler: ((seconds: number) => void) | null) {
+      this.onSelect = handler;
+    }
+    setVolume = vi.fn((_volume: number) => undefined);
+    setLoop = vi.fn((_loop: boolean) => undefined);
+    setRemix = vi.fn((buffer: AudioBuffer | null) => {
+      this.remix = buffer;
+    });
+    isReady() {
+      return this.remix !== null;
+    }
+    play = vi.fn((_from?: number) => undefined);
+    pause = vi.fn();
+    stop = vi.fn();
+    destroy = vi.fn();
+    emitTick(seconds: number) {
+      this.onTick?.(seconds);
+    }
+    emitEnded() {
+      this.onEnded?.();
+    }
+    emitSelect(seconds: number) {
+      this.onSelect?.(seconds);
+    }
+  },
 }));
 
 vi.mock("@/shared/utils/exportJson", () => ({
@@ -186,8 +338,13 @@ vi.mock("@/shared/utils/exportJson", () => ({
   saveExportBinary: exportMocks.saveExportBinary,
 }));
 
-vi.mock("@/shared/jukebox/engine", () => ({
+vi.mock("@forever-jukebox/shared", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@forever-jukebox/shared")
+  >()),
+  DEFAULT_MIN_LONG_BRANCH_PERCENT: 20,
   JukeboxEngine: class JukeboxEngine {
+    private updateListener: ((state: any) => void) | null = null;
     private config = {
       maxBranches: 4,
       maxBranchThreshold: 80,
@@ -199,8 +356,10 @@ vi.mock("@/shared/jukebox/engine", () => ({
       maxRandomBranchChance: 0.5,
       randomBranchChanceDelta: 0.02,
       minLongBranch: 0,
+      minLongBranchPercent: 20,
     };
     private analysis: typeof mockAnalysis | null = null;
+    private playVelocity = 1;
     pauseJukebox = vi.fn();
     syncToPlaybackPosition = vi.fn();
     stopJukebox = vi.fn();
@@ -210,8 +369,19 @@ vi.mock("@/shared/jukebox/engine", () => ({
     seekToBeat = vi.fn();
     setForceBranch = vi.fn();
     setBringItHomeMode = vi.fn();
+    getLastJumpWasBranch = vi.fn(() => true);
+    getPlayVelocity = vi.fn(() => this.playVelocity);
+    setPlayVelocity = vi.fn((velocity: number) => {
+      this.playVelocity = Math.max(-16, Math.min(16, Math.trunc(velocity)));
+    });
+    setFreezeCurrentBeat = vi.fn();
     setUserAnchorEdge = vi.fn();
     getUserAnchorEdgeId = vi.fn(() => null);
+    getUserAnchorEdge = vi.fn(() => null);
+    getAnchorParam = vi.fn((): unknown => null);
+    applyAnchorParam = vi.fn(() => false);
+    getActiveAnchor = vi.fn((): unknown => null);
+    setCustomAnchor = vi.fn(() => true);
     deleteEdge = vi.fn();
     rebuildGraph = vi.fn();
     clearDeletedEdges = vi.fn();
@@ -221,7 +391,12 @@ vi.mock("@/shared/jukebox/engine", () => ({
     loadAnalysis(data: typeof mockAnalysis) {
       this.analysis = data;
     }
-    onUpdate(_listener: (state: any) => void) {}
+    onUpdate(listener: (state: any) => void) {
+      this.updateListener = listener;
+    }
+    emitUpdate(state: any) {
+      this.updateListener?.(state);
+    }
     updateConfig(partial: Partial<typeof this.config>) {
       this.config = { ...this.config, ...partial };
     }
@@ -238,8 +413,8 @@ vi.mock("@/shared/jukebox/engine", () => ({
     }
     getVisualizationData() {
       return {
-        beats: this.analysis?.beats ?? [],
-        edges: [],
+        beats: mockVizBeats ?? this.analysis?.beats ?? [],
+        edges: mockVizEdges,
       };
     }
     getSectionStartBeatIndices() {
@@ -248,26 +423,32 @@ vi.mock("@/shared/jukebox/engine", () => ({
   },
 }));
 
-vi.mock("@/shared/jukebox/viz/JukeboxController", () => ({
+vi.mock("@forever-jukebox/shared/viz/JukeboxController", () => ({
   JukeboxController: class JukeboxController {
     private onEdgeSelect: ((edge: unknown) => void) | null = null;
     constructor(_layer: HTMLElement) {
       jukeboxControllerInstances.push(this);
     }
-    setActiveIndex(_index: number) {}
-    setVisible(_visible: boolean) {}
-    setAnchorHighlightEnabled(_enabled: boolean) {}
-    resizeActive() {}
-    reset() {}
-    setData = vi.fn((_data: unknown) => {});
-    setOnSelect(_handler: (index: number) => void) {}
+    setActiveIndex = vi.fn((_index: number) => undefined);
+    setVisible = vi.fn((_visible: boolean) => undefined);
+    setAnchorHighlightEnabled = vi.fn((_enabled: boolean) => undefined);
+    resizeActive = vi.fn();
+    refresh = vi.fn();
+    reset = vi.fn();
+    setData = vi.fn((_data: unknown) => undefined);
+    setOnSelect = vi.fn((_handler: (index: number) => void) => undefined);
     setOnEdgeSelect(handler: (edge: unknown) => void) {
       this.onEdgeSelect = handler;
     }
-    setSelectedEdge(_edge: unknown) {}
-    setSelectedEdgeActive = vi.fn((_edge: unknown) => {});
-    update(_index: number, _animate: boolean, _jumpFrom: number | null) {}
-    destroy() {}
+    setSelectedEdge = vi.fn((_edge: unknown) => undefined);
+    setSelectedEdgeActive = vi.fn((_edge: unknown) => undefined);
+    setAnchorEdit = vi.fn((_state: unknown) => undefined);
+    setOnAnchorEditChange = vi.fn((_handler: unknown) => undefined);
+    setOnAnchorEditCommit = vi.fn((_handler: unknown) => undefined);
+    update = vi.fn(
+      (_index: number, _animate: boolean, _jumpFrom: number | null) => undefined,
+    );
+    destroy = vi.fn();
     getCount() {
       return 2;
     }
@@ -277,43 +458,85 @@ vi.mock("@/shared/jukebox/viz/JukeboxController", () => ({
   },
 }));
 
-vi.mock("@/shared/jukebox/autocanonizer/AutocanonizerController", () => ({
+vi.mock("@forever-jukebox/shared/autocanonizer/AutocanonizerController", () => ({
   AutocanonizerController: class AutocanonizerController {
-    private onBeat: ((index: number) => void) | null = null;
-    private onEnded: (() => void) | null = null;
-    setFinishOutSong = vi.fn((_enabled: boolean) => {});
+    private onBeat:
+      | ((
+          index: number,
+          beat: unknown,
+          cursorTimes: { mainSeconds: number; otherSeconds: number },
+        ) => void)
+      | null = null;
+    private onSelect: ((index: number) => void) | null = null;
+    setFinishOutSong = vi.fn((_enabled: boolean) => undefined);
+    planRender = vi.fn(() => ({ durationSeconds: 95, voices: [] }));
     constructor(_layer: HTMLElement) {
       autocanonizerInstances.push(this);
     }
-    setVisible(_visible: boolean) {}
-    resizeNow() {}
-    setOnBeat(handler: ((index: number) => void) | null) {
+    setVisible = vi.fn((_visible: boolean) => undefined);
+    resizeNow = vi.fn();
+    setOnBeat(
+      handler:
+        | ((
+            index: number,
+            beat: unknown,
+            cursorTimes: { mainSeconds: number; otherSeconds: number },
+          ) => void)
+        | null,
+    ) {
       this.onBeat = handler;
     }
-    setOnEnded(handler: (() => void) | null) {
-      this.onEnded = handler;
+    setOnEnded = vi.fn((_handler: (() => void) | null) => undefined);
+    setOnSelect(handler: ((index: number) => void) | null) {
+      this.onSelect = handler;
     }
-    setOnSelect(_handler: ((index: number) => void) | null) {}
-    setVolume(_volume: number) {}
-    setAudio(_buffer: AudioBuffer | null, _context: AudioContext | null) {}
-    setAnalysis(_analysis: unknown, _durationOverride?: number | null) {}
-    resetVisualization() {}
+    setVolume = vi.fn((_volume: number) => undefined);
+    setStreamPans = vi.fn(
+      (_mainPan: number, _otherPan: number) => undefined,
+    );
+    setAudio = vi.fn(
+      (_buffer: AudioBuffer | null, _context: AudioContext | null) => undefined,
+    );
+    setAnalysis = vi.fn(
+      (_analysis: unknown, _durationOverride?: number | null) => undefined,
+    );
+    resetVisualization = vi.fn();
     isReady() {
       return true;
     }
-    startAtIndex(index: number) {
-      this.onBeat?.(index);
-      this.onEnded?.();
+    startAtIndex = vi.fn((index: number) => {
+      this.onBeat?.(index, {}, { mainSeconds: index, otherSeconds: index });
+    });
+    emitBeat(
+      index: number,
+      cursorTimes: { mainSeconds: number; otherSeconds: number },
+    ) {
+      this.onBeat?.(index, {}, cursorTimes);
     }
-    stop() {}
-    reset() {}
-    destroy() {}
+    emitSelect(index: number) {
+      this.onSelect?.(index);
+    }
+    stop = vi.fn();
+    reset = vi.fn();
+    destroy = vi.fn();
   },
 }));
 
-vi.mock("@/ui/components/ProgressSteps", () => ({
-  ProgressSteps: () => <div data-testid="progress-steps" />,
-}));
+// The pacing of the loading steps is not under test here; finish as soon as the work does.
+vi.mock("@forever-jukebox/shared/ui/LoadingProgress", async (importOriginal) => {
+  const { useEffect } = await import("react");
+  return {
+    ...(await importOriginal<object>()),
+    LoadingProgress: ({ finished, onFinished }: { finished: boolean; onFinished: () => void }) => {
+      useEffect(() => {
+        if (finished) {
+          onFinished();
+        }
+      }, [finished, onFinished]);
+      return null;
+    },
+  };
+});
 
 vi.mock("@/ui/components/SymbolIcon", () => ({
   SymbolIcon: ({ name, className }: { name: string; className?: string }) => (
@@ -322,9 +545,9 @@ vi.mock("@/ui/components/SymbolIcon", () => ({
 }));
 
 class MockResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
 }
 
 type RenderedListen = {
@@ -381,16 +604,60 @@ async function changeSelect(element: HTMLSelectElement, value: string) {
   });
 }
 
-async function keydown(key: string, code?: string) {
+async function changeRange(element: HTMLInputElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function keydown(key: string, code?: string, repeat = false) {
   await act(async () => {
     window.dispatchEvent(
       new KeyboardEvent("keydown", {
+        key,
+        code: code ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
+        repeat,
+        bubbles: true,
+      })
+    );
+  });
+}
+
+async function keyup(key: string, code?: string) {
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keyup", {
         key,
         code: code ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
         bubbles: true,
       })
     );
   });
+}
+
+async function blurWindow() {
+  await act(async () => {
+    window.dispatchEvent(new Event("blur"));
+  });
+}
+
+async function hideDocument() {
+  Object.defineProperty(document, "hidden", {
+    value: true,
+    configurable: true,
+  });
+  try {
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  } finally {
+    Reflect.deleteProperty(document, "hidden");
+  }
 }
 
 async function settleEffects() {
@@ -424,13 +691,42 @@ describe("Listen route behavior", () => {
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     autocanonizerInstances.length = 0;
+    wubMachineInstances.length = 0;
+    wubMachineMocks.renderWubMachineBuffer.mockReset();
+    wubMachineMocks.renderWubMachineBuffer.mockResolvedValue({
+      buffer: { duration: 30 } as AudioBuffer,
+      parts: [],
+    });
+    exportMocks.exportCanonizerAudio.mockReset();
+    exportMocks.exportCanonizerAudio.mockResolvedValue({
+      bytes: new Uint8Array([7, 8, 9]),
+      extension: "mp3",
+      mimeType: "audio/mpeg",
+      renderedDurationSeconds: 95,
+    });
+    exportMocks.exportRenderedAudio.mockReset();
+    exportMocks.exportRenderedAudio.mockResolvedValue({
+      bytes: new Uint8Array([4, 5, 6]),
+      extension: "mp3",
+      mimeType: "audio/mpeg",
+      renderedDurationSeconds: 30,
+    });
     playerInstances.length = 0;
     jukeboxControllerInstances.length = 0;
     engineInstances.length = 0;
+    mockVizEdges = [];
+    mockVizBeats = null;
     mockAppState.file = new File([new Uint8Array([1, 2, 3])], "song.wav", {
       lastModified: 1234,
     });
+    mockAppState.fileHandle = null;
+    vi.mocked(setFileHandle).mockClear();
     mockAppState.setIsListenLoading.mockReset();
+    mockAppState.isSettingsOpen = false;
+    mockAppState.setIsSettingsOpen.mockReset();
+    mockAppState.setIsSettingsOpen.mockImplementation((isOpen) => {
+      mockAppState.isSettingsOpen = isOpen;
+    });
     exportMocks.exportJukeboxAudio.mockReset();
     exportMocks.exportJukeboxAudio.mockResolvedValue({
       bytes: new Uint8Array([1, 2, 3]),
@@ -451,7 +747,7 @@ describe("Listen route behavior", () => {
         1 as unknown as ReturnType<typeof window.setInterval>) as unknown) as typeof window.setInterval
     );
     vi.spyOn(window, "clearInterval").mockImplementation(
-      ((_id: ReturnType<typeof window.setInterval>) => {}) as typeof window.clearInterval
+      ((_id: ReturnType<typeof window.setInterval>) => undefined) as typeof window.clearInterval
     );
     vi.stubGlobal(
       "requestAnimationFrame",
@@ -476,6 +772,24 @@ describe("Listen route behavior", () => {
     delete (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT;
     vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("stores the file's handle under its fingerprint once analyzed", async () => {
+    const handle = { kind: "file", name: "song.wav" } as FileSystemFileHandle;
+    mockAppState.fileHandle = handle;
+    const rendered = renderListen();
+    await settleEffects();
+
+    expect(setFileHandle).toHaveBeenCalledWith("fp-test", handle);
+    rendered.unmount();
+  });
+
+  it("stores no handle for a file opened without one", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    expect(setFileHandle).not.toHaveBeenCalled();
+    rendered.unmount();
   });
 
   it("switches between jukebox and autocanonizer UI modes", async () => {
@@ -508,15 +822,337 @@ describe("Listen route behavior", () => {
     const beatsLabelHidden = Array.from(
       rendered.container.querySelectorAll(".viz-meta span")
     ).some(
-      (span) => span.textContent === "Total Beats:" && span.classList.contains("is-hidden")
+      (span) =>
+        span.textContent === "Total Beats:" && span.classList.contains("is-hidden")
     );
     expect(beatsLabelHidden).toBe(true);
+    const autocanonizer = autocanonizerInstances[0];
+    await act(async () => {
+      autocanonizer.emitBeat(1, {
+        mainSeconds: 62,
+        otherSeconds: 125,
+      });
+    });
+    expect(
+      getRequired(rendered.container, "#autocanonizer-main-time").textContent,
+    ).toBe("1:02");
+    expect(
+      getRequired(rendered.container, "#autocanonizer-other-time").textContent,
+    ).toBe("2:05");
+    expect(
+      getRequired(rendered.container, "#autocanonizer-total-time").textContent,
+    ).toBe("0:04");
 
     await changeSelect(modeSelect, "jukebox");
 
     expect(tuningButton.classList.contains("is-hidden")).toBe(false);
     expect(infoButton.classList.contains("is-hidden")).toBe(false);
     expect(playTitle?.textContent).toBe("song.wav");
+    await changeSelect(modeSelect, "autocanonizer");
+    expect(
+      getRequired(rendered.container, "#autocanonizer-main-time").textContent,
+    ).toBe("0:00");
+    expect(
+      getRequired(rendered.container, "#autocanonizer-other-time").textContent,
+    ).toBe("0:00");
+    rendered.unmount();
+  });
+
+  it("renders the Wub Machine remix on mode switch and plays it", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const modeSelect = getRequired<HTMLSelectElement>(
+      rendered.container,
+      "#play-mode-select",
+    );
+    const playButton = getRequired<HTMLButtonElement>(rendered.container, "#viz-play");
+
+    await changeSelect(modeSelect, "wubmachine");
+    await settleEffects();
+
+    expect(wubMachineMocks.renderWubMachineBuffer).toHaveBeenCalledTimes(1);
+    expect(wubMachineMocks.renderWubMachineBuffer.mock.calls[0]?.[3]).toMatchObject({
+      trackId: "fp-test",
+    });
+    const wubmachine = wubMachineInstances[0];
+    expect(wubmachine.setRemix).toHaveBeenCalledWith(
+      { duration: 30 },
+      expect.anything(),
+      [],
+    );
+    expect(
+      getRequired(rendered.container, "#wubmachine-total-time").textContent,
+    ).toBe("0:30");
+    expect(
+      getRequired(rendered.container, "#tuning").classList.contains("is-hidden"),
+    ).toBe(true);
+    expect(
+      getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export")
+        .disabled,
+    ).toBe(false);
+    expect(rendered.container.querySelector(".play-title")?.textContent).toContain(
+      "(wub machine remix)",
+    );
+
+    await click(playButton);
+    expect(wubmachine.play).toHaveBeenLastCalledWith(undefined);
+    expect(playButton.getAttribute("aria-label")).toBe("Pause");
+    await act(async () => {
+      wubmachine.emitTick(75.6);
+    });
+    expect(
+      getRequired(rendered.container, "#wubmachine-time").textContent,
+    ).toBe("1:15");
+
+    await act(async () => {
+      wubmachine.emitSelect(12);
+    });
+    expect(wubmachine.play).toHaveBeenLastCalledWith(12);
+
+    await click(playButton);
+    expect(wubmachine.pause).toHaveBeenCalledTimes(1);
+    expect(playButton.getAttribute("aria-label")).toBe("Resume");
+
+    await act(async () => {
+      wubmachine.emitEnded();
+    });
+    // Ended while paused is ignored; resume, then end the track.
+    expect(playButton.getAttribute("aria-label")).toBe("Resume");
+    await click(playButton);
+    await act(async () => {
+      wubmachine.emitEnded();
+    });
+    expect(playButton.getAttribute("aria-label")).toBe("Play");
+
+    // Switching back and forth reuses the remix instead of re-rendering.
+    await changeSelect(modeSelect, "jukebox");
+    await changeSelect(modeSelect, "wubmachine");
+    await settleEffects();
+    expect(wubMachineMocks.renderWubMachineBuffer).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+  });
+
+  it("persists the Wub Machine loop preference", async () => {
+    window.localStorage.setItem("fj-wub-machine-loop", "true");
+    const rendered = renderListen();
+    await settleEffects();
+    const loop = getRequired<HTMLInputElement>(rendered.container, "#wubmachine-loop");
+    expect(loop.checked).toBe(true);
+    expect(wubMachineInstances[0].setLoop).toHaveBeenLastCalledWith(true);
+
+    await click(loop);
+    expect(loop.checked).toBe(false);
+    expect(window.localStorage.getItem("fj-wub-machine-loop")).toBe("false");
+    expect(wubMachineInstances[0].setLoop).toHaveBeenLastCalledWith(false);
+    rendered.unmount();
+  });
+
+  it("reports a failed Wub Machine render and retries from play", async () => {
+    wubMachineMocks.renderWubMachineBuffer.mockRejectedValueOnce(
+      new Error("no samples"),
+    );
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "wubmachine",
+    );
+    await settleEffects();
+    expect(rendered.container.textContent).toContain("Wub Machine remix failed");
+    expect(wubMachineInstances[0].setRemix).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#viz-play"));
+    await settleEffects();
+    expect(wubMachineMocks.renderWubMachineBuffer).toHaveBeenCalledTimes(2);
+    expect(wubMachineInstances[0].setRemix).toHaveBeenLastCalledWith(
+      { duration: 30 },
+      expect.anything(),
+      [],
+    );
+    rendered.unmount();
+  });
+
+  it("exports the whole Wub Machine remix, afresh for WAV when stored", async () => {
+    const storedRemix = { duration: 30 } as AudioBuffer;
+    markStoredCopy(storedRemix);
+    wubMachineMocks.renderWubMachineBuffer.mockResolvedValue({
+      buffer: storedRemix,
+      parts: [],
+    });
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "wubmachine",
+    );
+    await settleEffects();
+
+    const exportWith = async (format: string) => {
+      wubMachineMocks.renderWubMachineBuffer.mockClear();
+      await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
+      expect(rendered.container.textContent).toContain("Remix length:");
+      expect(rendered.container.querySelector('input[type="number"]')).toBeNull();
+      const formatSelect = Array.from(
+        rendered.container.querySelectorAll<HTMLSelectElement>("select"),
+      ).find((select) => select.querySelector('option[value="wav"]'));
+      if (!formatSelect) {
+        throw new Error("Expected export format select");
+      }
+      await changeSelect(formatSelect, format);
+      await click(
+        getRequired<HTMLButtonElement>(
+          rendered.container,
+          ".modal-footer .tab-btn:last-child",
+        ),
+      );
+      await settleEffects();
+    };
+
+    await exportWith("mp3");
+    expect(wubMachineMocks.renderWubMachineBuffer).not.toHaveBeenCalled();
+    expect(exportMocks.exportJukeboxAudio).not.toHaveBeenCalled();
+    expect(exportMocks.exportRenderedAudio).toHaveBeenLastCalledWith(
+      expect.objectContaining({ buffer: storedRemix, format: "mp3", gain: 1 }),
+    );
+    expect(exportMocks.saveExportBinary.mock.calls.at(-1)?.[0]).toBe("song_wub.mp3");
+
+    await exportWith("wav");
+    expect(wubMachineMocks.renderWubMachineBuffer).toHaveBeenCalledTimes(1);
+    expect(wubMachineMocks.renderWubMachineBuffer.mock.calls[0]?.[3]).toMatchObject({
+      trackId: null,
+    });
+    expect(exportMocks.exportRenderedAudio).toHaveBeenLastCalledWith(
+      expect.objectContaining({ format: "wav" }),
+    );
+    rendered.unmount();
+  });
+
+  it("exports the whole canon in autocanonizer mode", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "autocanonizer",
+    );
+    await settleEffects();
+    const plan = { durationSeconds: 95, voices: [] };
+    autocanonizerInstances[0].planRender.mockReturnValue(plan);
+
+    const exportButton = getRequired<HTMLButtonElement>(
+      rendered.container,
+      "#track-audio-export",
+    );
+    expect(exportButton.disabled).toBe(false);
+    expect(exportButton.classList.contains("is-hidden")).toBe(false);
+    await click(exportButton);
+    expect(rendered.container.textContent).toContain("00:01:35");
+    expect(rendered.container.querySelector('input[type="number"]')).toBeNull();
+    await click(
+      getRequired<HTMLButtonElement>(
+        rendered.container,
+        ".modal-footer .tab-btn:last-child",
+      ),
+    );
+    await settleEffects();
+
+    expect(exportMocks.exportCanonizerAudio).toHaveBeenLastCalledWith(
+      expect.objectContaining({ plan, format: "mp3", gain: 1 }),
+    );
+    expect(exportMocks.exportJukeboxAudio).not.toHaveBeenCalled();
+    expect(exportMocks.exportRenderedAudio).not.toHaveBeenCalled();
+    expect(exportMocks.saveExportBinary.mock.calls.at(-1)?.[0]).toBe("song_canon.mp3");
+    rendered.unmount();
+  });
+
+  it("keeps volume as master volume in autocanonizer mode", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "autocanonizer",
+    );
+    await click(getRequired(rendered.container, "#volume-button"));
+
+    const volumeSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "input[aria-label='Volume']",
+    );
+    expect(volumeSlider.value).toBe("100");
+    await changeRange(volumeSlider, "70");
+    expect(autocanonizerInstances[0].setVolume).toHaveBeenLastCalledWith(0.7);
+    rendered.unmount();
+  });
+
+  it("restores and persists the stored volume", async () => {
+    window.localStorage.setItem("fj-volume", "40");
+    const rendered = renderListen();
+    await settleEffects();
+    expect(playerInstances[0].getVolume()).toBe(0.4);
+    expect(autocanonizerInstances[0].setVolume).toHaveBeenLastCalledWith(0.4);
+    expect(wubMachineInstances[0].setVolume).toHaveBeenLastCalledWith(0.4);
+    await click(getRequired(rendered.container, "#volume-button"));
+
+    const volumeSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "input[aria-label='Volume']",
+    );
+    expect(volumeSlider.value).toBe("40");
+    const icon = getRequired(rendered.container, "#volume-button .volume-icon");
+    expect(icon.textContent).toBe("volume_up");
+    await changeRange(volumeSlider, "0");
+    expect(window.localStorage.getItem("fj-volume")).toBe("0");
+    expect(icon.textContent).toBe("volume_off");
+    rendered.unmount();
+  });
+
+  it("shows independent autocanonizer stream pans in the pan popover", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "autocanonizer",
+    );
+    await click(getRequired(rendered.container, "#autocanonizer-pan-button"));
+
+    const mainSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#autocanonizer-main-pan",
+    );
+    const otherSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#autocanonizer-other-pan",
+    );
+    expect(mainSlider.value).toBe("0");
+    expect(otherSlider.value).toBe("0");
+
+    await changeRange(mainSlider, "-40");
+
+    expect(autocanonizerInstances[0].setStreamPans).toHaveBeenLastCalledWith(
+      -0.4,
+      0,
+    );
+    expect(mainSlider.value).toBe("-40");
+    rendered.unmount();
+  });
+
+  it("renames the beats counter in cowbell mode", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(
+      getRequired<HTMLInputElement>(rendered.container, "#audio-mode-cowbell")
+    );
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    expect(rendered.container.textContent).toContain("Total Cowbells:");
     rendered.unmount();
   });
 
@@ -540,7 +1176,7 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("opens sleep timer from the tuning header and applies only when set", async () => {
+  it("moves the sleep timer from tuning into global settings", async () => {
     const rendered = renderListen();
     await settleEffects();
 
@@ -549,24 +1185,21 @@ describe("Listen route behavior", () => {
       rendered.container,
       ".modal-header-actions",
     );
-    const sleepTimerButton = getRequired<HTMLButtonElement>(
-      headerActions,
-      "#sleep-timer-open",
-    );
     const closeButton = getRequired<HTMLButtonElement>(
       headerActions,
       ".modal-close",
     );
-    expect(Array.from(headerActions.children)).toEqual([
-      sleepTimerButton,
-      closeButton,
-    ]);
+    expect(Array.from(headerActions.children)).toEqual([closeButton]);
+    expect(headerActions.querySelector("#sleep-timer-open")).toBeNull();
 
-    await click(sleepTimerButton);
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+    await settleEffects();
     const sleepTimerModal = getRequired<HTMLDivElement>(
-      rendered.container,
-      "#sleep-timer-modal",
+      document.body,
+      "#settings-modal",
     );
+    expect(sleepTimerModal.parentElement).toBe(document.body);
     const sleepTimerCurrent = getRequired<HTMLDivElement>(
       sleepTimerModal,
       "#sleep-timer-current",
@@ -578,13 +1211,16 @@ describe("Listen route behavior", () => {
     expect(sleepTimerCurrent.textContent).toBe("Off");
 
     await changeSelect(sleepTimerSelect, "900000");
-    await click(getRequired<HTMLButtonElement>(sleepTimerModal, "#sleep-timer-cancel"));
-    expect(rendered.container.querySelector("#sleep-timer-modal")).toBe(null);
+    await click(getRequired<HTMLButtonElement>(sleepTimerModal, "#settings-close"));
+    rendered.rerender();
+    expect(document.body.querySelector("#settings-modal")).toBe(null);
 
-    await click(sleepTimerButton);
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+    await settleEffects();
     const reopenedModal = getRequired<HTMLDivElement>(
-      rendered.container,
-      "#sleep-timer-modal",
+      document.body,
+      "#settings-modal",
     );
     const reopenedSelect = getRequired<HTMLSelectElement>(
       reopenedModal,
@@ -594,12 +1230,15 @@ describe("Listen route behavior", () => {
 
     await changeSelect(reopenedSelect, "900000");
     await click(getRequired<HTMLButtonElement>(reopenedModal, "#sleep-timer-set"));
-    expect(rendered.container.querySelector("#sleep-timer-modal")).toBe(null);
+    rendered.rerender();
+    expect(document.body.querySelector("#settings-modal")).toBe(null);
 
-    await click(sleepTimerButton);
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+    await settleEffects();
     const appliedModal = getRequired<HTMLDivElement>(
-      rendered.container,
-      "#sleep-timer-modal",
+      document.body,
+      "#settings-modal",
     );
     expect(
       getRequired<HTMLSelectElement>(appliedModal, "#sleep-timer-select").value,
@@ -610,6 +1249,88 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
+  it("keeps settings available without a loaded file", async () => {
+    mockAppState.file = null;
+    mockAppState.isSettingsOpen = true;
+    const rendered = renderListen();
+    await settleEffects();
+
+    const settingsModal = getRequired<HTMLDivElement>(
+      document.body,
+      "#settings-modal",
+    );
+    expect(settingsModal.textContent).toContain("Settings");
+    expect(
+      getRequired<HTMLSelectElement>(settingsModal, "#settings-language").value,
+    ).toBe("en");
+    await click(
+      getRequired<HTMLButtonElement>(settingsModal, ".modal-backdrop"),
+    );
+    rendered.rerender();
+    expect(document.body.querySelector("#settings-modal")).toBeNull();
+    rendered.unmount();
+  });
+
+  it("clears the analysis cache from settings", async () => {
+    const cache = await import("@/core/infrastructure/cache/analysisCache");
+    mockAppState.isSettingsOpen = true;
+    const rendered = renderListen();
+    await settleEffects();
+
+    const settingsModal = getRequired<HTMLDivElement>(
+      document.body,
+      "#settings-modal",
+    );
+    const clearButton = getRequired<HTMLButtonElement>(
+      settingsModal,
+      "#cached-analysis-clear",
+    );
+    expect(clearButton.textContent).toBe("Clear 12.5MB");
+    expect(clearButton.disabled).toBe(false);
+    await click(clearButton);
+    await settleEffects();
+    expect(cache.clearAllAnalysisCache).toHaveBeenCalled();
+    rendered.unmount();
+  });
+
+  it("associates the timer label with the select", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+
+    const settingsModal = getRequired<HTMLDivElement>(
+      document.body,
+      "#settings-modal",
+    );
+    const timerLabel = getRequired<HTMLLabelElement>(
+      settingsModal,
+      'label[for="sleep-timer-select"]',
+    );
+    expect(timerLabel.control).toBe(
+      getRequired<HTMLSelectElement>(settingsModal, "#sleep-timer-select"),
+    );
+    rendered.unmount();
+  });
+
+  it("applies and persists theme changes immediately", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+
+    const lightTheme = getRequired<HTMLInputElement>(
+      document.body,
+      'input[name="settings-theme"][value="light"]',
+    );
+    await click(lightTheme);
+
+    expect(window.localStorage.getItem("fj-theme")).toBe("light");
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(jukeboxControllerInstances[0]?.refresh).toHaveBeenCalled();
+    rendered.unmount();
+  });
+
   it("expires the sleep timer through the playback stop path", async () => {
     vi.useFakeTimers();
     let nowMs = 0;
@@ -617,11 +1338,12 @@ describe("Listen route behavior", () => {
     const rendered = renderListen();
     await settleEffects();
 
-    await openTuningModal(rendered.container);
-    await click(getRequired<HTMLButtonElement>(rendered.container, "#sleep-timer-open"));
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+    await settleEffects();
     const sleepTimerModal = getRequired<HTMLDivElement>(
-      rendered.container,
-      "#sleep-timer-modal",
+      document.body,
+      "#settings-modal",
     );
     await changeSelect(
       getRequired<HTMLSelectElement>(sleepTimerModal, "#sleep-timer-select"),
@@ -641,10 +1363,12 @@ describe("Listen route behavior", () => {
     });
 
     expect(engine.stopJukebox).toHaveBeenCalledTimes(1);
-    await click(getRequired<HTMLButtonElement>(rendered.container, "#sleep-timer-open"));
+    mockAppState.isSettingsOpen = true;
+    rendered.rerender();
+    await settleEffects();
     const expiredModal = getRequired<HTMLDivElement>(
-      rendered.container,
-      "#sleep-timer-modal",
+      document.body,
+      "#settings-modal",
     );
     expect(
       getRequired<HTMLDivElement>(expiredModal, "#sleep-timer-current").textContent,
@@ -669,6 +1393,97 @@ describe("Listen route behavior", () => {
     await click(playButton);
     expect(playButton.getAttribute("aria-label")).toBe("Pause");
 
+    rendered.unmount();
+  });
+
+  it("keeps listen time running when selecting an autocanonizer beat", async () => {
+    let nowMs = 1000;
+    let listenTimer: (() => void) | null = null;
+    vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+    vi.mocked(window.setInterval).mockImplementation(
+      ((callback: TimerHandler) => {
+        if (typeof callback === "function") {
+          listenTimer = () => callback();
+        }
+        return 1 as unknown as ReturnType<typeof window.setInterval>;
+      }) as unknown as typeof window.setInterval,
+    );
+    const rendered = renderListen();
+    await settleEffects();
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+      "autocanonizer",
+    );
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#viz-play"));
+
+    nowMs = 6000;
+    await act(async () => {
+      listenTimer?.();
+    });
+    expect(
+      getRequired(rendered.container, ".viz-meta-stats span:nth-child(2)")
+        .textContent,
+    ).toBe("00:00:05");
+
+    await act(async () => {
+      autocanonizerInstances[0]?.emitSelect(1);
+    });
+    nowMs = 7000;
+    await act(async () => {
+      listenTimer?.();
+    });
+
+    expect(autocanonizerInstances[0]?.startAtIndex).toHaveBeenLastCalledWith(1);
+    expect(
+      getRequired(rendered.container, ".viz-meta-stats span:nth-child(2)")
+        .textContent,
+    ).toBe("00:00:06");
+    rendered.unmount();
+  });
+
+  it("draws the promoted jump target before moving a caught-up cursor", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    const jukebox = jukeboxControllerInstances[0];
+    jukebox?.update.mockClear();
+
+    await act(async () => {
+      engine?.emitUpdate({
+        beatsPlayed: 12,
+        currentBeatIndex: 2,
+        lastJumped: true,
+        lastJumpFromIndex: 1,
+        lastJumpToIndex: 0,
+      });
+    });
+
+    expect(jukebox?.update).toHaveBeenNthCalledWith(1, 0, true, 1);
+    expect(jukebox?.update).toHaveBeenNthCalledWith(2, 2, false, 0);
+    rendered.unmount();
+  });
+
+  it("moves the cursor without highlighting a transport-only jump", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    const jukebox = jukeboxControllerInstances[0];
+    engine?.getLastJumpWasBranch.mockReturnValue(false);
+    jukebox?.update.mockClear();
+
+    await act(async () => {
+      engine?.emitUpdate({
+        beatsPlayed: 12,
+        currentBeatIndex: 2,
+        lastJumped: true,
+        lastJumpFromIndex: 1,
+        lastJumpToIndex: 0,
+      });
+    });
+
+    expect(jukebox?.update).toHaveBeenCalledTimes(1);
+    expect(jukebox?.update.mock.calls[0]?.[0]).toBe(2);
+    expect(jukebox?.update.mock.calls[0]?.[1]).toBe(false);
     rendered.unmount();
   });
 
@@ -750,7 +1565,48 @@ describe("Listen route behavior", () => {
     expect(exportMocks.exportJukeboxAudio.mock.calls[0]?.[0]).toMatchObject({
       audioMode: "daycore",
       sectionStartBeatIndices: [],
+      userAnchorEdge: null,
     });
+    rendered.unmount();
+  });
+
+  it("renders swing afresh for a WAV export and from the store for MP3", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
+    await click(
+      getRequired<HTMLButtonElement>(
+        rendered.container,
+        ".tuning-footer .tab-btn:last-child",
+      ),
+    );
+    await settleEffects();
+
+    const exportWith = async (format: string) => {
+      vi.mocked(renderSwingBuffer).mockClear();
+      await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
+      const formatSelect = Array.from(
+        rendered.container.querySelectorAll<HTMLSelectElement>("select"),
+      ).find((select) => select.querySelector('option[value="wav"]'));
+      if (!formatSelect) {
+        throw new Error("Expected export format select");
+      }
+      await changeSelect(formatSelect, format);
+      await click(
+        getRequired<HTMLButtonElement>(
+          rendered.container,
+          ".modal-footer .tab-btn:last-child",
+        ),
+      );
+      await settleEffects();
+      return vi.mocked(renderSwingBuffer).mock.calls.at(-1)?.[2];
+    };
+
+    expect(await exportWith("wav")).toMatchObject({ trackId: null });
+    expect(await exportWith("mp3")).toMatchObject({ trackId: "fp-test" });
     rendered.unmount();
   });
 
@@ -805,16 +1661,80 @@ describe("Listen route behavior", () => {
     );
     await click(daycoreInput);
 
-    const footerButtons = Array.from(
-      rendered.container.querySelectorAll<HTMLButtonElement>(".tuning-footer .tab-btn")
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
     );
-    await click(footerButtons[1] as HTMLButtonElement);
 
     expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
     const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
     expect(playTitle.textContent).toContain("(daycore)");
     expect(rendered.container.textContent).toContain("Bringing it on home");
     expect(window.location.search).toContain("am=daycore");
+    rendered.unmount();
+  });
+
+  it("shows the intensity slider only for supported playback styles and applies it", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    expect(rendered.container.querySelector("#audio-intensity")).toBeNull();
+
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-lofi"));
+    expect(rendered.container.querySelector("#audio-intensity")).toBeNull();
+
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
+    const slider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#audio-intensity",
+    );
+    await changeRange(slider, "130");
+
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    expect(window.location.search).toContain("am=nightcore");
+    expect(window.location.search).toContain("ai=130");
+    const player = playerInstances.at(-1) as unknown as {
+      setJukeboxAudioMode: ReturnType<typeof vi.fn>;
+    };
+    expect(player.setJukeboxAudioMode).toHaveBeenCalledWith("nightcore", 130);
+    rendered.unmount();
+  });
+
+  it("passes the audio intensity to jukebox export", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
+    await changeRange(
+      getRequired<HTMLInputElement>(rendered.container, "#audio-intensity"),
+      "150",
+    );
+    await click(
+      getRequired<HTMLButtonElement>(
+        rendered.container,
+        ".tuning-footer .tab-btn:last-child",
+      ),
+    );
+
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
+    await click(
+      getRequired<HTMLButtonElement>(
+        rendered.container,
+        ".modal-footer .tab-btn:last-child",
+      ),
+    );
+    await settleEffects();
+
+    expect(exportMocks.exportJukeboxAudio.mock.calls[0]?.[0]).toMatchObject({
+      audioMode: "nightcore",
+      audioIntensityPct: 150,
+    });
     rendered.unmount();
   });
 
@@ -829,10 +1749,9 @@ describe("Listen route behavior", () => {
     await openTuningModal(rendered.container);
     await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
-    const footerButtons = Array.from(
-      rendered.container.querySelectorAll<HTMLButtonElement>(".tuning-footer .tab-btn")
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
     );
-    await click(footerButtons[1] as HTMLButtonElement);
     await settleEffects();
 
     const engine = engineInstances[0];
@@ -842,8 +1761,163 @@ describe("Listen route behavior", () => {
     expect(engine.pauseJukebox).toHaveBeenCalledTimes(1);
     expect(engine.startJukebox).toHaveBeenLastCalledWith(false);
     expect(engine.play).toHaveBeenCalledTimes(2);
+    // Stored by analysis fingerprint so cached-analysis removal covers it.
+    expect(vi.mocked(renderSwingBuffer).mock.calls.at(-1)?.[2]).toMatchObject({
+      trackId: "fp-test",
+    });
+    // Loading a track trims stored renders to the cap, sparing its own.
+    const cache = await import("@/core/infrastructure/cache/analysisCache");
+    expect(cache.trimRenderedTracks).toHaveBeenCalledWith("fp-test");
     expect(playButton.getAttribute("aria-label")).toBe("Pause");
     expect(window.location.search).toContain("am=swing");
+    rendered.unmount();
+  });
+
+  it("prepares instrumental mode, swaps the rendered buffer in and resumes", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    const playButton = getRequired<HTMLButtonElement>(rendered.container, "#viz-play");
+    await click(playButton);
+    expect(playButton.getAttribute("aria-label")).toBe("Pause");
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+    await settleEffects();
+
+    const player = playerInstances.at(-1) as unknown as {
+      setRenderedJukeboxAudioBuffer: ReturnType<typeof vi.fn>;
+      setJukeboxAudioMode: ReturnType<typeof vi.fn>;
+    };
+    expect(vi.mocked(renderInstrumentalBuffer)).toHaveBeenCalledTimes(1);
+    // Stored by analysis fingerprint so cached-analysis removal covers it.
+    expect(vi.mocked(renderInstrumentalBuffer).mock.calls[0]?.[1]).toBe("fp-test");
+    expect(player.setRenderedJukeboxAudioBuffer).toHaveBeenCalledWith(
+      "instrumental",
+      { duration: 4 },
+    );
+    expect(player.setJukeboxAudioMode).toHaveBeenLastCalledWith("instrumental");
+    const engine = engineInstances[0];
+    expect(engine?.pauseJukebox).toHaveBeenCalledTimes(1);
+    expect(engine?.startJukebox).toHaveBeenLastCalledWith(false);
+    expect(playButton.getAttribute("aria-label")).toBe("Pause");
+    expect(window.location.search).toContain("am=instrumental");
+    rendered.unmount();
+  });
+
+  it("returns to normal mode when the instrumental render fails", async () => {
+    vi.mocked(renderInstrumentalBuffer).mockRejectedValueOnce(new Error("no gpu"));
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
+    );
+    await settleEffects();
+
+    const player = playerInstances.at(-1) as unknown as {
+      setJukeboxAudioMode: ReturnType<typeof vi.fn>;
+    };
+    expect(player.setJukeboxAudioMode).toHaveBeenLastCalledWith("off", 100);
+    expect(window.location.search).not.toContain("am=");
+    rendered.unmount();
+  });
+
+  it("cancels an instrumental render when another mode is applied", async () => {
+    vi.mocked(renderInstrumentalBuffer).mockImplementationOnce(
+      () => new Promise<AudioBuffer>(() => {}),
+    );
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
+    const clickApply = () =>
+      click(
+        getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
+      );
+    await clickApply();
+    await settleEffects();
+    expect(getRequired<HTMLButtonElement>(rendered.container, "#viz-play").getAttribute("aria-label")).toBe(
+      "Preparing Instrumental mode",
+    );
+
+    // The playback controls are hidden while preparing; the shortcut still opens Extras.
+    await keydown("e", "KeyE");
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
+    await clickApply();
+    await settleEffects();
+
+    expect(vi.mocked(cancelInstrumentalRender)).toHaveBeenCalled();
+    expect(getRequired<HTMLButtonElement>(rendered.container, "#viz-play").getAttribute("aria-label")).toBe(
+      "Play",
+    );
+    rendered.unmount();
+  });
+
+  it("hides the instrumental option where the renderer does not allow it", async () => {
+    vi.mocked(isInstrumentalModeAvailable).mockReturnValue(false);
+    const rendered = renderListen();
+    await settleEffects();
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    expect(rendered.container.querySelector("#audio-mode-instrumental")).toBeNull();
+    expect(rendered.container.querySelector("#audio-mode-swing")).not.toBeNull();
+    rendered.unmount();
+    vi.mocked(isInstrumentalModeAvailable).mockReturnValue(true);
+  });
+
+  it("resets audio mode and intensity together when swing render fails", async () => {
+    vi.mocked(renderSwingBuffer).mockRejectedValueOnce(new Error("render failed"));
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
+    await changeRange(
+      getRequired<HTMLInputElement>(rendered.container, "#audio-intensity"),
+      "150",
+    );
+    const clickApply = () =>
+      click(
+        getRequired<HTMLButtonElement>(
+          rendered.container,
+          ".tuning-footer .tab-btn:last-child",
+        ),
+      );
+    await clickApply();
+    expect(window.location.search).toContain("ai=150");
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
+    await clickApply();
+    await settleEffects();
+
+    const player = playerInstances.at(-1) as unknown as {
+      setJukeboxAudioMode: ReturnType<typeof vi.fn>;
+    };
+    expect(player.setJukeboxAudioMode).toHaveBeenLastCalledWith("off", 100);
+    expect(window.location.search).not.toContain("am=");
+    expect(window.location.search).not.toContain("ai=");
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
+    const slider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#audio-intensity",
+    );
+    expect(slider.value).toBe("100");
     rendered.unmount();
   });
 
@@ -892,6 +1966,144 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
+  it("adjusts play velocity with brackets, Down, and Up", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+
+    await keydown("]", "BracketRight", true);
+    await keydown("[", "BracketLeft");
+    await keydown("ArrowDown");
+    await keydown("ArrowUp");
+
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(1, 2);
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(2, 1);
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(3, 0);
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(4, 1);
+    expect(rendered.container.textContent).toContain("Play velocity: +1");
+    rendered.unmount();
+  });
+
+  it("adjusts play velocity via physical bracket positions on non-US layouts", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+
+    // Latin American layout: the physical bracket keys produce ´ (dead) and +
+    await keydown("Dead", "BracketRight");
+    await keydown("´", "BracketLeft");
+
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(1, 2);
+    expect(engine.setPlayVelocity).toHaveBeenNthCalledWith(2, 1);
+    rendered.unmount();
+  });
+
+  it("reports the capped play velocity", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+    engine.setPlayVelocity(16);
+    engine.setPlayVelocity.mockClear();
+
+    await keydown("]", "BracketRight");
+
+    expect(engine.setPlayVelocity).toHaveBeenCalledWith(17);
+    expect(engine.getPlayVelocity()).toBe(16);
+    expect(rendered.container.textContent).toContain("Play velocity: +16");
+    rendered.unmount();
+  });
+
+  it("holds Control to freeze and clears it on keyup, blur, and cleanup", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+    engine.setFreezeCurrentBeat.mockClear();
+
+    await keydown("Control");
+    await keyup("Control");
+    await keydown("Control");
+    await blurWindow();
+
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(1, true);
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(2, false);
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(3, true);
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(4, false);
+
+    rendered.unmount();
+    expect(engine.setFreezeCurrentBeat).toHaveBeenLastCalledWith(false);
+    expect(engine.setForceBranch).toHaveBeenLastCalledWith(false);
+  });
+
+  it("clears freeze and force-branch when the tab is hidden", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+    engine.setFreezeCurrentBeat.mockClear();
+    engine.setForceBranch.mockClear();
+
+    await keydown("Control");
+    await hideDocument();
+
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(1, true);
+    expect(engine.setFreezeCurrentBeat).toHaveBeenNthCalledWith(2, false);
+    expect(engine.setForceBranch).toHaveBeenLastCalledWith(false);
+    rendered.unmount();
+  });
+
+  it("keeps Left and Right assigned to selected branch cycling", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0];
+    if (!controller || !engine) {
+      throw new Error("Expected jukebox controller and engine instances");
+    }
+    const edges = [
+      {
+        id: 1,
+        deleted: false,
+        src: { start: 1, which: 1 },
+        dest: { start: 0, which: 0 },
+        distance: 8,
+      },
+      {
+        id: 2,
+        deleted: false,
+        src: { start: 2, which: 2 },
+        dest: { start: 0, which: 0 },
+        distance: 8,
+      },
+    ];
+    vi.spyOn(engine, "getVisualizationData").mockReturnValue({
+      beats: mockAnalysis.beats,
+      edges,
+    });
+    await act(async () => {
+      controller.emitEdgeSelect(edges[0]);
+    });
+
+    await keydown("ArrowRight");
+
+    expect(controller.setSelectedEdgeActive).toHaveBeenLastCalledWith(edges[1]);
+    expect(engine.setPlayVelocity).not.toHaveBeenCalled();
+    rendered.unmount();
+  });
+
   it("sets and clears the selected backward branch as the user anchor with A", async () => {
     const rendered = renderListen();
     await settleEffects();
@@ -929,7 +2141,43 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("ignores A for a selected forward branch", async () => {
+  it("redirects A on a forward branch to its backward twin", async () => {
+    const forward = {
+      id: 8,
+      deleted: false,
+      src: { start: 4, which: 4 },
+      dest: { start: 12, which: 12 },
+      distance: 8,
+    };
+    const twin = {
+      id: 9,
+      deleted: false,
+      src: { start: 12, which: 12 },
+      dest: { start: 4, which: 4 },
+      distance: 8,
+    };
+    mockVizEdges = [forward, twin];
+    const rendered = renderListen();
+    await settleEffects();
+
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0];
+    if (!controller || !engine) {
+      throw new Error("Expected jukebox controller and engine instances");
+    }
+    await act(async () => {
+      controller.emitEdgeSelect(forward);
+    });
+
+    await keydown("A", "KeyA");
+
+    expect(engine.setUserAnchorEdge).toHaveBeenCalledWith(twin);
+    expect(controller.setSelectedEdgeActive).toHaveBeenLastCalledWith(twin);
+    expect(rendered.container.textContent).toContain("Anchor branch set");
+    rendered.unmount();
+  });
+
+  it("shows a toast instead of anchoring a forward branch with no backward twin", async () => {
     const rendered = renderListen();
     await settleEffects();
 
@@ -951,6 +2199,184 @@ describe("Listen route behavior", () => {
     await keydown("A", "KeyA");
 
     expect(engine.setUserAnchorEdge).not.toHaveBeenCalled();
+    expect(rendered.container.textContent).toContain(
+      "Anchor requires a backward branch",
+    );
+    rendered.unmount();
+  });
+
+  it("does not redirect to the backward twin on the arc visualization", async () => {
+    window.localStorage.setItem("fj-viz", String(ARC_VIZ_INDEX));
+    const forward = {
+      id: 8,
+      deleted: false,
+      src: { start: 4, which: 4 },
+      dest: { start: 12, which: 12 },
+      distance: 8,
+    };
+    const twin = {
+      id: 9,
+      deleted: false,
+      src: { start: 12, which: 12 },
+      dest: { start: 4, which: 4 },
+      distance: 8,
+    };
+    mockVizEdges = [forward, twin];
+    const rendered = renderListen();
+    await settleEffects();
+
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0];
+    if (!controller || !engine) {
+      throw new Error("Expected jukebox controller and engine instances");
+    }
+    await act(async () => {
+      controller.emitEdgeSelect(forward);
+    });
+
+    await keydown("A", "KeyA");
+
+    expect(engine.setUserAnchorEdge).not.toHaveBeenCalled();
+    expect(rendered.container.textContent).toContain(
+      "Anchor requires a backward branch",
+    );
+    rendered.unmount();
+  });
+
+  it("honors a visualization switch made after the branch was selected", async () => {
+    const forward = {
+      id: 8,
+      deleted: false,
+      src: { start: 4, which: 4 },
+      dest: { start: 12, which: 12 },
+      distance: 8,
+    };
+    const twin = {
+      id: 9,
+      deleted: false,
+      src: { start: 12, which: 12 },
+      dest: { start: 4, which: 4 },
+      distance: 8,
+    };
+    mockVizEdges = [forward, twin];
+    const rendered = renderListen();
+    await settleEffects();
+
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0];
+    if (!controller || !engine) {
+      throw new Error("Expected jukebox controller and engine instances");
+    }
+    await act(async () => {
+      controller.emitEdgeSelect(forward);
+    });
+
+    // Switching to the arc viz after the selection must apply to the A
+    // shortcut even though the hotkey effect does not re-run.
+    const vizSelect = getRequired<HTMLSelectElement>(
+      rendered.container,
+      "#viz-select",
+    );
+    await changeSelect(vizSelect, String(ARC_VIZ_INDEX));
+
+    await keydown("A", "KeyA");
+
+    expect(engine.setUserAnchorEdge).not.toHaveBeenCalled();
+    expect(rendered.container.textContent).toContain(
+      "Anchor requires a backward branch",
+    );
+    rendered.unmount();
+  });
+
+  it("updates the velocity toast in place while ramping", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+
+    await keydown("]", "BracketRight");
+    await keydown("]", "BracketRight", true);
+
+    const toasts = rendered.container.querySelectorAll(".toast");
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.textContent).toBe("Play velocity: +3");
+    rendered.unmount();
+  });
+
+  async function openCustomAnchorEditor() {
+    window.localStorage.setItem("fj-custom-anchor-enabled", "1");
+    mockVizBeats = Array.from({ length: 32 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      confidence: 1,
+      neighbors: [],
+      overlappingSegments: [],
+    }));
+    const rendered = renderListen();
+    await settleEffects();
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0] as unknown as {
+      getActiveAnchor: ReturnType<typeof vi.fn>;
+      getAnchorParam: ReturnType<typeof vi.fn>;
+      setCustomAnchor: ReturnType<typeof vi.fn>;
+      setForceBranch: ReturnType<typeof vi.fn>;
+    };
+    if (!controller || !engine) {
+      throw new Error("Expected jukebox controller and engine instances");
+    }
+    engine.getActiveAnchor.mockReturnValue({ src: 20, dest: 5 });
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#custom-anchor-start"));
+    return { rendered, controller, engine };
+  }
+
+  it("opens the custom anchor editor, saves a dragged pair as ab, and closes on Escape", async () => {
+    const { rendered, controller, engine } = await openCustomAnchorEditor();
+    expect(controller.setAnchorEdit).toHaveBeenLastCalledWith({ src: 20, dest: 5, active: "src" });
+    expect(rendered.container.querySelector("#custom-anchor-toolbar")).not.toBeNull();
+    expect(rendered.container.querySelector("#viz-select")).toBeNull();
+
+    engine.getAnchorParam.mockReturnValue({ custom: { src: 24, dest: 5 } });
+    const commit = controller.setOnAnchorEditCommit.mock.calls.at(-1)?.[0] as (state: unknown) => void;
+    await act(async () => {
+      commit({ src: 24, dest: 5, active: "src" });
+    });
+    expect(engine.setCustomAnchor).toHaveBeenCalledWith(24, 5);
+    const savedKey = Object.keys(window.localStorage).find((key) => key.startsWith("fj-tuning:"));
+    expect(savedKey).toBeDefined();
+    expect(JSON.parse(window.localStorage.getItem(savedKey!)!).anchor).toBe("24-5");
+
+    await keydown("Escape", "Escape");
+    expect(rendered.container.querySelector("#custom-anchor-toolbar")).toBeNull();
+    expect(controller.setAnchorEdit).toHaveBeenLastCalledWith(null);
+    rendered.unmount();
+  });
+
+  it("nudges the selected end with arrows and keeps Shift from force-branching while editing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { rendered, controller, engine } = await openCustomAnchorEditor();
+
+    await keydown("ArrowRight", "ArrowRight");
+    expect(controller.setAnchorEdit).toHaveBeenLastCalledWith({ src: 21, dest: 5, active: "src" });
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", code: "ArrowLeft", shiftKey: true }),
+      );
+    });
+    expect(controller.setAnchorEdit).toHaveBeenLastCalledWith({ src: 17, dest: 5, active: "src" });
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(engine.setCustomAnchor).toHaveBeenLastCalledWith(17, 5);
+
+    engine.setForceBranch.mockClear();
+    await keydown("Shift", "ShiftLeft");
+    expect(engine.setForceBranch).not.toHaveBeenCalledWith(true);
+
+    await keydown("Enter", "Enter");
+    expect(rendered.container.querySelector("#custom-anchor-toolbar")).toBeNull();
     rendered.unmount();
   });
 
@@ -1045,11 +2471,135 @@ describe("Listen route behavior", () => {
       getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:first-child")
     );
 
-    expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("0");
+    expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
     expect(
       getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent
     ).not.toContain("(daycore)");
     expect(rendered.container.textContent).not.toContain("Bringing it on home");
+    rendered.unmount();
+  });
+
+  it("preserves extras settings when reset is clicked from tuning tab", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await changeRange(
+      getRequired<HTMLInputElement>(rendered.container, "#tuning-panel-tuning input[type='range']"),
+      "40",
+    );
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#extras-enabled"));
+    await click(getRequired<HTMLInputElement>(rendered.container, "#bring-home-enabled"));
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+    engine.clearDeletedEdges.mockClear();
+
+    await openTuningModal(rendered.container);
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:first-child")
+    );
+
+    expect(engine.clearDeletedEdges).toHaveBeenCalledTimes(1);
+    expect(rendered.container.querySelector(".tuning-footer")).toBeNull();
+    expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
+    expect(
+      getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent
+    ).toContain("(daycore)");
+    expect(rendered.container.textContent).toContain("Bringing it on home");
+    expect(window.location.search).toContain("am=daycore");
+    rendered.unmount();
+  });
+
+  it("hides reset on both tabs until a setting differs from defaults", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const resetCount = () =>
+      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
+
+    await openTuningModal(rendered.container);
+    expect(resetCount()).toBe(0);
+    const threshold = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#tuning-panel-tuning input[type='range']",
+    );
+    await changeRange(threshold, "40");
+    expect(resetCount()).toBe(1);
+    await changeRange(threshold, "20");
+    expect(resetCount()).toBe(0);
+
+    await switchToExtrasTab(rendered.container);
+    expect(resetCount()).toBe(0);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#extras-enabled"));
+    expect(resetCount()).toBe(0);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
+    expect(resetCount()).toBe(1);
+    rendered.unmount();
+  });
+
+  it("shows tuning reset for a deleted branch or a non-default anchor", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const engine = engineInstances[0];
+    if (!engine) {
+      throw new Error("Expected jukebox engine instance");
+    }
+    const resetCount = () =>
+      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
+    const closeButton = () =>
+      getRequired<HTMLButtonElement>(rendered.container, ".modal-close");
+
+    const graphSpy = vi.spyOn(engine as unknown as { getGraphState: () => unknown }, "getGraphState");
+    graphSpy.mockReturnValue({
+      computedThreshold: 20,
+      currentThreshold: 20,
+      totalBeats: 0,
+      allEdges: [{ id: 3, deleted: true }],
+    });
+    await openTuningModal(rendered.container);
+    expect(resetCount()).toBe(1);
+    await click(closeButton());
+    graphSpy.mockRestore();
+
+    vi.spyOn(engine, "getVisualizationData").mockReturnValue({
+      beats: [],
+      edges: [],
+      userAnchorEdgeId: 7,
+    } as ReturnType<typeof engine.getVisualizationData>);
+    await openTuningModal(rendered.container);
+    expect(resetCount()).toBe(1);
+    rendered.unmount();
+  });
+
+  it("keeps extras reset while an applied mode is deselected in the form", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+    const resetCount = () =>
+      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-off"));
+    expect(resetCount()).toBe(1);
     rendered.unmount();
   });
 
@@ -1118,9 +2668,61 @@ describe("Listen route behavior", () => {
     await openTuningModal(rendered.container);
     const thresholdValue = getRequired<HTMLSpanElement>(
       rendered.container,
-      "#tuning-panel-tuning .label-line span"
+      "#tuning-panel-tuning label:first-child .label-line span:last-child"
     );
     expect(thresholdValue.textContent).toBe("20");
+    rendered.unmount();
+  });
+
+  it("applies minimum jump distance slider checkpoints", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    const slider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#min-jump-distance",
+    );
+    expect(slider.value).toBe("0");
+    await act(async () => {
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      valueSetter?.call(slider, "4");
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(slider.parentElement?.textContent).toContain(">30% of track");
+
+    const applyButton = getRequired<HTMLButtonElement>(
+      rendered.container,
+      ".tuning-footer .tab-btn:last-child",
+    );
+    await click(applyButton);
+
+    expect(engineInstances[0]?.getConfig()).toEqual(
+      expect.objectContaining({
+        justLongBranches: true,
+        minLongBranchPercent: 30,
+      }),
+    );
+    rendered.unmount();
+  });
+
+  it("closes the tuning modal on Escape and restores focus", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    const tuningButton = getRequired<HTMLButtonElement>(rendered.container, "#tuning");
+    tuningButton.focus();
+    await openTuningModal(rendered.container);
+    const modal = getRequired<HTMLDivElement>(rendered.container, "#tuning-modal");
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    await keydown("Escape");
+
+    expect(rendered.container.querySelector("#tuning-modal")).toBeNull();
+    expect(document.activeElement).toBe(tuningButton);
     rendered.unmount();
   });
 
@@ -1130,7 +2732,7 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
-    expect(playTitle.textContent).toContain("(eight_bit)");
+    expect(playTitle.textContent).toContain("(8-bit)");
 
     await openTuningModal(rendered.container);
     await switchToExtrasTab(rendered.container);
@@ -1160,63 +2762,4 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("maps audio mode hover text correctly", async () => {
-    const rendered = renderListen();
-    await settleEffects();
-
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
-
-    const offInput = getRequired<HTMLInputElement>(rendered.container, "#audio-mode-off");
-    const nightcoreInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-nightcore"
-    );
-    const daycoreInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-daycore"
-    );
-    const vaporwaveInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-vaporwave"
-    );
-    const eightDInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-eight-d"
-    );
-    const eightBitInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-eight-bit"
-    );
-    const lofiInput = getRequired<HTMLInputElement>(rendered.container, "#audio-mode-lofi");
-    const underwaterInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-underwater"
-    );
-    const cathedralInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-cathedral"
-    );
-    const cowbellInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-cowbell"
-    );
-    const swingInput = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#audio-mode-swing"
-    );
-
-    expect(offInput.title).toBe("");
-    expect(nightcoreInput.title).toBe("Fast & Bright");
-    expect(daycoreInput.title).toBe("Slow & Deep");
-    expect(vaporwaveInput.title).toBe("Muffled & Slow");
-    expect(eightDInput.title).toBe("Spinning/Spatial");
-    expect(eightBitInput.title).toBe("Bitcrushed & Filtered");
-    expect(lofiInput.title).toBe("Radio Filter");
-    expect(underwaterInput.title).toBe("Heavy Low-Pass");
-    expect(cathedralInput.title).toBe("Cathedral Reverb");
-    expect(cowbellInput.title).toBe("More Cowbell");
-    expect(swingInput.title).toBe("Adds a loping swung feel to each beat");
-    rendered.unmount();
-  });
 });

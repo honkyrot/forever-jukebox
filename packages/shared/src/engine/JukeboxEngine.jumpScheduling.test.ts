@@ -1,0 +1,396 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { JukeboxEngine, type JukeboxPlayer } from "./JukeboxEngine";
+import type {
+  Edge,
+  JukeboxGraphState,
+  JukeboxState,
+  QuantumBase,
+  TrackAnalysis,
+} from "./types";
+
+function makeBeat(which: number): QuantumBase {
+  return {
+    start: which,
+    duration: 1,
+    which,
+    prev: null,
+    next: null,
+    overlappingSegments: [],
+    neighbors: [],
+    allNeighbors: [],
+  };
+}
+
+function linkBeats(beats: QuantumBase[]) {
+  beats.forEach((beat, idx) => {
+    beat.prev = idx > 0 ? beats[idx - 1] : null;
+    beat.next = idx < beats.length - 1 ? beats[idx + 1] : null;
+  });
+}
+
+function makeAnalysis(beats: QuantumBase[]): TrackAnalysis {
+  return {
+    sections: [],
+    bars: [],
+    beats,
+    tatums: [],
+    segments: [],
+    track: {},
+  };
+}
+
+function makePlayer(overrides: Partial<JukeboxPlayer> = {}): JukeboxPlayer {
+  return {
+    play: vi.fn(),
+    pause: vi.fn(),
+    stop: vi.fn(),
+    seek: vi.fn(),
+    scheduleJump: vi.fn(() => true),
+    cancelScheduledJump: vi.fn(),
+    getCurrentTime: () => 0,
+    getAudioTime: () => 0,
+    getPlaybackRate: () => 1,
+    isPlaying: () => true,
+    ...overrides,
+  };
+}
+
+function makeGraph(beats: QuantumBase[], edge: Edge | null): JukeboxGraphState {
+  return {
+    computedThreshold: 0,
+    currentThreshold: 0,
+    lastBranchPoint: edge?.src.which ?? 0,
+    totalBeats: beats.length,
+    longestReach: 0,
+    allEdges: edge ? [edge] : [],
+  };
+}
+
+function installEngineState(
+  engine: JukeboxEngine,
+  beats: QuantumBase[],
+  graph: JukeboxGraphState,
+  currentBeatIndex: number,
+  nextAudioTime: number,
+) {
+  const engineAny = engine as unknown as {
+    analysis: TrackAnalysis;
+    graph: JukeboxGraphState;
+    beats: QuantumBase[];
+    currentBeatIndex: number;
+    nextAudioTime: number;
+    curRandomBranchChance: number;
+    ticking: boolean;
+    lastJumpToIndex: number | null;
+    advanceBeat: (audioTime: number) => void;
+    preparePendingAdvance: (audioTime: number) => void;
+    tick: () => void;
+  };
+  engineAny.analysis = makeAnalysis(beats);
+  engineAny.graph = graph;
+  engineAny.beats = beats;
+  engineAny.currentBeatIndex = currentBeatIndex;
+  engineAny.nextAudioTime = nextAudioTime;
+  engineAny.curRandomBranchChance = engine.getConfig().minRandomBranchChance;
+  return engineAny;
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe("JukeboxEngine jump scheduling", () => {
+  it("schedules selected branches at the source beat boundary", () => {
+    const player = makePlayer();
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 1 });
+    const beats = [0, 1, 2].map(makeBeat);
+    linkBeats(beats);
+    const edge: Edge = {
+      id: 0,
+      src: beats[1],
+      dest: beats[0],
+      distance: 10,
+      deleted: false,
+    };
+    beats[1].neighbors = [edge];
+    beats[1].allNeighbors = [edge];
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, edge),
+      0,
+      10.75,
+    );
+
+    engineAny.advanceBeat(engineAny.nextAudioTime);
+
+    expect(player.scheduleJump).toHaveBeenCalledTimes(1);
+    expect(player.scheduleJump).toHaveBeenCalledWith(0, 1);
+    expect(engine.getLastJumpWasBranch()).toBe(true);
+  });
+
+  it("uses the final beat end as the source boundary when wrapping", () => {
+    const player = makePlayer();
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 2 });
+    const beats = [0, 1].map(makeBeat);
+    linkBeats(beats);
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, null),
+      1,
+      10.75,
+    );
+
+    engineAny.advanceBeat(engineAny.nextAudioTime);
+
+    expect(player.scheduleJump).toHaveBeenCalledTimes(1);
+    expect(player.scheduleJump).toHaveBeenCalledWith(0, 2, null);
+    expect(engine.getLastJumpWasBranch()).toBe(false);
+  });
+
+  it("fails closed when the first branch boundary is too close", () => {
+    const player = makePlayer({ getCurrentTime: () => 0.95 });
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 1 });
+    const beats = [0, 1, 2].map(makeBeat);
+    linkBeats(beats);
+    const edge: Edge = {
+      id: 0,
+      src: beats[1],
+      dest: beats[0],
+      distance: 10,
+      deleted: false,
+    };
+    beats[1].neighbors = [edge];
+    beats[1].allNeighbors = [edge];
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, edge),
+      0,
+      10.05,
+    );
+
+    engineAny.advanceBeat(engineAny.nextAudioTime);
+
+    expect(engineAny.currentBeatIndex).toBe(1);
+    expect(player.scheduleJump).not.toHaveBeenCalled();
+  });
+
+  it("cancels a prepared source-position jump when syncing playback", () => {
+    let currentTime = 0.25;
+    const player = makePlayer({
+      getCurrentTime: () => currentTime,
+      getAudioTime: () => 10,
+    });
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 1 });
+    const beats = [0, 1, 2].map(makeBeat);
+    linkBeats(beats);
+    const edge: Edge = {
+      id: 0,
+      src: beats[1],
+      dest: beats[0],
+      distance: 10,
+      deleted: false,
+    };
+    beats[1].neighbors = [edge];
+    beats[1].allNeighbors = [edge];
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, edge),
+      0,
+      10.75,
+    );
+    engineAny.preparePendingAdvance(engineAny.nextAudioTime);
+    expect(player.scheduleJump).toHaveBeenCalledTimes(1);
+
+    currentTime = 0.4;
+    engine.syncToPlaybackPosition();
+
+    expect(player.cancelScheduledJump).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits promoted audio jump metadata when explicit branch scheduling was missed", () => {
+    vi.useFakeTimers();
+    const currentTimes = [0.95, 0.05, 0.05, 0.05];
+    const player = makePlayer({
+      getAudioTime: () => 1.05,
+      getCurrentTime: vi.fn(() => currentTimes.shift() ?? 0.05),
+      consumeJumpEvent: vi.fn(() => ({
+        sourceStartTime: 1,
+        targetTime: 0,
+      })),
+    });
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 1 });
+    const beats = [0, 1, 2].map(makeBeat);
+    linkBeats(beats);
+    const edge: Edge = {
+      id: 0,
+      src: beats[1],
+      dest: beats[0],
+      distance: 10,
+      deleted: false,
+    };
+    beats[1].neighbors = [edge];
+    beats[1].allNeighbors = [edge];
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, edge),
+      0,
+      1,
+    );
+    const updates: JukeboxState[] = [];
+    const branchUpdates: boolean[] = [];
+    engine.onUpdate((state) => {
+      updates.push(state);
+      branchUpdates.push(engine.getLastJumpWasBranch());
+    });
+    engineAny.ticking = true;
+
+    engineAny.tick();
+
+    expect(player.scheduleJump).not.toHaveBeenCalled();
+    const update = updates[updates.length - 1];
+    expect(update).toMatchObject({
+      currentBeatIndex: 0,
+      lastJumped: true,
+      lastJumpFromIndex: 1,
+      lastJumpToIndex: 0,
+    });
+    expect(branchUpdates[branchUpdates.length - 1]).toBe(true);
+    engine.stopJukebox();
+  });
+
+  it("preserves the promoted jump destination when catch-up advances past it", () => {
+    vi.useFakeTimers();
+    let audioNow = 0.5;
+    let trackNow = 0.5;
+    let pendingJumpEvent: { sourceStartTime: number; targetTime: number } | null = {
+      sourceStartTime: 1,
+      targetTime: 0,
+    };
+    const player = makePlayer({
+      getAudioTime: () => audioNow,
+      getCurrentTime: () => trackNow,
+      consumeJumpEvent: vi.fn(() => {
+        const event = pendingJumpEvent;
+        pendingJumpEvent = null;
+        return event;
+      }),
+    });
+    const engine = new JukeboxEngine(player, { randomMode: "seeded", seed: 1 });
+    const beats = [0, 1, 2].map(makeBeat);
+    linkBeats(beats);
+    const edge: Edge = {
+      id: 0,
+      src: beats[1],
+      dest: beats[0],
+      distance: 10,
+      deleted: false,
+    };
+    beats[1].neighbors = [edge];
+    beats[1].allNeighbors = [edge];
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      makeGraph(beats, edge),
+      0,
+      1,
+    );
+    const updates: JukeboxState[] = [];
+    engine.onUpdate((state) => updates.push(state));
+    engineAny.preparePendingAdvance(engineAny.nextAudioTime);
+    expect(player.scheduleJump).toHaveBeenCalledWith(0, 1);
+
+    audioNow = 2.1;
+    trackNow = 1.1;
+    engineAny.ticking = true;
+    engineAny.tick();
+
+    const update = updates[updates.length - 1];
+    expect(update).toMatchObject({
+      currentBeatIndex: 1,
+      lastJumped: true,
+      lastJumpFromIndex: 1,
+      lastJumpToIndex: 0,
+    });
+    engine.stopJukebox();
+  });
+
+  function installVelocityStride(player: JukeboxPlayer) {
+    const engine = new JukeboxEngine(player, {
+      config: {
+        minRandomBranchChance: 0,
+        maxRandomBranchChance: 0,
+        randomBranchChanceDelta: 0,
+      },
+    });
+    const beats = Array.from({ length: 12 }, (_, which) => makeBeat(which));
+    linkBeats(beats);
+    const engineAny = installEngineState(
+      engine,
+      beats,
+      { ...makeGraph(beats, null), lastBranchPoint: -1 },
+      0,
+      1,
+    );
+    engine.setPlayVelocity(4);
+    engineAny.preparePendingAdvance(engineAny.nextAudioTime);
+    expect(player.scheduleJump).toHaveBeenLastCalledWith(4, 1, null);
+    engineAny.ticking = true;
+    return { engine, engineAny };
+  }
+
+  it("holds a velocity stride when the audio clock lands exactly on the boundary", () => {
+    vi.useFakeTimers();
+    let audioNow = 0.5;
+    let trackNow = 0.5;
+    const player = makePlayer({
+      getAudioTime: () => audioNow,
+      getCurrentTime: () => trackNow,
+    });
+    const { engine, engineAny } = installVelocityStride(player);
+
+    // The player has taken the jump; the engine's boundary equals the clock.
+    audioNow = 1;
+    trackNow = 4;
+    engineAny.tick();
+    expect(engineAny.currentBeatIndex).toBe(0);
+    expect(player.cancelScheduledJump).not.toHaveBeenCalled();
+
+    audioNow = 1.003;
+    trackNow = 4.003;
+    engineAny.tick();
+    expect(engineAny.currentBeatIndex).toBe(4);
+    expect(player.scheduleJump).toHaveBeenLastCalledWith(8, 5, null);
+    expect(player.cancelScheduledJump).not.toHaveBeenCalled();
+    engine.stopJukebox();
+  });
+
+  it("holds a velocity stride when the audio clock passes the boundary mid-tick", () => {
+    vi.useFakeTimers();
+    let audioReads = [0.5];
+    let trackNow = 0.5;
+    const player = makePlayer({
+      getAudioTime: () =>
+        audioReads.length > 1 ? (audioReads.shift() as number) : audioReads[0],
+      getCurrentTime: () => trackNow,
+    });
+    const { engine, engineAny } = installVelocityStride(player);
+
+    // The tick starts just before the boundary; later reads are past it.
+    audioReads = [0.999, 1.002];
+    trackNow = 4.002;
+    engineAny.tick();
+    expect(player.cancelScheduledJump).not.toHaveBeenCalled();
+
+    engineAny.tick();
+    expect(engineAny.currentBeatIndex).toBe(4);
+    expect(player.scheduleJump).toHaveBeenLastCalledWith(8, 5, null);
+    expect(player.cancelScheduledJump).not.toHaveBeenCalled();
+    engine.stopJukebox();
+  });
+});

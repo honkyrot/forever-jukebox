@@ -8,6 +8,10 @@ import { Home } from "./routes/Home";
 import { Listen } from "./routes/Listen";
 import { Faq } from "./routes/Faq";
 import { useInstallPrompt } from "./hooks/useInstallPrompt";
+import { useTranslation } from "react-i18next";
+import { SymbolIcon } from "@/ui/components/SymbolIcon";
+import { isAndroid } from "@/shared/utils/platform";
+import { PLAY_BADGE_URL, PLAY_STORE_URL } from "./constants";
 
 type InstallGateProps = {
   canInstall: boolean;
@@ -15,39 +19,74 @@ type InstallGateProps = {
 };
 
 function InstallGate({ canInstall, promptInstall }: InstallGateProps) {
+  const { t } = useTranslation();
+  const playContent = (
+    <>
+      <a
+        className="install-gate__play"
+        href={PLAY_STORE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <img
+          className="install-gate__play-badge"
+          src={PLAY_BADGE_URL}
+          alt={t("install.playAction")}
+          width={646}
+          height={250}
+        />
+      </a>
+      <p className="install-gate__hint">{t("install.playHint")}</p>
+    </>
+  );
+  const pwaContent = (
+    <>
+      {canInstall ? (
+        <button
+          className="tab-btn install-gate__action"
+          type="button"
+          onClick={() => void promptInstall()}
+        >
+          {t("install.action")}
+        </button>
+      ) : null}
+      <p className="install-gate__hint">
+        {canInstall
+          ? t("install.afterInstall")
+          : t("install.browserMenu")}
+      </p>
+    </>
+  );
+  const [primary, secondary] = isAndroid()
+    ? [playContent, pwaContent]
+    : [pwaContent, playContent];
   return (
     <div className="install-gate">
       <section className="install-gate__panel">
         <div className="hero-title-frame install-gate__title-frame">
           <h1 className="hero-title-neon install-gate__title">
-            THE FOREVER <span className="hero-title-jukebox">JUKEBOX</span>
+            FOREVER <span className="hero-title-jukebox">JUKEBOX</span>
           </h1>
         </div>
         <p className="install-gate__subtitle">
-          Install to use the offline app.
+          {t("install.subtitle")}
         </p>
-        <p className="install-gate__hint">
-          {canInstall
-            ? "After installing, open it from your desktop or app launcher."
-            : "Use your browser menu (Install app/Add to Home Screen), then open the installed app."}
+        <div className="install-gate__option">{primary}</div>
+        <p className="install-gate__hint install-gate__divider">
+          {t("common.or")}
         </p>
-        {canInstall ? (
-          <button
-            className="tab-btn install-gate__action"
-            type="button"
-            onClick={() => void promptInstall()}
-          >
-            Install
-          </button>
-        ) : null}
+        <div className="install-gate__option install-gate__option--secondary">
+          {secondary}
+        </div>
       </section>
     </div>
   );
 }
 
 function AppLayout() {
+  const { t } = useTranslation();
   const location = useLocation();
-  const { isListenLoading } = useAppState();
+  const { isListenLoading, setIsSettingsOpen } = useAppState();
   const { canInstall, isGateUnlocked, promptInstall } = useInstallPrompt();
   const isListenRoute = location.pathname === "/listen";
   const isFaqRoute = location.pathname === "/faq";
@@ -64,36 +103,45 @@ function AppLayout() {
   return (
     <div className="app">
       <header className="hero">
-        <div className="hero-actions" />
         <div className="hero-main">
           <div className="hero-title">
             <div className="hero-title-frame">
               <h1 className="hero-title-neon">
-                THE FOREVER <span className="hero-title-jukebox">JUKEBOX</span>
+                FOREVER <span className="hero-title-jukebox">JUKEBOX</span>
               </h1>
             </div>
-            <span className="hero-subtitle">Offline App</span>
+            <span className="hero-subtitle">{t("navigation.offlineApp")}</span>
           </div>
           {!hideTabsWhileLoading ? (
-            <nav className="tabs" aria-label="Primary">
+            <nav className="tabs" aria-label={t("navigation.primary")}>
               <Link
                 className={`tab-btn ${isHomeRoute ? "active" : ""}`}
                 to="/"
               >
-                Home
+                {t("common.home")}
               </Link>
               <Link
                 className={`tab-btn ${isListenRoute ? "active" : ""}`}
                 to="/listen"
               >
-                Listen
+                {t("common.listen")}
               </Link>
               <Link
                 className={`tab-btn ${isFaqRoute ? "active" : ""}`}
                 to="/faq"
               >
-                FAQ
+                {t("common.faq")}
               </Link>
+              <button
+                id="settings-open"
+                className="tab-btn settings-button"
+                type="button"
+                aria-label={t("settings.open")}
+                title={t("settings.open")}
+                onClick={() => setIsSettingsOpen(true)}
+              >
+                <SymbolIcon className="settings-button-icon" name="settings" />
+              </button>
             </nav>
           ) : null}
         </div>

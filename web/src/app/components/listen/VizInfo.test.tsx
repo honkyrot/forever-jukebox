@@ -1,0 +1,300 @@
+import { Profiler } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render } from "@testing-library/react";
+import { useAppStore } from "../../store";
+import { loadPlaylistIndex } from "../../playlist-actions";
+import { StatusPanel } from "./StatusPanel";
+import { VizInfo } from "./VizInfo";
+
+vi.mock("../../playlist-actions", () => ({
+  loadPlaylistIndex: vi.fn(async () => true),
+}));
+
+describe("VizInfo", () => {
+  beforeEach(() => {
+    act(() => {
+      useAppStore.setState({
+        trackTitle: null,
+        trackArtist: null,
+        playMode: "jukebox",
+        jukeboxAudioMode: "off",
+        listenTimeText: "00:00:00",
+        beatsPlayedText: "0",
+        bringItHomeMode: false,
+        trackDurationSec: 225,
+        autocanonizerMainSeconds: 0,
+        autocanonizerOtherSeconds: 0,
+      });
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows the default title without a track", () => {
+    render(<VizInfo />);
+    expect(document.getElementById("viz-now-playing")?.textContent).toBe(
+      "Forever Jukebox",
+    );
+  });
+
+  it("derives the title with audio-mode suffix and artist", () => {
+    act(() => {
+      useAppStore.setState({
+        trackTitle: "Song",
+        trackArtist: "Artist",
+        jukeboxAudioMode: "nightcore",
+      });
+    });
+    render(<VizInfo />);
+    expect(document.getElementById("viz-now-playing")?.textContent).toBe(
+      "Song (nightcore) — Artist",
+    );
+  });
+
+  it("renders counters and hides beats in autocanonizer mode", () => {
+    act(() => {
+      useAppStore.setState({
+        listenTimeText: "00:01:30",
+        beatsPlayedText: "42",
+      });
+    });
+    render(<VizInfo />);
+    expect(document.getElementById("listen-time")?.textContent).toBe(
+      "00:01:30",
+    );
+    expect(document.getElementById("beats-played")?.textContent).toBe("42");
+    expect(document.getElementById("viz-beats-label")?.textContent).toBe(
+      "Total Beats:",
+    );
+    expect(
+      document.getElementById("viz-beats-label")?.classList.contains(
+        "is-hidden",
+      ),
+    ).toBe(false);
+    act(() => {
+      useAppStore.setState({ playMode: "autocanonizer" });
+    });
+    expect(
+      document.getElementById("viz-beats-label")?.classList.contains(
+        "is-hidden",
+      ),
+    ).toBe(true);
+    expect(
+      document.getElementById("viz-beats-divider")?.classList.contains(
+        "is-hidden",
+      ),
+    ).toBe(true);
+    expect(
+      document
+        .getElementById("autocanonizer-times")
+        ?.classList.contains("is-hidden"),
+    ).toBe(false);
+    expect(
+      document.getElementById("autocanonizer-total-time")?.textContent,
+    ).toBe("3:45");
+  });
+
+  it("renames the beats counter in cowbell mode", () => {
+    act(() => {
+      useAppStore.setState({ jukeboxAudioMode: "cowbell" });
+    });
+    render(<VizInfo />);
+    expect(document.getElementById("viz-beats-label")?.textContent).toBe(
+      "Total Cowbells:",
+    );
+  });
+
+  it("updates the live counters via direct DOM writes without re-rendering", () => {
+    let renders = 0;
+    render(
+      <Profiler id="viz-info" onRender={() => (renders += 1)}>
+        <VizInfo />
+      </Profiler>,
+    );
+    const afterMount = renders;
+
+    act(() => {
+      useAppStore.setState({
+        listenTimeText: "00:00:05",
+        beatsPlayedText: "7",
+        autocanonizerMainSeconds: 62,
+        autocanonizerOtherSeconds: 125,
+      });
+    });
+
+    // The DOM reflects the new values...
+    expect(document.getElementById("listen-time")?.textContent).toBe(
+      "00:00:05",
+    );
+    expect(document.getElementById("beats-played")?.textContent).toBe("7");
+    expect(
+      document.getElementById("autocanonizer-main-time")?.textContent,
+    ).toBe("1:02");
+    expect(
+      document.getElementById("autocanonizer-other-time")?.textContent,
+    ).toBe("2:05");
+    // ...but the high-frequency updates never went through React.
+    expect(renders).toBe(afterMount);
+  });
+
+  it("still re-renders when track metadata changes", () => {
+    let renders = 0;
+    render(
+      <Profiler id="viz-info" onRender={() => (renders += 1)}>
+        <VizInfo />
+      </Profiler>,
+    );
+    const afterMount = renders;
+    act(() => {
+      useAppStore.setState({ trackTitle: "New Song" });
+    });
+    expect(renders).toBeGreaterThan(afterMount);
+  });
+
+  it("shows the bring-it-home fullscreen note", () => {
+    render(<VizInfo />);
+    const label = document.getElementById("bring-home-fullscreen-label");
+    expect(label?.classList.contains("is-hidden")).toBe(true);
+    act(() => {
+      useAppStore.setState({ bringItHomeMode: true });
+    });
+    expect(label?.classList.contains("is-hidden")).toBe(false);
+  });
+});
+
+describe("StatusPanel", () => {
+  beforeEach(() => {
+    act(() => {
+      useAppStore.setState({
+        analysisStatusText: () => "No track selected.",
+        loadingStep: null,
+        audioLoaded: false,
+        analysisLoaded: false,
+        audioLoadInFlight: false,
+        audioModePreparing: false,
+        lastTrackId: null,
+        lastJobId: null,
+        playlist: { tracks: [], currentIndex: -1 },
+        playlistModalOpen: false,
+      });
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the status text, then the loading steps while loading", () => {
+    render(<StatusPanel />);
+    expect(document.getElementById("analysis-status")?.textContent).toBe(
+      "No track selected.",
+    );
+    act(() => {
+      useAppStore.setState({
+        loadingStep: { task: "serverAnalysis", activeId: "beats", progress: 0.5 },
+      });
+    });
+    expect(document.getElementById("analysis-status")).toBeNull();
+    // The steps play out from the first one, even when the real load is further along.
+    const progress = document.querySelector("[role=progressbar]");
+    expect(progress?.getAttribute("aria-valuetext")).toContain("Fetching audio");
+  });
+
+  it("hides the container once the track is loaded", () => {
+    render(<StatusPanel />);
+    const container = document.getElementById("play-status")!;
+    expect(container.classList.contains("hidden")).toBe(false);
+    act(() => {
+      useAppStore.setState({ audioLoaded: true, analysisLoaded: true });
+    });
+    expect(container.classList.contains("hidden")).toBe(true);
+    act(() => {
+      useAppStore.setState({ audioModePreparing: true });
+    });
+    expect(container.classList.contains("hidden")).toBe(false);
+  });
+
+  it("shows the saved-playlist shortcut for inactive saved playlists", () => {
+    render(<StatusPanel />);
+    const button = document.getElementById("saved-playlist")!;
+    expect(button.classList.contains("hidden")).toBe(true);
+    act(() => {
+      useAppStore.setState({
+        playlist: {
+          tracks: [
+            {
+              id: "a",
+              sourceType: "youtube",
+              title: "A",
+              artist: "",
+              duration: null,
+            },
+            {
+              id: "b",
+              sourceType: "youtube",
+              title: "B",
+              artist: "",
+              duration: null,
+            },
+          ],
+          currentIndex: -1,
+        },
+      });
+    });
+    expect(button.classList.contains("hidden")).toBe(false);
+    button.click();
+    expect(useAppStore.getState().playlistModalOpen).toBe(true);
+  });
+
+  it("shows the continue-listening shortcut for the saved resume track", () => {
+    render(<StatusPanel />);
+    const button = document.getElementById("continue-listening")!;
+    const saved = document.getElementById("saved-playlist")!;
+    expect(button.classList.contains("hidden")).toBe(true);
+    act(() => {
+      useAppStore.setState({
+        playlist: {
+          tracks: [
+            {
+              id: "a",
+              sourceType: "youtube",
+              title: "Solo Track",
+              artist: "",
+              duration: null,
+            },
+          ],
+          currentIndex: -1,
+          resumeIndex: 0,
+        },
+      });
+    });
+    expect(button.classList.contains("hidden")).toBe(false);
+    expect(saved.classList.contains("hidden")).toBe(true);
+    expect(button.textContent).toContain("Solo Track");
+    button.click();
+    expect(loadPlaylistIndex).toHaveBeenCalledWith(0);
+
+    act(() => {
+      useAppStore.setState({
+        playlist: {
+          tracks: [
+            { id: "a", sourceType: "youtube", title: "A", artist: "", duration: null },
+            { id: "b", sourceType: "youtube", title: "B", artist: "", duration: null },
+          ],
+          currentIndex: -1,
+          resumeIndex: 1,
+        },
+      });
+    });
+    expect(button.classList.contains("hidden")).toBe(false);
+    expect(saved.classList.contains("hidden")).toBe(false);
+    expect(button.textContent).toContain("B");
+
+    act(() => {
+      useAppStore.setState({ lastTrackId: "a" });
+    });
+    expect(button.classList.contains("hidden")).toBe(true);
+  });
+});

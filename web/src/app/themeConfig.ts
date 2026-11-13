@@ -10,6 +10,13 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--accent": "#4AC7FF",
     "--title-accent": "#F1C47A",
     "--title-glow": "rgba(241, 196, 122, 0.55)",
+    "--scrim": "rgba(10, 12, 16, 0.75)",
+    "--shadow-elevated": "rgba(0, 0, 0, 0.35)",
+    "--shadow-soft": "rgba(0, 0, 0, 0.24)",
+    "--danger": "#E35A5A",
+    "--danger-border": "#7F1D1D",
+    "--danger-surface": "#3B1212",
+    "--danger-text": "#FECACA",
 
     // Surfaces
     "--surface-panel": "#141922",
@@ -23,12 +30,13 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--border-control": "#3B465B",
 
     // Visualizer
-    "--viz-bg": "radial-gradient(circle at 50% 50%, #232B3D 0%, #0F1115 70%)",
+    "--viz-bg":
+      "radial-gradient(circle closest-side at 50% 50%, #232B3D 0%, #0F1115 100%)",
     "--viz-shadow": "rgba(74, 199, 255, 0.14)",
     "--viz-overlay": "rgba(10, 12, 16, 0.6)",
 
     // Graph/Beat
-    "--edge-stroke": "rgba(74, 199, 255, 0.5)",
+    "--edge-stroke": "rgba(74, 199, 255, 0.75)",
     "--edge-selected": "#B48CFF",
     "--beat-fill": "#FFD46A",
     "--beat-highlight": "#FFD46A",
@@ -42,6 +50,13 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--accent": "#2E8BFF",
     "--title-accent": "#B144FF",
     "--title-glow": "rgba(177, 68, 255, 0.34)",
+    "--scrim": "rgba(38, 26, 56, 0.42)",
+    "--shadow-elevated": "rgba(38, 26, 56, 0.22)",
+    "--shadow-soft": "rgba(38, 26, 56, 0.16)",
+    "--danger": "#B3261E",
+    "--danger-border": "rgba(179, 38, 30, 0.36)",
+    "--danger-surface": "#FCEEEE",
+    "--danger-text": "#7A1B16",
 
     // Surfaces
     "--surface-panel": "#FCFAFF",
@@ -55,12 +70,13 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--border-control": "rgba(96, 56, 152, 0.34)",
 
     // Visualizer
-    "--viz-bg": "radial-gradient(circle at 50% 50%, #D9C3FF 0%, #F6F1FF 70%)",
+    "--viz-bg":
+      "radial-gradient(circle closest-side at 50% 50%, #D9C3FF 0%, #F6F1FF 100%)",
     "--viz-shadow": "rgba(101, 52, 168, 0.24)",
     "--viz-overlay": "rgba(250, 246, 255, 0.74)",
 
     // Graph/Beat
-    "--edge-stroke": "rgba(77, 48, 120, 0.44)",
+    "--edge-stroke": "rgba(77, 48, 120, 0.66)",
     "--edge-selected": "#7F39FB",
     "--beat-fill": "#B144FF",
     "--beat-highlight": "#B144FF",

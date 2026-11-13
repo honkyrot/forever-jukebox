@@ -1,4 +1,4 @@
-# The Forever Jukebox Analysis API
+# Forever Jukebox Analysis API
 
 REST API wrapper for the analysis generator. This codebase is intentionally separate from the analysis engine in `engine/`.
 
@@ -15,6 +15,13 @@ Linting (ruff):
 ```bash
 pip install -r requirements-dev.txt
 ruff check api worker
+```
+
+Tests (pytest):
+
+```bash
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ## Configure the generator
@@ -93,7 +100,16 @@ Responses:
 
 - `202` for `downloading`, `queued`, or `processing` (includes `progress`)
 - `200` with `complete` + `result` JSON
-- `200` with `failed` + `error` (failed jobs are retained with logs for inspection/repair; retryable download failures are replaced by a new job on the next source request)
+- `200` with `failed` + `error` (failed jobs are retained with logs for inspection/repair; retryable download failures restart with the same job ID on the next source request)
+
+Retry a failed job:
+
+```bash
+curl -X POST /api/jobs/<id>/retry
+```
+
+The backend restarts retryable source failures in place and otherwise returns
+the job's current state unchanged.
 
 Search Spotify:
 
@@ -185,6 +201,24 @@ Fetch recently played songs (defaults to 10):
 curl "/api/recent?limit=10"
 ```
 
+Report a bad track (`reason` is `wrong_track`, `bad_audio`, or `other`; only the first report per track is kept; returns 403 when `ADMIN_KEY` is not set):
+
+```bash
+curl -X POST "/api/reports/<id>" -H "Content-Type: application/json" -d '{"reason":"bad_audio"}'
+```
+
+List reported tracks (admin):
+
+```bash
+curl "/api/reports" -H "X-Admin-Key: $ADMIN_KEY"
+```
+
+Dismiss a track report (admin):
+
+```bash
+curl -X DELETE "/api/reports/<id>" -H "X-Admin-Key: $ADMIN_KEY"
+```
+
 Create a favorites sync code:
 
 ```bash
@@ -217,7 +251,7 @@ Within 30 minutes of creation/completion, the admin header is not required:
 curl -X DELETE "/api/jobs/<id>"
 ```
 
-Preview manual storage cleanup for cold, low-play tracks (admin):
+Preview manual storage cleanup for cold tracks (admin):
 
 ```bash
 curl -X POST "/api/admin/storage-cleanup" \
@@ -226,15 +260,57 @@ curl -X POST "/api/admin/storage-cleanup" \
   -d '{}'
 ```
 
-The cleanup policy is server-side: completed jobs with `play_count < 3` and
-source activity older than 90 days. Dry-run is the default. To execute the
-cleanup, set `dry_run` to `false` and include the explicit confirmation:
+The cleanup policy is server-side: completed jobs whose source has not been
+played in over 365 days (`updated_at` is bumped on each play). Pass `days` as
+`180`, `365` or `730` to tighten the window when storage is tight or
+loosen it to hold tracks longer; anything else is rejected. Tracks that were
+never opened (`play_count` 0) qualify after 7 days instead, since loading an
+analysis counts as a play. Every provider is eligible, uploads included.
+
+Set `zero_plays_only` to `true` to clear only never-opened tracks and spare
+everything anyone has listened to. The 7-day grace is then the whole gate, so
+`days` does not apply and every window behaves alike; the response echoes the
+flag back.
+
+Cleanup is destructive and matches the admin delete: the audio, analysis and log
+files go, and so do the job and source rows. `/listen/<job_id>` links to a
+cleaned-up track stop resolving, and a later request for the same track creates a
+new job with a freshly picked source.
+
+Each run then prunes favorite entries whose job no longer exists, since favorites
+key on job id and such an entry can never resolve again. The sweep covers the
+whole favorites store, so it also clears entries left behind by earlier admin
+deletes; favorites on failed or in-flight jobs are kept. If the jobs table reads
+back empty, pruning stands down rather than emptying every sync list.
+
+Dry-run is the default, and lists every match in `candidates` (oldest first)
+alongside the `candidate_bytes` total and the `orphaned_favorites` count it would
+prune. To execute the cleanup, set `dry_run` to `false` and include the explicit
+confirmation:
 
 ```bash
 curl -X POST "/api/admin/storage-cleanup" \
   -H "Content-Type: application/json" \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -d '{"dry_run":false,"confirm":"delete"}'
+```
+
+Preview a tighter window before committing to it:
+
+```bash
+curl -X POST "/api/admin/storage-cleanup" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -d '{"days":180}'
+```
+
+Clear only the never-opened tracks:
+
+```bash
+curl -X POST "/api/admin/storage-cleanup" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -d '{"zero_plays_only":true}'
 ```
 
 ## Storage

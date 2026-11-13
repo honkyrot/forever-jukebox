@@ -165,8 +165,7 @@ def analyze_audio(
     duration = len(audio) / sample_rate if sample_rate else 0.0
 
     report(10, "beats")
-    def beat_progress(percent: int, stage: str, message: str) -> None:
-        del message
+    def beat_progress(percent: int, stage: str, _message: str) -> None:
         clamped = max(0, min(100, int(percent)))
         mapped = 10 + int((clamped / 100.0) * 75.0)
         stage_name = f"beats.{stage}" if stage else "beats"
@@ -181,8 +180,11 @@ def analyze_audio(
     if not beat_times:
         raise NoBeatsDetectedError(NO_BEATS_DETECTED_MESSAGE)
 
-    report(90, "features")
-    frame_features = compute_frame_features(audio, config.features)
+    frame_features = compute_frame_features(
+        audio,
+        config.features,
+        progress_cb=(lambda fraction: report(85 + 9 * fraction, "features")) if progress_cb else None,
+    )
     novelty = compute_novelty(
         frame_features["mfcc"],
         frame_features["hpcp"],
@@ -199,13 +201,14 @@ def analyze_audio(
     if len(boundaries) < 2:
         boundaries = [0.0, float(duration)]
 
+    report(95, "building")
     segments = []
     total_segments = max(len(boundaries) - 1, 1)
     for i in range(total_segments):
         start = boundaries[i]
         end = boundaries[i + 1]
         times = frame_features["frame_times"]
-        idx = np.where((times >= start) & (times < end))[0]
+        idx = np.nonzero((times >= start) & (times < end))[0]
         if len(idx) == 0:
             if times.size == 0:
                 hpcp_dim = frame_features["hpcp"].shape[1] if frame_features["hpcp"].ndim == 2 else 12
@@ -323,7 +326,7 @@ def analyze_audio(
         },
     }
 
-    report(100, "features")
+    report(100, "building")
     return analysis
 
 

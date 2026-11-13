@@ -1,20 +1,6 @@
-### Local modifications
-This fork was created to add a couple of features I wanted
+# Forever Jukebox
 
-Changelog:
-- Some adjustments to UI elements (personal preference).
-- Added a "Branch Chance" display to show the current probability of branching at the next beat.
-- BPM visualizer
-- More color options (timbre and similarity)
-- Extra autocannonizer features
-- Show all songs feature
-
-i dunno how to modify PWA or Android versions, they will be left as is<br>
-have fun
-
-# The Forever Jukebox
-
-![The Forever Jukebox logo](./tfj-logo.png)
+![Forever Jukebox logo](./fj-logo.png)
 
 The Forever Jukebox is a self-hosted, end-to-end system that analyzes audio,
 serves the results via a lightweight API, and powers a refreshed Infinite
@@ -25,10 +11,12 @@ generating similar beat/segment/section data locally.
 
 ## Structure
 
-- `engine/` — The Forever Jukebox audio analysis engine.
+- `engine/` — the Forever Jukebox audio analysis engine.
 - `api/` — REST API + worker that calls the engine.
 - `web/` — Web UI.
 - `pwa/` — Offline/local analysis PWA that can also export jukebox audio.
+- `packages/shared/` — Shared jukebox engine/audio/visualization code used by
+  both `web/` and `pwa/` (npm workspace package `@forever-jukebox/shared`).
 - `schema.json` — JSON schema reference for analysis output.
 
 ## Quick Start
@@ -43,11 +31,16 @@ All-in-one local dev:
 
 Local dev startup installs missing dependencies by default and does not check for latest versions each run. To force dependency updates locally, temporarily enable the update toggles in `dev.sh` and rerun it.
 
-Then open the web UI at `http://localhost:5173`.
+Then open the web UI at `http://localhost:5173` (the offline PWA also runs, at `http://localhost:5174`).
+
+Tests: each component documents its own (see Standalone Setup below). The
+web UI has unit tests (`cd web && npm test`) and a full-app Playwright e2e
+suite (`cd web && npm run test:e2e`) — see [`web/e2e/README.md`](./web/e2e/README.md).
 
 ## Android App (standalone repo)
 
 - Source + releases: [creightonlinza/forever-jukebox-android](https://github.com/creightonlinza/forever-jukebox-android)
+- Two builds: the Google Play app is offline-only. The GitHub Releases build is a manual install that also connects to a running Forever Jukebox server (enter the server URL in the app).
 
 ## Docker (production)
 
@@ -64,11 +57,12 @@ Optional:
 
 - `YOUTUBE_API_KEY`: optional fallback for `/api/search/youtube` when `yt-dlp` search fails.
 - `ADMIN_KEY`: optional; required only for admin-only actions (play-count updates, and deletes outside the 30-minute grace window). Send it via `X-Admin-Key` request header.
-- `NTFY_TOPIC_KEY`: optional; enables ntfy alerts for YouTube download errors.
+- `NTFY_TOPIC_KEY`: optional; sends an ntfy digest, at most every 6 hours, when YouTube downloads are being blocked (403 / bot-check / rate-limit errors), plus one follow-up when downloads succeed again.
 - `WORKER_COUNT`: optional; defaults to `1` and controls worker concurrency. A single
   instance on a local/container volume supports modest concurrency such as `6`; do not
   point multiple running app instances at the same `jobs.db`.
 - `MAX_TRACK_LENGTH`: optional; when set to a positive number (minutes), rejects jobs over that duration.
+- `MAX_UPLOAD_MB`: optional; defaults to `20` and caps the size of uploaded files, in whole megabytes (fractions round down; values below `1` use the default).
 - `MAX_FAVORITES`: optional; defaults to `150` and controls the maximum favorites sync payload size.
 - `ALLOW_USER_UPLOAD`: optional; defaults to `false`. Set `true` to enable `/api/upload`.
 - `ALLOW_USER_URL`: optional; defaults to `false`. Set `true` to allow user-supplied URL jobs (YouTube, SoundCloud, Bandcamp).
@@ -76,6 +70,7 @@ Optional:
 - `HOSTED_BY_NAME`: optional; shows an instance host credit in the web footer.
 - `HOSTED_BY_URL`: optional; links the host credit when `HOSTED_BY_NAME` is set.
 - `PORT`: optional; defaults to `8000`.
+- `STORAGE_BACKEND`: optional; defaults to `local` (audio and analysis under `api/storage/`). Set `s3` to keep them in an S3-compatible bucket (such as Tigris on Fly.io) instead; see [`DEPLOYMENT.md`](./DEPLOYMENT.md#optional-s3-compatible-object-storage).
 
 Example `.env`:
 
@@ -87,6 +82,7 @@ ADMIN_KEY=
 NTFY_TOPIC_KEY=
 WORKER_COUNT=1
 MAX_TRACK_LENGTH=12
+MAX_UPLOAD_MB=
 MAX_FAVORITES=
 ALLOW_USER_UPLOAD=false
 ALLOW_USER_URL=false

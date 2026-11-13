@@ -1,3 +1,7 @@
+import type { PlayMode } from "./context";
+import type { PlaylistTrack } from "./playlist";
+import i18n from "./i18n";
+
 export type FavoriteTrack = {
   uniqueSongId: string;
   title: string;
@@ -5,6 +9,9 @@ export type FavoriteTrack = {
   duration: number | null;
   sourceType: "youtube" | "soundcloud" | "bandcamp" | "upload";
   tuningParams?: string | null;
+  // Play mode the track was favorited in. Absent on favorites that predate
+  // autocanonizer support, which are therefore treated as jukebox.
+  playMode?: PlayMode;
 };
 
 export type FavoritesDisplaySort = {
@@ -108,7 +115,7 @@ export function sortFavoritesForDisplay(
 export function sortFavorites(items: FavoriteTrack[]) {
   const seen = new Set<string>();
   const deduped = items.filter((item) => {
-    if (!item || !item.uniqueSongId || seen.has(item.uniqueSongId)) {
+    if (!item?.uniqueSongId || seen.has(item.uniqueSongId)) {
       return false;
     }
     seen.add(item.uniqueSongId);
@@ -130,9 +137,13 @@ function compareFavoriteDisplayValue(
   key: FavoritesDisplaySort["key"],
 ) {
   const valueA =
-    key === "title" ? (a.title || "Untitled").trim() : favoriteDisplayArtist(a);
+    key === "title"
+      ? (a.title || i18n.t("common.untitled")).trim()
+      : favoriteDisplayArtist(a);
   const valueB =
-    key === "title" ? (b.title || "Untitled").trim() : favoriteDisplayArtist(b);
+    key === "title"
+      ? (b.title || i18n.t("common.untitled")).trim()
+      : favoriteDisplayArtist(b);
   return valueA.toLowerCase().localeCompare(valueB.toLowerCase());
 }
 
@@ -146,7 +157,7 @@ export function loadFavoritesSyncCode(): string | null {
     return null;
   }
   const trimmed = raw.trim().toLowerCase();
-  return trimmed ? trimmed : null;
+  return trimmed || null;
 }
 
 export function saveFavoritesSyncCode(code: string) {
@@ -155,4 +166,65 @@ export function saveFavoritesSyncCode(code: string) {
     return;
   }
   localStorage.setItem(FAVORITES_SYNC_KEY, trimmed);
+}
+
+// Jukebox is the implicit default and is not stored.
+export function storedPlayMode(playMode: PlayMode): PlayMode | undefined {
+  return playMode === "jukebox" ? undefined : playMode;
+}
+
+export function favoriteToPlaylistTrack(
+  item: FavoriteTrack,
+  sourceType: FavoriteTrack["sourceType"],
+): PlaylistTrack {
+  return {
+    id: item.uniqueSongId,
+    sourceType,
+    title: item.title || i18n.t("common.untitled"),
+    artist: item.artist || "",
+    duration: item.duration,
+    tuningParams: item.tuningParams ?? null,
+    playMode: item.playMode,
+  };
+}
+
+export type CurrentTrackIdentity = {
+  lastTrackId: string | null;
+  lastJobId: string | null;
+  lastSourceId: string | null;
+  lastSourceProvider: string | null;
+};
+
+// Pure version of the favorites-handler current-track matcher so the React
+// play menu can derive the star button state from the store.
+export function findCurrentFavorite(
+  favorites: FavoriteTrack[],
+  identity: CurrentTrackIdentity,
+): FavoriteTrack | null {
+  const currentId = identity.lastTrackId ?? identity.lastJobId;
+  if (!currentId) {
+    return null;
+  }
+  const current = favorites.find((item) => item.uniqueSongId === currentId);
+  if (current) {
+    return current;
+  }
+  if (identity.lastSourceProvider && identity.lastSourceProvider !== "youtube") {
+    return null;
+  }
+  const sourceId = identity.lastSourceId;
+  if (
+    !sourceId ||
+    sourceId === currentId ||
+    /^[a-f0-9]{32}$/.test(sourceId)
+  ) {
+    return null;
+  }
+  return (
+    favorites.find(
+      (item) =>
+        item.uniqueSongId === sourceId &&
+        (item.sourceType ?? "youtube") === "youtube",
+    ) ?? null
+  );
 }

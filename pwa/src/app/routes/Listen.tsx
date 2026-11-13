@@ -1,377 +1,152 @@
 import React from "react";
+import "@/app/i18n";
 import { Link } from "react-router-dom";
 import { AnalysisWorkerClient } from "@/core/infrastructure/analysis/AnalysisWorkerClient";
 import { AudioDecoder } from "@/core/infrastructure/audio/AudioDecoder";
-import { createAnalysisCache } from "@/core/infrastructure/cache/analysisCache";
+import {
+  createAnalysisCache,
+  trimRenderedTracks,
+} from "@/core/infrastructure/cache/analysisCache";
+import { setFileHandle } from "@/core/infrastructure/cache/fileHandleStore";
+import {
+  loadTuning,
+  removeTuning,
+  saveTuning,
+} from "@/core/infrastructure/cache/tuningStore";
 import { AnalyzeAudioUseCase, AnalyzeStage } from "@/core/application/usecases/analyzeAudio";
 import { AnalysisOutput } from "@/shared/analysis-schema";
-import { formatDuration } from "@/shared/utils/format";
-import {
-  safeLocalStorageGet,
-  safeLocalStorageSet,
-} from "@/shared/utils/safeStorage";
-import {
-  pickBinaryExportFile,
-  saveExportBinary,
-} from "@/shared/utils/exportJson";
 import {
   BufferedAudioPlayer,
   type JukeboxAudioMode,
-} from "@/shared/jukebox/audio/BufferedAudioPlayer";
-import { CowbellOverlayService } from "@/shared/jukebox/audio/CowbellOverlayService";
-import { getOrCreateSwingBuffer } from "@/shared/jukebox/audio/swingBufferCache";
-import { renderSwingBuffer } from "@/shared/jukebox/audio/swingRenderer";
-import { Edge, JukeboxConfig, JukeboxEngine } from "@/shared/jukebox/engine";
+} from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
+import { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
 import {
-  DEFAULT_VISUALIZATION_INDEX,
-  VISUALIZATION_LABELS,
-} from "@/shared/jukebox/constants/visualization";
+  DEFAULT_AUDIO_MODE_INTENSITY,
+  audioModeChangeAffectsPlayback,
+  clampAudioModeIntensity,
+} from "@forever-jukebox/shared/audio/audioModes";
+import { getOrCreateSwingBuffer } from "@forever-jukebox/shared/audio/swingBufferCache";
+import { renderSwingBuffer } from "@forever-jukebox/shared/audio/swingRenderer";
 import {
-  backgroundClearTimeout,
-  backgroundSetTimeout,
-} from "@/shared/jukebox/background/backgroundTimer";
+  cancelInstrumentalRender,
+  renderInstrumentalBuffer,
+} from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import {
-  exportJukeboxAudio,
-  type JukeboxExportProgress,
-} from "@/shared/jukebox/export";
-import { AutocanonizerController } from "@/shared/jukebox/autocanonizer/AutocanonizerController";
-import { JukeboxController } from "@/shared/jukebox/viz/JukeboxController";
+  DEFAULT_JUKEBOX_CONFIG,
+  DEFAULT_MIN_LONG_BRANCH_PERCENT,
+  Edge,
+  findBackwardTwin,
+  hasNonDefaultExtras,
+  hasNonDefaultTuning,
+  isCustomAnchorEdge,
+  JukeboxEngine,
+} from "@forever-jukebox/shared";
+import {
+  visualizationSeparatesPairedEdges,
+} from "@forever-jukebox/shared/constants/visualization";
+import {
+  createToastQueue,
+} from "@forever-jukebox/shared/ui/toastQueue";
+import { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
+import {
+  renderWubMachineBuffer,
+  type WubMachineRender,
+} from "@forever-jukebox/shared/wubmachine/wubMachineRender";
+import { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
 import { useAppState } from "../state/AppState";
-import { ProgressSteps, ProgressStep } from "@/ui/components/ProgressSteps";
 import { SymbolIcon } from "@/ui/components/SymbolIcon";
-import { useWakeLock } from "./listen/useWakeLock";
+import { useMarquee } from "./listen/useMarquee";
+import { useTranslation } from "react-i18next";
+import { applyTheme, resolveStoredTheme, type ThemeName } from "../theme";
+import type { PlayMode, TuningModalTab } from "./listen/types";
+import {
+  resolveAudioIntensityFromUrl,
+  resolveAudioModeFromUrl,
+  writeAudioModeToUrl,
+} from "./listen/audioMode";
+import {
+  resolveStoredAnchorHighlight,
+  resolveStoredBranchStatsEnabled,
+  resolveStoredCustomAnchorEnabled,
+  resolveStoredFinishOutSong,
+  resolveStoredVisualizationIndex,
+  resolveStoredVolume,
+  resolveStoredWubMachineLoop,
+  storeAnchorHighlight,
+  storeBranchStatsEnabled,
+  storeCustomAnchorEnabled,
+  storeFinishOutSong,
+  storeVisualizationIndex,
+  storeVolume,
+  storeWubMachineLoop,
+} from "./listen/preferences";
+import {
+  formatTrackTitle,
+  playControlIcon,
+  playControlText,
+  type PreparingAudioMode,
+} from "./listen/labels";
+import {
+  RANDOM_BRANCH_DELTA_PERCENT_SCALE,
+  tuneFormChanged,
+  type ExtrasFormState,
+  type TuneFormState,
+} from "./listen/tuning";
+import { deriveBranchStats, nextEdgeIndex } from "./listen/branches";
+import { createSessionSeed } from "./listen/browser";
+import {
+  ShortcutToastStack,
+  type ShortcutToastQueue,
+} from "./listen/ShortcutToastStack";
+import { BranchStatsPopup } from "./listen/BranchStatsPopup";
+import {
+  CustomAnchorButton,
+  CustomAnchorInfo,
+  CustomAnchorToolbar,
+} from "@forever-jukebox/shared/ui/CustomAnchorEditor";
+import { customAnchorLabels, useCustomAnchorEditor } from "./listen/useCustomAnchorEditor";
+import { ExportModal } from "./listen/ExportModal";
+import { InfoModal } from "./listen/InfoModal";
+import { PanPopover } from "./listen/PanPopover";
+import { PlayMenu } from "./listen/PlayMenu";
+import { SettingsModal } from "./listen/SettingsModal";
+import { StatusPanel, liveLoading, type PreparingPhase } from "./listen/StatusPanel";
+import { usePresentedLoading } from "@forever-jukebox/shared/ui/LoadingProgress";
+import { TuningModal } from "./listen/TuningModal";
+import { VizInfo } from "./listen/VizInfo";
+import { VizTop } from "./listen/VizTop";
+import { VolumePopover } from "./listen/VolumePopover";
+import { useAudioExport } from "./listen/useAudioExport";
+import { useFullscreenSession } from "./listen/useFullscreenSession";
+import { useListenHotkeys } from "./listen/useListenHotkeys";
+import { useSleepTimer } from "./listen/useSleepTimer";
+import { useVizPopovers } from "./listen/useVizPopovers";
 
-const STEP_ORDER: Array<{ id: AnalyzeStage; label: string }> = [
-  { id: "loading", label: "Loading file" },
-  { id: "decoding", label: "Decoding audio" },
-  { id: "beats", label: "Detecting beats" },
-  { id: "features", label: "Extracting features" },
-  { id: "building", label: "Building analysis" },
-  { id: "ready", label: "Ready" },
-];
-
-const DEFAULT_CONFIG: JukeboxConfig = {
-  maxBranches: 4,
-  maxBranchThreshold: 80,
-  currentThreshold: 0,
-  justBackwards: false,
-  justLongBranches: false,
-  removeSequentialBranches: false,
-  minRandomBranchChance: 0.18,
-  maxRandomBranchChance: 0.5,
-  randomBranchChanceDelta: 0.02,
-  minLongBranch: 0,
+const VIZ_CLASS_NAMES: Record<PlayMode, string> = {
+  jukebox: "",
+  autocanonizer: "is-canonizer",
+  wubmachine: "is-wubmachine",
 };
-
-const CANONIZER_FINISH_STORAGE_KEY = "fj-canonizer-finish";
-const VISUALIZATION_STORAGE_KEY = "fj-viz";
-const ANCHOR_HIGHLIGHT_STORAGE_KEY = "fj-highlight-anchor-branch";
-const BRANCH_STATS_STORAGE_KEY = "fj-branch-stats-enabled";
-const AUDIO_MODE_QUERY_KEY = "am";
-const MAX_EXPORT_DURATION_SECONDS = 60 * 60 * 2;
-const MAX_RANDOM_BRANCH_DELTA = 0.2;
-const RANDOM_BRANCH_DELTA_PERCENT_SCALE = 100 / MAX_RANDOM_BRANCH_DELTA;
-const DEFAULT_PLAYBACK_VOLUME = 0.5;
-
-type PlayMode = "jukebox" | "autocanonizer";
-type TuningModalTab = "tuning" | "extras";
-type AudioExportFormat = "mp3" | "wav";
-
-type SleepTimerOption = {
-  label: string;
-  durationMs: number | null;
-};
-
-type SleepTimerState = {
-  configuredDurationMs: number | null;
-  endTimeMs: number | null;
-  remainingMs: number;
-};
-
-const SLEEP_TIMER_OPTIONS: SleepTimerOption[] = [
-  { label: "Off", durationMs: null },
-  { label: "15 minutes", durationMs: 15 * 60 * 1000 },
-  { label: "30 minutes", durationMs: 30 * 60 * 1000 },
-  { label: "45 minutes", durationMs: 45 * 60 * 1000 },
-  { label: "1 hour", durationMs: 60 * 60 * 1000 },
-  { label: "2 hours", durationMs: 2 * 60 * 60 * 1000 },
-];
-
-function getSleepTimerOptionValue(durationMs: number | null) {
-  return durationMs === null ? "off" : String(durationMs);
-}
-
-function getSleepTimerDurationFromValue(value: string) {
-  if (value === "off") {
-    return null;
-  }
-  const durationMs = Number(value);
-  const matchedOption = SLEEP_TIMER_OPTIONS.find(
-    (option) => option.durationMs === durationMs,
-  );
-  return matchedOption ? matchedOption.durationMs : null;
-}
-
-function resolveSleepTimerDuration(durationMs: number | null) {
-  return SLEEP_TIMER_OPTIONS.some((option) => option.durationMs === durationMs)
-    ? durationMs
-    : null;
-}
-
-function formatSleepTimerRemaining(remainingMs: number) {
-  return formatDuration(Math.ceil(Math.max(0, remainingMs) / 1000));
-}
-
-type ExtrasFormState = {
-  branchStatsEnabled: boolean;
-  bringItHomeMode: boolean;
-  audioMode: JukeboxAudioMode;
-};
-
-type AudioModeOption = {
-  value: JukeboxAudioMode;
-  label: string;
-  tooltip?: string;
-};
-
-type AudioModeSection = {
-  title: string;
-  options: AudioModeOption[];
-};
-
-const AUDIO_MODE_DEFAULT_OPTION: AudioModeOption = { value: "off", label: "Off" };
-
-const AUDIO_MODE_SECTIONS: AudioModeSection[] = [
-  {
-    title: "Playback Styles",
-    options: [
-      { value: "nightcore", label: "Nightcore", tooltip: "Fast & Bright" },
-      { value: "daycore", label: "Daycore", tooltip: "Slow & Deep" },
-      { value: "vaporwave", label: "Vaporwave", tooltip: "Muffled & Slow" },
-      { value: "eight_d", label: "8D Audio", tooltip: "Spinning/Spatial" },
-      { value: "lofi", label: "Lofi", tooltip: "Radio Filter" },
-      { value: "eight_bit", label: "8-Bit", tooltip: "Bitcrushed & Filtered" },
-      { value: "underwater", label: "Underwater", tooltip: "Heavy Low-Pass" },
-      { value: "cathedral", label: "Cathedral", tooltip: "Cathedral Reverb" },
-    ],
-  },
-  {
-    title: "Remix Toys",
-    options: [
-      { value: "cowbell", label: "More Cowbell", tooltip: "More Cowbell" },
-      {
-        value: "swing",
-        label: "Swing",
-        tooltip: "Adds a loping swung feel to each beat",
-      },
-    ],
-  },
-];
-
-function formatAudioModeLabel(audioMode: JukeboxAudioMode) {
-  if (audioMode === "cowbell") {
-    return "more cowbell";
-  }
-  return audioMode === "swing" ? "swing" : audioMode;
-}
-
-function getAudioModeInputId(mode: JukeboxAudioMode) {
-  return `audio-mode-${mode.replace(/_/g, "-")}`;
-}
-
-function AudioModeRadio({
-  option,
-  checked,
-  disabled,
-  onChange,
-  className = "",
-}: {
-  option: AudioModeOption;
-  checked: boolean;
-  disabled: boolean;
-  onChange: () => void;
-  className?: string;
-}) {
-  return (
-    <label
-      className={`audio-mode-option ${className}`.trim()}
-      title={option.tooltip}
-    >
-      <input
-        id={getAudioModeInputId(option.value)}
-        type="radio"
-        name="audio-mode"
-        value={option.value}
-        checked={checked}
-        onChange={onChange}
-        title={option.tooltip}
-        disabled={disabled}
-      />
-      {option.label}
-    </label>
-  );
-}
-
-function getVisualizationLabel(index: number) {
-  return VISUALIZATION_LABELS[index] ?? `Visualization ${index + 1}`;
-}
-
-function coerceVisualizationIndex(index: number) {
-  if (
-    Number.isFinite(index) &&
-    index >= 0 &&
-    index < VISUALIZATION_LABELS.length
-  ) {
-    return index;
-  }
-  return DEFAULT_VISUALIZATION_INDEX;
-}
-
-function buildAudioExportName(fileName: string, extension: string) {
-  const base = fileName.replace(/\.[^.]+$/, "").trim();
-  return `${base || "jukebox"}_forever.${extension}`;
-}
-
-function resolveStoredAnchorHighlight(): boolean {
-  const stored = safeLocalStorageGet(ANCHOR_HIGHLIGHT_STORAGE_KEY);
-  return stored === "1" || stored === "true";
-}
-
-function resolveStoredBranchStatsEnabled(): boolean {
-  const stored = safeLocalStorageGet(BRANCH_STATS_STORAGE_KEY);
-  return stored === "1" || stored === "true";
-}
-
-function storeAnchorHighlight(enabled: boolean) {
-  safeLocalStorageSet(ANCHOR_HIGHLIGHT_STORAGE_KEY, enabled ? "1" : "0");
-}
-
-function storeBranchStatsEnabled(enabled: boolean) {
-  safeLocalStorageSet(BRANCH_STATS_STORAGE_KEY, enabled ? "1" : "0");
-}
-
-function parseAudioMode(value: string | null): JukeboxAudioMode | null {
-  if (
-    value === "off" ||
-    value === "nightcore" ||
-    value === "daycore" ||
-    value === "vaporwave" ||
-    value === "eight_d" ||
-    value === "eight_bit" ||
-    value === "lofi" ||
-    value === "underwater" ||
-    value === "cathedral" ||
-    value === "cowbell" ||
-    value === "swing"
-  ) {
-    return value;
-  }
-  return null;
-}
-
-function resolveAudioModeFromUrl(): JukeboxAudioMode {
-  if (typeof window === "undefined") {
-    return "off";
-  }
-  const params = new URLSearchParams(window.location.search);
-  return parseAudioMode(params.get(AUDIO_MODE_QUERY_KEY)) ?? "off";
-}
-
-function writeAudioModeToUrl(mode: JukeboxAudioMode, replace = true) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const url = new URL(window.location.href);
-  if (mode === "off") {
-    url.searchParams.delete(AUDIO_MODE_QUERY_KEY);
-  } else {
-    url.searchParams.set(AUDIO_MODE_QUERY_KEY, mode);
-  }
-  if (replace) {
-    window.history.replaceState({}, "", url.toString());
-    return;
-  }
-  window.history.pushState({}, "", url.toString());
-}
-
-function formatTrackTitle(baseTitle: string, playMode: PlayMode, audioMode: JukeboxAudioMode) {
-  if (playMode === "autocanonizer") {
-    return `${baseTitle} (autocanonized)`;
-  }
-  if (audioMode !== "off") {
-    return `${baseTitle} (${formatAudioModeLabel(audioMode)})`;
-  }
-  return baseTitle;
-}
-
-type TuneFormState = {
-  threshold: number;
-  computedThreshold: number;
-  minProb: number;
-  maxProb: number;
-  ramp: number;
-  volume: number;
-  highlightAnchorBranch: boolean;
-  justBackwards: boolean;
-  justLongBranches: boolean;
-  removeSequentialBranches: boolean;
-};
-
-type ExportFormState = {
-  durationSeconds: number;
-  format: AudioExportFormat;
-  bitrateKbps: number;
-};
-
-function createSessionSeed(): number {
-  if ("crypto" in globalThis && "getRandomValues" in globalThis.crypto) {
-    const arr = new Uint32Array(1);
-    globalThis.crypto.getRandomValues(arr);
-    return arr[0] >>> 0;
-  }
-  return Math.floor(Math.random() * 0xffffffff) >>> 0;
-}
-
-function waitForNextPaint(): Promise<void> {
-  if ("requestAnimationFrame" in window) {
-    return new Promise((resolve) => {
-      window.requestAnimationFrame(() => resolve());
-    });
-  }
-  return Promise.resolve();
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tag = target.tagName.toLowerCase();
-  return (
-    tag === "input" ||
-    tag === "textarea" ||
-    tag === "button" ||
-    tag === "select" ||
-    tag === "a" ||
-    target.isContentEditable
-  );
-}
-
-function toSimilarityPercent(distance: number, maxDistance: number) {
-  if (!Number.isFinite(distance) || maxDistance <= 0) {
-    return 0;
-  }
-  const normalized = 1 - distance / maxDistance;
-  return Math.round(Math.max(0, Math.min(1, normalized)) * 100);
-}
 
 export function Listen({ isActive = true }: { isActive?: boolean }) {
-  const { file, setIsListenLoading } = useAppState();
+  const { t } = useTranslation();
+  const {
+    file,
+    fileHandle,
+    setIsListenLoading,
+    isSettingsOpen,
+    setIsSettingsOpen,
+  } = useAppState();
   const initialAudioMode = React.useMemo(() => resolveAudioModeFromUrl(), []);
+  const initialAudioIntensity = React.useMemo(
+    () => resolveAudioIntensityFromUrl(),
+    [],
+  );
   const [analysis, setAnalysis] = React.useState<AnalysisOutput | null>(null);
   const [readyFileKey, setReadyFileKey] = React.useState<string | null>(null);
   const [progressStage, setProgressStage] = React.useState<AnalyzeStage>("loading");
-  const [progressMessage, setProgressMessage] = React.useState<string | null>(null);
-  const [progressPercent, setProgressPercent] = React.useState<number | null>(0);
+  const [stageProgress, setStageProgress] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = React.useState(false);
 
@@ -379,111 +154,237 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [isPaused, setIsPaused] = React.useState(false);
   const [beatsPlayed, setBeatsPlayed] = React.useState(0);
   const [listenSeconds, setListenSeconds] = React.useState(0);
+  const [autocanonizerMainSeconds, setAutocanonizerMainSeconds] =
+    React.useState(0);
+  const [autocanonizerOtherSeconds, setAutocanonizerOtherSeconds] =
+    React.useState(0);
+  const [autocanonizerMainPan, setAutocanonizerMainPan] = React.useState(0);
+  const [autocanonizerOtherPan, setAutocanonizerOtherPan] = React.useState(0);
+  const [wubMachineSeconds, setWubMachineSeconds] = React.useState(0);
+  const [wubMachineDurationSeconds, setWubMachineDurationSeconds] =
+    React.useState(0);
+  const [loopTrack, setLoopTrack] = React.useState<boolean>(() =>
+    resolveStoredWubMachineLoop(),
+  );
   const [selectedEdge, setSelectedEdge] = React.useState<Edge | null>(null);
   const [isTuningOpen, setIsTuningOpen] = React.useState(false);
-  const [isSleepTimerOpen, setIsSleepTimerOpen] = React.useState(false);
   const [isInfoOpen, setIsInfoOpen] = React.useState(false);
-  const [isVolumeOpen, setIsVolumeOpen] = React.useState(false);
-  const [isFullscreen, setIsFullscreen] = React.useState(false);
-  const [sleepTimer, setSleepTimerState] = React.useState<SleepTimerState>({
-    configuredDurationMs: null,
-    endTimeMs: null,
-    remainingMs: 0,
-  });
-  const [pendingSleepTimerDurationMs, setPendingSleepTimerDurationMs] =
-    React.useState<number | null>(null);
+  const {
+    sleepTimer,
+    pendingSleepTimerDurationMs,
+    setPendingSleepTimerDurationMs,
+    setSleepTimer,
+  } = useSleepTimer({ isSettingsOpen, onExpire: stopPlayback });
+  const [theme, setTheme] = React.useState<ThemeName>(() =>
+    resolveStoredTheme(),
+  );
   const [bringItHomeMode, setBringItHomeMode] = React.useState(false);
   const [branchStatsEnabled, setBranchStatsEnabled] = React.useState<boolean>(
     () => resolveStoredBranchStatsEnabled(),
   );
+  const [customAnchorEnabled, setCustomAnchorEnabled] = React.useState<boolean>(
+    () => resolveStoredCustomAnchorEnabled(),
+  );
   const [jukeboxAudioMode, setJukeboxAudioMode] =
     React.useState<JukeboxAudioMode>(initialAudioMode);
-  const [swingPreparing, setSwingPreparing] = React.useState(false);
-  const [swingProgress, setSwingProgress] = React.useState(0);
+  const [audioIntensity, setAudioIntensity] = React.useState(
+    initialAudioIntensity,
+  );
+  // Swing and Instrumental pre-render their buffers; one render at a time.
+  const [preparingMode, setPreparingMode] =
+    React.useState<PreparingAudioMode>(null);
+  const [preparingPhase, setPreparingPhase] =
+    React.useState<PreparingPhase>(null);
+  const [preparingProgress, setPreparingProgress] = React.useState(0);
+  const [modelDownloaded, setModelDownloaded] = React.useState(false);
+  // A failed or cancelled render hides the loading panel instead of playing it out.
+  const [prepAborted, setPrepAborted] = React.useState(false);
   const [tuningActiveTab, setTuningActiveTab] =
     React.useState<TuningModalTab>("tuning");
-  const [shortcutToast, setShortcutToast] = React.useState<string | null>(null);
-  const [activeVizIndex, setActiveVizIndex] = React.useState(() => {
-    const raw = safeLocalStorageGet(VISUALIZATION_STORAGE_KEY);
-    if (raw !== null) {
-      const parsed = Number.parseInt(raw, 10);
-      return coerceVisualizationIndex(parsed);
-    }
-    return DEFAULT_VISUALIZATION_INDEX;
-  });
+  const [tuneFormBaseline, setTuneFormBaseline] =
+    React.useState<TuneFormState | null>(null);
+  const [tuningNonDefault, setTuningNonDefault] = React.useState(false);
+  const [activeVizIndex, setActiveVizIndex] = React.useState(() =>
+    resolveStoredVisualizationIndex(),
+  );
   const [playMode, setPlayMode] = React.useState<PlayMode>("jukebox");
   const [highlightAnchorBranch, setHighlightAnchorBranch] = React.useState<boolean>(
     () => resolveStoredAnchorHighlight(),
   );
-  const [finishOutSong, setFinishOutSong] = React.useState<boolean>(() => {
-    return safeLocalStorageGet(CANONIZER_FINISH_STORAGE_KEY) === "true";
-  });
+  const [finishOutSong, setFinishOutSong] = React.useState<boolean>(() =>
+    resolveStoredFinishOutSong(),
+  );
+  const [initialVolume] = React.useState(resolveStoredVolume);
   const [tuneForm, setTuneForm] = React.useState<TuneFormState>({
     threshold: 0,
     computedThreshold: 0,
-    minProb: Math.round(DEFAULT_CONFIG.minRandomBranchChance * 100),
-    maxProb: Math.round(DEFAULT_CONFIG.maxRandomBranchChance * 100),
+    minProb: Math.round(DEFAULT_JUKEBOX_CONFIG.minRandomBranchChance * 100),
+    maxProb: Math.round(DEFAULT_JUKEBOX_CONFIG.maxRandomBranchChance * 100),
     ramp:
       Math.round(
-        DEFAULT_CONFIG.randomBranchChanceDelta *
+        DEFAULT_JUKEBOX_CONFIG.randomBranchChanceDelta *
           RANDOM_BRANCH_DELTA_PERCENT_SCALE *
           10,
       ) / 10,
-    volume: 50,
+    volume: initialVolume,
     highlightAnchorBranch,
-    justBackwards: DEFAULT_CONFIG.justBackwards,
-    justLongBranches: DEFAULT_CONFIG.justLongBranches,
-    removeSequentialBranches: DEFAULT_CONFIG.removeSequentialBranches,
+    justBackwards: DEFAULT_JUKEBOX_CONFIG.justBackwards,
+    minLongBranchPercent: 0,
+    removeSequentialBranches: DEFAULT_JUKEBOX_CONFIG.removeSequentialBranches,
   });
   const [extrasForm, setExtrasForm] = React.useState<ExtrasFormState>({
     branchStatsEnabled: resolveStoredBranchStatsEnabled(),
     bringItHomeMode: false,
+    customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
     audioMode: initialAudioMode,
-  });
-  const [isExportOpen, setIsExportOpen] = React.useState(false);
-  const [isExporting, setIsExporting] = React.useState(false);
-  const [exportError, setExportError] = React.useState<string | null>(null);
-  const [exportProgress, setExportProgress] =
-    React.useState<JukeboxExportProgress | null>(null);
-  const [exportForm, setExportForm] = React.useState<ExportFormState>({
-    durationSeconds: 60,
-    format: "mp3",
-    bitrateKbps: 192,
+    audioIntensity: initialAudioIntensity,
   });
 
   const vizPanelRef = React.useRef<HTMLDivElement | null>(null);
   const vizLayerRef = React.useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = React.useRef<HTMLDivElement | null>(null);
+  const wubMachineLayerRef = React.useRef<HTMLDivElement | null>(null);
   const vizControllerRef = React.useRef<JukeboxController | null>(null);
   const autocanonizerRef = React.useRef<AutocanonizerController | null>(null);
+  const wubmachineRef = React.useRef<WubMachineController | null>(null);
+  // The loaded track's remix, kept across mode switches until the track changes.
+  const wubMachineRenderRef = React.useRef<WubMachineRender | null>(null);
+  const wubMachineAbortRef = React.useRef<AbortController | null>(null);
   const engineRef = React.useRef<JukeboxEngine | null>(null);
+  const customAnchor = useCustomAnchorEditor({
+    engineRef,
+    vizControllerRef,
+    getBeats: () => vizDataRef.current?.beats ?? [],
+    onAnchorChanged: () => {
+      syncVizDataFromEngine();
+      syncTuneFormFromEngine();
+      persistCurrentTuning();
+    },
+  });
   const playerRef = React.useRef<BufferedAudioPlayer | null>(null);
   const cowbellOverlayRef = React.useRef<CowbellOverlayService | null>(null);
   const isRunningRef = React.useRef(false);
   const isPausedRef = React.useRef(false);
   const playModeRef = React.useRef<PlayMode>("jukebox");
   const bringItHomeModeRef = React.useRef(false);
+  // Read by the hotkey handlers, which are registered by an effect that does
+  // not re-run when the visualization changes.
+  const activeVizIndexRef = React.useRef(activeVizIndex);
+  // Last data pushed to the viz controller; every edge mutation funnels
+  // through syncVizDataFromEngine, so this is as fresh as the viz itself.
+  const vizDataRef = React.useRef<ReturnType<
+    JukeboxEngine["getVisualizationData"]
+  > | null>(null);
   const lastBeatRef = React.useRef<number | null>(null);
   const lastCowbellBeatsPlayedRef = React.useRef<number | null>(null);
-  const swingRenderTokenRef = React.useRef(0);
-  const swingPreparingRef = React.useRef(false);
+  const autocanonizerMainPanRef = React.useRef(0);
+  const autocanonizerOtherPanRef = React.useRef(0);
+  const renderTokenRef = React.useRef(0);
+  const preparingModeRef = React.useRef<PreparingAudioMode>(null);
   const playTimerMsRef = React.useRef(0);
   const lastPlayStampRef = React.useRef<number | null>(null);
-  const sleepTimerTimeoutRef = React.useRef<number | null>(null);
-  const sleepTimerEndTimeRef = React.useRef<number | null>(null);
   const analysisRef = React.useRef<AnalysisOutput | null>(null);
+  const fingerprintRef = React.useRef<string | null>(null);
   const previousFileKeyRef = React.useRef<string | null>(null);
-  const volumeButtonRef = React.useRef<HTMLButtonElement | null>(null);
-  const volumePanelRef = React.useRef<HTMLDivElement | null>(null);
-  const { requestWakeLock, releaseWakeLock } = useWakeLock();
+  const {
+    isVolumeOpen,
+    isPanOpen,
+    toggleVolume,
+    togglePan,
+    volumeButtonRef,
+    volumePanelRef,
+    panButtonRef,
+    panPanelRef,
+  } = useVizPopovers({ playMode });
+  const { isFullscreen, onToggleFullscreen, requestWakeLockIfFullscreen } =
+    useFullscreenSession({
+      vizPanelRef,
+      vizControllerRef,
+      autocanonizerRef,
+      wubmachineRef,
+      playModeRef,
+    });
+  const {
+    isExportOpen,
+    isExporting,
+    exportError,
+    exportProgress,
+    exportForm,
+    setExportForm,
+    openExport,
+    closeExport,
+    resetExport,
+    handleExportJukeboxAudio,
+  } = useAudioExport({
+    file,
+    analysis,
+    analysisRef,
+    playerRef,
+    engineRef,
+    playMode,
+    jukeboxAudioMode,
+    audioIntensity,
+    getSourceIdentity: getCurrentSourceIdentity,
+    getRenderedTrackId: () => fingerprintRef.current,
+    getCanonizerRenderPlan: () => autocanonizerRef.current?.planRender() ?? null,
+    getWubMachineRender: () => wubMachineRenderRef.current,
+    renderWubMachine: renderWubMachineForExport,
+    t,
+  });
 
-  const showShortcutToast = React.useCallback((message: string) => {
-    setShortcutToast(message);
-  }, []);
+  // The queue owns stacking/dedupe/timers; ShortcutToastStack subscribes to
+  // it directly so toast churn does not re-render this route.
+  const shortcutToastQueueRef = React.useRef<ShortcutToastQueue | null>(null);
+  if (shortcutToastQueueRef.current === null) {
+    shortcutToastQueueRef.current = createToastQueue<{ message: string }>();
+  }
+  const shortcutToastQueue = shortcutToastQueueRef.current;
 
-  function setSwingPreparingState(preparing: boolean) {
-    swingPreparingRef.current = preparing;
-    setSwingPreparing(preparing);
+  const showShortcutToast = React.useCallback(
+    (message: string, key?: string) => {
+      shortcutToastQueue.show({ message }, key);
+    },
+    [shortcutToastQueue],
+  );
+
+  function setPreparingState(mode: PreparingAudioMode, completed = false) {
+    setPrepAborted(mode === null && !completed && preparingModeRef.current !== null);
+    preparingModeRef.current = mode;
+    setPreparingMode(mode);
+    setPreparingPhase(null);
+    setPreparingProgress(0);
+    setModelDownloaded(false);
+  }
+
+  // Invalidates any render in flight; its completion is then ignored.
+  function stopPreparing() {
+    renderTokenRef.current += 1;
+    cancelInstrumentalRender();
+    wubMachineAbortRef.current?.abort();
+    wubMachineAbortRef.current = null;
+    setPreparingState(null);
+  }
+
+  // The audio-mode reset shared by track changes and the extras reset:
+  // player, mode/intensity state, extras form, and URL all return to "off"
+  // at default intensity.
+  function resetAudioModeToOff(player: BufferedAudioPlayer) {
+    cowbellOverlayRef.current?.disable();
+    stopPreparing();
+    setJukeboxAudioMode("off");
+    setAudioIntensity(DEFAULT_AUDIO_MODE_INTENSITY);
+    setExtrasForm((prev) =>
+      prev.audioMode === "off" &&
+      prev.audioIntensity === DEFAULT_AUDIO_MODE_INTENSITY
+        ? prev
+        : {
+            ...prev,
+            audioMode: "off",
+            audioIntensity: DEFAULT_AUDIO_MODE_INTENSITY,
+          },
+    );
+    player.setJukeboxAudioMode("off", DEFAULT_AUDIO_MODE_INTENSITY);
+    writeAudioModeToUrl("off", DEFAULT_AUDIO_MODE_INTENSITY, true);
   }
 
   function resetPlaybackSessionMetrics() {
@@ -493,6 +394,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     lastCowbellBeatsPlayedRef.current = null;
     setListenSeconds(0);
     setBeatsPlayed(0);
+    setAutocanonizerMainSeconds(0);
+    setAutocanonizerOtherSeconds(0);
+    setWubMachineSeconds(0);
   }
 
   function clearSelectedBranch() {
@@ -500,101 +404,12 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     vizControllerRef.current?.setSelectedEdge(null);
   }
 
-  function clearSleepTimerTimeout() {
-    if (sleepTimerTimeoutRef.current === null) {
-      return;
-    }
-    backgroundClearTimeout(sleepTimerTimeoutRef.current);
-    sleepTimerTimeoutRef.current = null;
-  }
-
-  function publishInactiveSleepTimer() {
-    sleepTimerEndTimeRef.current = null;
-    setSleepTimerState({
-      configuredDurationMs: null,
-      endTimeMs: null,
-      remainingMs: 0,
-    });
-  }
-
-  function expireSleepTimer(expectedEndTimeMs: number) {
-    if (sleepTimerEndTimeRef.current !== expectedEndTimeMs) {
-      return;
-    }
-    sleepTimerEndTimeRef.current = null;
-    setSleepTimerState({
-      configuredDurationMs: null,
-      endTimeMs: null,
-      remainingMs: 0,
-    });
-    clearSleepTimerTimeout();
-    stopPlayback();
-    if (document.fullscreenElement && document.exitFullscreen) {
-      document.exitFullscreen().catch(() => {
-        console.warn("Failed to exit fullscreen");
-      });
-    }
-  }
-
-  function scheduleSleepTimerTick(expectedEndTimeMs: number) {
-    clearSleepTimerTimeout();
-    const remainingMs = Math.max(0, expectedEndTimeMs - performance.now());
-    const nextDelayMs = remainingMs > 1000 ? 1000 : remainingMs;
-    sleepTimerTimeoutRef.current = backgroundSetTimeout(() => {
-      if (sleepTimerEndTimeRef.current !== expectedEndTimeMs) {
-        return;
-      }
-      const nextRemainingMs = Math.max(0, expectedEndTimeMs - performance.now());
-      setSleepTimerState((current) => {
-        if (current.endTimeMs !== expectedEndTimeMs) {
-          return current;
-        }
-        return {
-          configuredDurationMs: current.configuredDurationMs,
-          endTimeMs: expectedEndTimeMs,
-          remainingMs: nextRemainingMs,
-        };
-      });
-      if (nextRemainingMs <= 0) {
-        expireSleepTimer(expectedEndTimeMs);
-        return;
-      }
-      scheduleSleepTimerTick(expectedEndTimeMs);
-    }, nextDelayMs);
-  }
-
-  function setSleepTimer(durationMs: number | null) {
-    clearSleepTimerTimeout();
-    if (
-      durationMs === null ||
-      !Number.isFinite(durationMs) ||
-      durationMs <= 0
-    ) {
-      publishInactiveSleepTimer();
-      return;
-    }
-    const endTimeMs = performance.now() + durationMs;
-    sleepTimerEndTimeRef.current = endTimeMs;
-    setSleepTimerState({
-      configuredDurationMs: durationMs,
-      endTimeMs,
-      remainingMs: durationMs,
-    });
-    scheduleSleepTimerTick(endTimeMs);
-  }
-
-  function openSleepTimer() {
-    setPendingSleepTimerDurationMs(
-      resolveSleepTimerDuration(sleepTimer.configuredDurationMs),
-    );
-    setIsSleepTimerOpen(true);
-  }
-
   function syncVizDataFromEngine() {
     const data = engineRef.current?.getVisualizationData();
     if (data) {
       vizControllerRef.current?.setData(data);
     }
+    vizDataRef.current = data ?? null;
     return data ?? null;
   }
 
@@ -609,6 +424,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   React.useEffect(() => {
     const player = new BufferedAudioPlayer();
+    player.setVolume(initialVolume / 100);
     const cowbellOverlay = new CowbellOverlayService(player.getContext(), {
       getPlaybackRate: () => player.getPlaybackRate(),
     });
@@ -617,14 +433,22 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     cowbellOverlayRef.current = cowbellOverlay;
     if (jukeboxAudioMode === "cowbell") {
       cowbellOverlay.enable();
-      player.setJukeboxAudioMode("cowbell");
-    } else if (jukeboxAudioMode !== "swing") {
-      player.setJukeboxAudioMode(jukeboxAudioMode);
+      player.setJukeboxAudioMode("cowbell", audioIntensity);
+    } else if (
+      jukeboxAudioMode !== "swing" &&
+      jukeboxAudioMode !== "instrumental"
+    ) {
+      player.setJukeboxAudioMode(jukeboxAudioMode, audioIntensity);
     }
     return () => {
       cowbellOverlayRef.current?.dispose();
       cowbellOverlayRef.current = null;
-      void playerRef.current?.dispose();
+      const activePlayer = playerRef.current;
+      if (activePlayer) {
+        activePlayer.dispose().catch((err) => {
+          console.warn(`Audio player dispose failed: ${String(err)}`);
+        });
+      }
       playerRef.current = null;
     };
   }, []);
@@ -634,26 +458,39 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }, [activeVizIndex]);
 
   React.useEffect(() => {
-    safeLocalStorageSet(VISUALIZATION_STORAGE_KEY, String(activeVizIndex));
+    storeVisualizationIndex(activeVizIndex);
   }, [activeVizIndex]);
 
   React.useEffect(() => {
-    if (!vizLayerRef.current || !canonizerLayerRef.current) {
+    if (
+      !vizLayerRef.current ||
+      !canonizerLayerRef.current ||
+      !wubMachineLayerRef.current
+    ) {
       return;
     }
     const controller = new JukeboxController(vizLayerRef.current);
     const autocanonizer = new AutocanonizerController(canonizerLayerRef.current);
+    const wubmachine = new WubMachineController(wubMachineLayerRef.current);
     vizControllerRef.current = controller;
     autocanonizerRef.current = autocanonizer;
+    wubmachineRef.current = wubmachine;
 
     controller.setActiveIndex(activeVizIndex);
     controller.setVisible(playModeRef.current === "jukebox");
     controller.setAnchorHighlightEnabled(highlightAnchorBranch);
     autocanonizer.setVisible(playModeRef.current === "autocanonizer");
     autocanonizer.setFinishOutSong(finishOutSong);
-    autocanonizer.setOnBeat((index) => {
+    autocanonizer.setStreamPans(
+      autocanonizerMainPanRef.current / 100,
+      autocanonizerOtherPanRef.current / 100,
+    );
+    autocanonizer.setVolume(playerRef.current?.getVolume() ?? 1);
+    autocanonizer.setOnBeat((index, _beat, cursorTimes) => {
       setBeatsPlayed(index + 1);
       lastBeatRef.current = index;
+      setAutocanonizerMainSeconds(cursorTimes.mainSeconds);
+      setAutocanonizerOtherSeconds(cursorTimes.otherSeconds);
     });
     autocanonizer.setOnEnded(() => {
       if (!isRunningRef.current) {
@@ -665,21 +502,56 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       if (playModeRef.current !== "autocanonizer") {
         return;
       }
-      startAutocanonizerPlayback(index);
+      startAutocanonizerPlayback(index, { resetSession: false });
     });
+
+    wubmachine.setVisible(playModeRef.current === "wubmachine");
+    wubmachine.setLoop(loopTrack);
+    wubmachine.setVolume(playerRef.current?.getVolume() ?? 1);
+    wubmachine.setOnTick((seconds) => {
+      // Fires every frame; the display only changes once a second.
+      setWubMachineSeconds((prev) =>
+        prev === Math.floor(seconds) ? prev : Math.floor(seconds),
+      );
+    });
+    wubmachine.setOnEnded(() => {
+      if (!isRunningRef.current) {
+        return;
+      }
+      stopPlayback();
+    });
+    wubmachine.setOnSelect((seconds) => {
+      if (playModeRef.current !== "wubmachine") {
+        return;
+      }
+      startWubMachinePlayback(seconds, { resetSession: false });
+    });
+    const render = wubMachineRenderRef.current;
+    if (render) {
+      wubmachine.setRemix(
+        render.buffer,
+        playerRef.current?.getContext() ?? null,
+        render.parts,
+      );
+    }
 
     const resizeObserver = new ResizeObserver(() => {
       controller.resizeActive();
       autocanonizer.resizeNow();
+      wubmachine.resizeNow();
     });
     resizeObserver.observe(vizPanelRef.current ?? vizLayerRef.current);
+    // The viz-top row changes height when the anchor toolbar replaces it.
+    resizeObserver.observe(vizLayerRef.current);
 
     return () => {
       resizeObserver.disconnect();
       controller.destroy();
       autocanonizer.destroy();
+      wubmachine.destroy();
       vizControllerRef.current = null;
       autocanonizerRef.current = null;
+      wubmachineRef.current = null;
     };
   }, [file]);
 
@@ -692,67 +564,42 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }, [isPaused]);
 
   React.useEffect(() => {
-    if (!shortcutToast) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setShortcutToast(null);
-    }, 2000);
     return () => {
-      window.clearTimeout(timer);
+      shortcutToastQueue.clear();
     };
-  }, [shortcutToast]);
+  }, [shortcutToastQueue]);
 
   React.useEffect(() => {
     bringItHomeModeRef.current = bringItHomeMode;
   }, [bringItHomeMode]);
 
   React.useEffect(() => {
+    activeVizIndexRef.current = activeVizIndex;
+  }, [activeVizIndex]);
+
+  React.useEffect(() => {
     playModeRef.current = playMode;
     vizControllerRef.current?.setVisible(playMode === "jukebox");
     autocanonizerRef.current?.setVisible(playMode === "autocanonizer");
+    wubmachineRef.current?.setVisible(playMode === "wubmachine");
     if (playMode === "autocanonizer") {
       autocanonizerRef.current?.resizeNow();
+    } else if (playMode === "wubmachine") {
+      wubmachineRef.current?.resizeNow();
     } else {
       vizControllerRef.current?.resizeActive();
     }
   }, [playMode]);
 
   React.useEffect(() => {
-    safeLocalStorageSet(CANONIZER_FINISH_STORAGE_KEY, String(finishOutSong));
+    storeWubMachineLoop(loopTrack);
+    wubmachineRef.current?.setLoop(loopTrack);
+  }, [loopTrack]);
+
+  React.useEffect(() => {
+    storeFinishOutSong(finishOutSong);
     autocanonizerRef.current?.setFinishOutSong(finishOutSong);
   }, [finishOutSong]);
-
-  React.useEffect(() => {
-    setPendingSleepTimerDurationMs(
-      resolveSleepTimerDuration(sleepTimer.configuredDurationMs),
-    );
-  }, [sleepTimer.configuredDurationMs]);
-
-  React.useEffect(() => {
-    return () => {
-      clearSleepTimerTimeout();
-    };
-  }, []);
-
-  React.useEffect(() => {
-    setIsListenLoading(isAnalyzing);
-    return () => {
-      setIsListenLoading(false);
-    };
-  }, [isAnalyzing, setIsListenLoading]);
-
-  React.useEffect(() => {
-    const duration = analysis?.track?.duration;
-    if (!duration || !Number.isFinite(duration) || duration <= 0) {
-      return;
-    }
-    const rounded = Math.max(5, Math.round(duration));
-    setExportForm((prev) => ({
-      ...prev,
-      durationSeconds: Math.min(MAX_EXPORT_DURATION_SECONDS, rounded),
-    }));
-  }, [analysis]);
 
   React.useEffect(() => {
     if (!file || !playerRef.current) {
@@ -763,17 +610,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const isTrackChange = previousFileKey !== null && previousFileKey !== currentFileKey;
     previousFileKeyRef.current = currentFileKey;
     if (isTrackChange) {
-      cowbellOverlayRef.current?.disable();
       cowbellOverlayRef.current?.setSectionStartBeatIndices([]);
-      swingRenderTokenRef.current += 1;
-      setSwingPreparingState(false);
-      setSwingProgress(0);
-      playerRef.current.setJukeboxAudioMode("off");
-      setJukeboxAudioMode("off");
-      setExtrasForm((prev) =>
-        prev.audioMode === "off" ? prev : { ...prev, audioMode: "off" },
-      );
-      writeAudioModeToUrl("off", true);
+      resetAudioModeToOff(playerRef.current);
     }
 
     const fileKey = `${file.name}:${file.size}:${file.lastModified}`;
@@ -785,24 +623,30 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const usecase = new AnalyzeAudioUseCase(analysisPort, cache, decoder);
 
     engineRef.current?.stopJukebox();
+    engineRef.current?.setFreezeCurrentBeat(false);
+    engineRef.current?.setPlayVelocity(1);
     engineRef.current?.setBringItHomeMode(false);
     autocanonizerRef.current?.stop();
+    stopPreparing();
+    wubMachineRenderRef.current = null;
+    wubmachineRef.current?.setRemix(null, null);
+    setWubMachineDurationSeconds(0);
     resetPlaybackSessionMetrics();
     setIsRunning(false);
     setIsPaused(false);
     setBringItHomeMode(false);
 
     setIsAnalyzing(true);
+    setPrepAborted(false);
     setError(null);
-    setProgressPercent(0);
+    setStageProgress(null);
     setAnalysis(null);
     setReadyFileKey(null);
     analysisRef.current = null;
+    fingerprintRef.current = null;
+    customAnchor.discard();
     clearSelectedBranch();
-    setIsExportOpen(false);
-    setIsExporting(false);
-    setExportError(null);
-    setExportProgress(null);
+    resetExport();
 
     usecase
       .execute({
@@ -811,32 +655,33 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           if (cancelled) {
             return;
           }
-          if (progress.stage === "segments") {
-            setProgressStage("features");
-          } else if (progress.stage === "cached") {
-            setProgressStage("ready");
-          } else {
-            setProgressStage(progress.stage);
-          }
-          setProgressPercent(progress.progress);
-          if (progress.message) {
-            setProgressMessage(progress.message);
-          }
+          setProgressStage(progress.stage);
+          setStageProgress(progress.progress);
         },
       })
-      .then(async (result) => {
+      .then((result) => {
         if (cancelled) {
           return;
         }
         analysisRef.current = result.analysis;
+        fingerprintRef.current = result.fingerprint;
+        trimRenderedTracks(result.fingerprint).catch((err: unknown) => {
+          console.warn(`Rendered track trim failed: ${String(err)}`);
+        });
+        if (fileHandle) {
+          setFileHandle(result.fingerprint, fileHandle).catch((err: unknown) => {
+            console.warn(`File handle save failed: ${String(err)}`);
+          });
+        }
         setAnalysis(result.analysis);
         setReadyFileKey(fileKey);
-        await playerRef.current?.loadBuffer(result.audioBuffer);
+        playerRef.current?.loadBuffer(result.audioBuffer);
         autocanonizerRef.current?.setAudio(
-          playerRef.current?.getBuffer() ?? null,
+          playerRef.current?.getSourceBuffer() ?? null,
           playerRef.current?.getContext() ?? null
         );
         initializeEngine(result.analysis);
+        restoreSavedTuning(result.fingerprint);
         if (jukeboxAudioMode === "cowbell") {
           cowbellOverlayRef.current?.enable();
         }
@@ -844,12 +689,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           playerRef.current?.setJukeboxAudioMode("swing");
           maybePrepareSwingMode();
         }
+        if (jukeboxAudioMode === "instrumental") {
+          playerRef.current?.setJukeboxAudioMode("instrumental");
+          maybePrepareInstrumentalMode();
+        }
+        maybePrepareWubMachine();
       })
       .catch((err) => {
         if (cancelled) {
           return;
         }
-        setError(err instanceof Error ? err.message : String(err));
+        console.warn(`Audio analysis failed: ${String(err)}`);
+        setError(t("analysis.failed"));
       })
       .finally(() => {
         if (!cancelled) {
@@ -860,7 +711,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, [file]);
+  }, [file, fileHandle, t]);
 
   React.useEffect(() => {
     const id = window.setInterval(() => {
@@ -876,168 +727,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     };
   }, []);
 
-  React.useEffect(() => {
-    if (!isActive) {
-      engineRef.current?.setForceBranch(false);
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (isTuningOpen || isInfoOpen || isExportOpen) {
-        return;
-      }
-      if (isEditableTarget(event.target)) {
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        (event.key === "e" || event.key === "E") &&
-        !event.repeat
-      ) {
-        event.preventDefault();
-        openTuningModalTab("extras");
-        return;
-      }
-      if (event.code === "Space") {
-        event.preventDefault();
-        togglePlayback();
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-        selectedEdge
-      ) {
-        event.preventDefault();
-        selectAdjacentBranch(event.key === "ArrowRight" ? 1 : -1);
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        (event.key === "Delete" || event.key === "Backspace") &&
-        selectedEdge &&
-        !selectedEdge.deleted
-      ) {
-        event.preventDefault();
-        deleteSelectedBranch();
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        (event.key === "h" || event.key === "H") &&
-        !event.repeat
-      ) {
-        event.preventDefault();
-        const nextValue = !bringItHomeModeRef.current;
-        bringItHomeModeRef.current = nextValue;
-        setBringItHomeMode(nextValue);
-        engineRef.current?.setBringItHomeMode(nextValue);
-        if (nextValue) {
-          engineRef.current?.setForceBranch(false);
-        }
-        showShortcutToast(`Bring It Home ${nextValue ? "enabled" : "disabled"}`);
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        (event.key === "a" || event.key === "A") &&
-        !event.repeat
-      ) {
-        if (toggleSelectedAnchorBranch()) {
-          event.preventDefault();
-        }
-        return;
-      }
-      if (
-        playMode === "jukebox" &&
-        event.key === "Shift" &&
-        isRunning &&
-        !bringItHomeModeRef.current
-      ) {
-        engineRef.current?.setForceBranch(true);
-      }
-    };
-
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (playMode === "jukebox" && event.key === "Shift") {
-        engineRef.current?.setForceBranch(false);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-    };
-  }, [
-    selectedEdge,
-    isRunning,
-    isPaused,
-    isTuningOpen,
-    isInfoOpen,
-    isExportOpen,
-    playMode,
-    isActive,
-    showShortcutToast,
-  ]);
-
-  React.useEffect(() => {
-    const onFullscreen = () => {
-      const active = document.fullscreenElement === vizPanelRef.current;
-      setIsFullscreen(active);
-      if (playModeRef.current === "autocanonizer") {
-        autocanonizerRef.current?.resizeNow();
-      } else {
-        vizControllerRef.current?.resizeActive();
-      }
-      if (active) {
-        void requestWakeLock();
-      } else {
-        void releaseWakeLock();
-      }
-    };
-
-    const onVisibility = () => {
-      if (document.hidden) {
-        void releaseWakeLock();
-        return;
-      }
-      if (document.fullscreenElement === vizPanelRef.current) {
-        void requestWakeLock();
-      }
-    };
-
-    document.addEventListener("fullscreenchange", onFullscreen);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      document.removeEventListener("fullscreenchange", onFullscreen);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (!isVolumeOpen) {
-      return;
-    }
-    const onDocumentClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (volumePanelRef.current?.contains(target)) {
-        return;
-      }
-      if (volumeButtonRef.current?.contains(target)) {
-        return;
-      }
-      setIsVolumeOpen(false);
-    };
-    document.addEventListener("click", onDocumentClick);
-    return () => {
-      document.removeEventListener("click", onDocumentClick);
-    };
-  }, [isVolumeOpen]);
-
   function stopPlayback() {
     cowbellOverlayRef.current?.cancelScheduledHits();
     if (playModeRef.current === "autocanonizer") {
@@ -1045,6 +734,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       playerRef.current?.stop();
       autocanonizerRef.current?.resetVisualization();
     }
+    wubmachineRef.current?.stop();
     engineRef.current?.stopJukebox();
     engineRef.current?.resetStats();
     resetPlaybackSessionMetrics();
@@ -1091,13 +781,23 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (isRunningRef.current || isPausedRef.current) {
       stopPlayback();
     }
+    if (playModeRef.current === "wubmachine") {
+      cancelWubMachineRender();
+    }
     playModeRef.current = mode;
     setPlayMode(mode);
-    if (mode === "autocanonizer") {
+    setAutocanonizerMainSeconds(0);
+    setAutocanonizerOtherSeconds(0);
+    setWubMachineSeconds(0);
+    if (mode !== "jukebox") {
       setIsTuningOpen(false);
       setIsInfoOpen(false);
       setTuningActiveTab("tuning");
+      customAnchor.exit();
       clearSelectedBranch();
+    }
+    if (mode === "wubmachine") {
+      maybePrepareWubMachine();
     }
   };
 
@@ -1128,11 +828,20 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
             );
           }
         }
+        const highlightJump =
+          state.lastJumped && engine.getLastJumpWasBranch();
         const jumpFrom =
-          state.lastJumped && state.lastJumpFromIndex !== null
+          highlightJump && state.lastJumpFromIndex !== null
             ? state.lastJumpFromIndex
             : lastBeatRef.current;
-        vizControllerRef.current?.update(state.currentBeatIndex, state.lastJumped, jumpFrom);
+        const jumpTo =
+          highlightJump && typeof state.lastJumpToIndex === "number"
+            ? state.lastJumpToIndex
+            : state.currentBeatIndex;
+        vizControllerRef.current?.update(jumpTo, highlightJump, jumpFrom);
+        if (jumpTo !== state.currentBeatIndex) {
+          vizControllerRef.current?.update(state.currentBeatIndex, false, jumpTo);
+        }
         lastBeatRef.current = state.currentBeatIndex;
       }
     });
@@ -1153,17 +862,21 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       setSelectedEdge(edge);
       vizControllerRef.current?.setSelectedEdgeActive(edge);
     });
+    vizControllerRef.current?.setOnAnchorEditChange(customAnchor.dragChanged);
+    vizControllerRef.current?.setOnAnchorEditCommit(customAnchor.dragCommitted);
     const count = vizControllerRef.current?.getCount() ?? 1;
     setActiveVizIndex((prev) => Math.max(0, Math.min(prev, count - 1)));
 
     syncTuneFormFromEngine();
   };
 
-  const syncTuneFormFromEngine = (nextHighlightAnchorBranch = highlightAnchorBranch) => {
+  const syncTuneFormFromEngine = (
+    nextHighlightAnchorBranch = highlightAnchorBranch,
+  ): TuneFormState | null => {
     const engine = engineRef.current;
     const player = playerRef.current;
     if (!engine || !player) {
-      return;
+      return null;
     }
     const config = engine.getConfig();
     const graph = engine.getGraphState();
@@ -1171,7 +884,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const currentThreshold = config.currentThreshold === 0
       ? Math.round(graph?.currentThreshold ?? computedThreshold)
       : config.currentThreshold;
-    setTuneForm({
+    const nextForm: TuneFormState = {
       threshold: currentThreshold,
       computedThreshold,
       minProb: Math.round(config.minRandomBranchChance * 100),
@@ -1185,20 +898,79 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       volume: Math.round(player.getVolume() * 100),
       highlightAnchorBranch: nextHighlightAnchorBranch,
       justBackwards: config.justBackwards,
-      justLongBranches: config.justLongBranches,
+      minLongBranchPercent: config.justLongBranches
+        ? (config.minLongBranchPercent ?? DEFAULT_MIN_LONG_BRANCH_PERCENT)
+        : 0,
       removeSequentialBranches: config.removeSequentialBranches,
+    };
+    setTuneForm(nextForm);
+    return nextForm;
+  };
+
+  const persistCurrentTuning = () => {
+    const engine = engineRef.current;
+    const fingerprint = fingerprintRef.current;
+    if (!engine || !fingerprint) {
+      return;
+    }
+    const config = engine.getConfig();
+    const deletedEdgeIds =
+      engine
+        .getGraphState()
+        ?.allEdges.filter((edge) => edge.deleted)
+        .map((edge) => edge.id) ?? [];
+    saveTuning(fingerprint, {
+      v: 1,
+      config: {
+        currentThreshold: config.currentThreshold,
+        justBackwards: config.justBackwards,
+        justLongBranches: config.justLongBranches,
+        removeSequentialBranches: config.removeSequentialBranches,
+        minRandomBranchChance: config.minRandomBranchChance,
+        maxRandomBranchChance: config.maxRandomBranchChance,
+        randomBranchChanceDelta: config.randomBranchChanceDelta,
+        minLongBranchPercent: config.minLongBranchPercent,
+      },
+      deletedEdgeIds,
+      anchor: engine.getAnchorParam(),
     });
+  };
+
+  const restoreSavedTuning = (fingerprint: string) => {
+    const engine = engineRef.current;
+    if (!engine) {
+      return;
+    }
+    const saved = loadTuning(fingerprint);
+    if (!saved) {
+      return;
+    }
+    engine.updateConfig(saved.config);
+    engine.clearDeletedEdges();
+    engine.rebuildGraph();
+    const allEdges = engine.getGraphState()?.allEdges ?? [];
+    for (const id of saved.deletedEdgeIds) {
+      const edge = allEdges.find((candidate) => candidate.id === id);
+      if (edge) {
+        engine.deleteEdge(edge);
+      }
+    }
+    engine.applyAnchorParam(saved.anchor);
+    syncVizDataFromEngine();
+    syncTuneFormFromEngine();
   };
 
   const syncExtrasFormFromState = React.useCallback(() => {
     setExtrasForm({
       branchStatsEnabled,
       bringItHomeMode,
+      customAnchorEnabled,
       audioMode: jukeboxAudioMode,
+      audioIntensity,
     });
-  }, [branchStatsEnabled, bringItHomeMode, jukeboxAudioMode]);
+  }, [branchStatsEnabled, bringItHomeMode, customAnchorEnabled, jukeboxAudioMode, audioIntensity]);
 
-  function getCurrentSwingSourceIdentity() {
+  function getCurrentSourceIdentity() {
     return file ? `${file.name}:${file.size}:${file.lastModified}` : null;
   }
 
@@ -1213,12 +985,128 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     );
   }
 
-  function isPlaybackBlockedForSwing() {
+  function isPlaybackBlockedForAudioMode() {
+    if (playModeRef.current === "wubmachine") {
+      return preparingModeRef.current === "wubmachine";
+    }
     return (
       playModeRef.current === "jukebox" &&
-      jukeboxAudioMode === "swing" &&
-      swingPreparingRef.current
+      preparingModeRef.current !== null &&
+      preparingModeRef.current === jukeboxAudioMode
     );
+  }
+
+  function preparingToastKey() {
+    if (playModeRef.current === "wubmachine") {
+      return "listen.preparingWubMachineEllipsis" as const;
+    }
+    return jukeboxAudioMode === "instrumental"
+      ? ("listen.preparingInstrumentalEllipsis" as const)
+      : ("listen.preparingSwingEllipsis" as const);
+  }
+
+  function showPreparingToast() {
+    showShortcutToast(t(preparingToastKey()));
+  }
+
+  // Stops a Wub Machine render in flight; a finished remix is kept.
+  function cancelWubMachineRender() {
+    if (!wubMachineAbortRef.current) {
+      return;
+    }
+    wubMachineAbortRef.current.abort();
+    wubMachineAbortRef.current = null;
+    if (preparingModeRef.current === "wubmachine") {
+      setPreparingState(null);
+    }
+  }
+
+  // Renders the loaded track's remix once, while Wub Machine mode is selected.
+  function maybePrepareWubMachine() {
+    const player = playerRef.current;
+    const sourceBuffer = player?.getSourceBuffer();
+    if (
+      playModeRef.current !== "wubmachine" ||
+      !player ||
+      !sourceBuffer ||
+      !analysisRef.current ||
+      wubMachineRenderRef.current ||
+      wubMachineAbortRef.current
+    ) {
+      return;
+    }
+    const abort = new AbortController();
+    wubMachineAbortRef.current = abort;
+    const renderToken = renderTokenRef.current + 1;
+    renderTokenRef.current = renderToken;
+    setPreparingState("wubmachine");
+    const isStale = () =>
+      wubMachineAbortRef.current !== abort ||
+      renderTokenRef.current !== renderToken;
+
+    renderWubMachineBuffer(sourceBuffer, player.getContext(), analysisRef.current, {
+      trackId: fingerprintRef.current,
+      signal: abort.signal,
+      onProgress: (progress) => {
+        if (!isStale()) {
+          setPreparingProgress(
+            Math.max(0, Math.min(100, Math.round(progress * 100))),
+          );
+        }
+      },
+    })
+      .then((render) => {
+        if (isStale()) {
+          return;
+        }
+        wubMachineAbortRef.current = null;
+        wubMachineRenderRef.current = render;
+        wubmachineRef.current?.setRemix(
+          render.buffer,
+          player.getContext(),
+          render.parts,
+        );
+        setWubMachineSeconds(0);
+        setWubMachineDurationSeconds(render.buffer.duration);
+        setPreparingState(null, true);
+      })
+      .catch((err: unknown) => {
+        if (isStale()) {
+          return;
+        }
+        wubMachineAbortRef.current = null;
+        console.warn(`Wub Machine render failed: ${String(err)}`);
+        setPreparingState(null);
+        showShortcutToast(t("listen.wubMachineFailed"));
+      });
+  }
+
+  // Export renders a fresh copy when it must not reuse the stored one.
+  async function renderWubMachineForExport(
+    storeCopy: boolean,
+    onProgress: (progress: number) => void,
+  ) {
+    const player = playerRef.current;
+    const sourceBuffer = player?.getSourceBuffer();
+    if (!player || !sourceBuffer || !analysisRef.current) {
+      throw new Error("Wub Machine export needs a loaded track.");
+    }
+    const render = await renderWubMachineBuffer(
+      sourceBuffer,
+      player.getContext(),
+      analysisRef.current,
+      { trackId: storeCopy ? fingerprintRef.current : null, onProgress },
+    );
+    if (!wubMachineRenderRef.current) {
+      wubMachineRenderRef.current = render;
+      wubmachineRef.current?.setRemix(
+        render.buffer,
+        player.getContext(),
+        render.parts,
+      );
+      setWubMachineDurationSeconds(render.buffer.duration);
+    }
+    return render;
   }
 
   function maybePrepareSwingMode() {
@@ -1233,8 +1121,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const sourceBuffer = player?.getSourceBuffer();
     const beats = analysisRef.current?.beats;
     if (
-      !player ||
-      player.getJukeboxAudioMode() !== "swing" ||
+      player?.getJukeboxAudioMode() !== "swing" ||
       !sourceBuffer ||
       !beats?.length
     ) {
@@ -1244,33 +1131,32 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (isRunningRef.current) {
       pausePlayback();
     }
-    const renderToken = swingRenderTokenRef.current + 1;
-    swingRenderTokenRef.current = renderToken;
-    setSwingPreparingState(true);
-    setSwingProgress(0);
+    const renderToken = renderTokenRef.current + 1;
+    renderTokenRef.current = renderToken;
+    setPreparingState("swing");
 
-    void getOrCreateSwingBuffer(sourceBuffer, getCurrentSwingSourceIdentity(), () =>
+    getOrCreateSwingBuffer(sourceBuffer, getCurrentSourceIdentity(), () =>
       renderSwingBuffer(sourceBuffer, beats, {
+        trackId: fingerprintRef.current,
         onProgress: (progress) => {
           if (
-            swingRenderTokenRef.current !== renderToken ||
+            renderTokenRef.current !== renderToken ||
             playerRef.current?.getJukeboxAudioMode() !== "swing"
           ) {
             return;
           }
-          setSwingProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
+          setPreparingProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
         },
       }),
     )
       .then((buffer) => {
         if (
-          swingRenderTokenRef.current !== renderToken ||
+          renderTokenRef.current !== renderToken ||
           playerRef.current?.getJukeboxAudioMode() !== "swing"
         ) {
           return;
         }
-        setSwingPreparingState(false);
-        setSwingProgress(100);
+        setPreparingState(null, true);
         player.setRenderedJukeboxAudioBuffer("swing", buffer);
         player.setJukeboxAudioMode("swing");
         if (
@@ -1289,17 +1175,91 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         }
       })
       .catch((err: unknown) => {
-        if (swingRenderTokenRef.current !== renderToken) {
+        if (renderTokenRef.current !== renderToken) {
           return;
         }
         console.warn(`Swing render failed: ${String(err)}`);
-        setSwingPreparingState(false);
-        setSwingProgress(0);
-        setJukeboxAudioMode("off");
-        setExtrasForm((prev) => ({ ...prev, audioMode: "off" }));
-        player.setJukeboxAudioMode("off");
-        writeAudioModeToUrl("off", true);
-        showShortcutToast("Swing mode failed. Using Normal mode.");
+        resetAudioModeToOff(player);
+        showShortcutToast(t("listen.swingFailed"));
+      });
+  }
+
+  function canPrepareInstrumentalMode() {
+    const player = playerRef.current;
+    return (
+      playModeRef.current === "jukebox" &&
+      player !== null &&
+      player.getSourceBuffer() !== null &&
+      analysisRef.current !== null
+    );
+  }
+
+  function maybePrepareInstrumentalMode() {
+    if (jukeboxAudioMode !== "instrumental" || !canPrepareInstrumentalMode()) {
+      return;
+    }
+    prepareInstrumentalMode();
+  }
+
+  function prepareInstrumentalMode() {
+    const player = playerRef.current;
+    const sourceBuffer = player?.getSourceBuffer();
+    if (player?.getJukeboxAudioMode() !== "instrumental" || !sourceBuffer) {
+      return;
+    }
+    const resumeAfterPrepare = isRunningRef.current;
+    if (isRunningRef.current) {
+      pausePlayback();
+    }
+    const renderToken = renderTokenRef.current + 1;
+    renderTokenRef.current = renderToken;
+    setPreparingState("instrumental");
+    const isStale = () =>
+      renderTokenRef.current !== renderToken ||
+      playerRef.current?.getJukeboxAudioMode() !== "instrumental";
+
+    renderInstrumentalBuffer(
+      sourceBuffer,
+      fingerprintRef.current,
+      ({ phase, progress }) => {
+        if (isStale()) {
+          return;
+        }
+        setPreparingPhase(phase);
+        if (phase === "download") {
+          setModelDownloaded(true);
+        }
+        setPreparingProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
+      },
+    )
+      .then((buffer) => {
+        if (isStale()) {
+          return;
+        }
+        setPreparingState(null, true);
+        player.setRenderedJukeboxAudioBuffer("instrumental", buffer);
+        player.setJukeboxAudioMode("instrumental");
+        if (
+          playModeRef.current === "jukebox" &&
+          (isRunningRef.current || isPausedRef.current)
+        ) {
+          engineRef.current?.syncToPlaybackPosition();
+        }
+        if (
+          resumeAfterPrepare &&
+          playModeRef.current === "jukebox" &&
+          !isRunningRef.current
+        ) {
+          startJukeboxPlayback(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (renderTokenRef.current !== renderToken) {
+          return;
+        }
+        console.warn(`Instrumental render failed: ${String(err)}`);
+        resetAudioModeToOff(player);
+        showShortcutToast(t("listen.instrumentalFailed"));
       });
   }
 
@@ -1307,7 +1267,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playModeRef.current !== "jukebox") {
       return;
     }
-    syncTuneFormFromEngine();
+    setTuneFormBaseline(syncTuneFormFromEngine());
+    const engine = engineRef.current;
+    setTuningNonDefault(engine !== null && hasNonDefaultTuning(engine));
     syncExtrasFormFromState();
     setTuningActiveTab(tab);
     setIsTuningOpen(true);
@@ -1323,6 +1285,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playModeRef.current === "autocanonizer") {
       autocanonizerRef.current?.stop();
       player.stop();
+    } else if (playModeRef.current === "wubmachine") {
+      wubmachineRef.current?.pause();
     } else {
       engine.pauseJukebox();
       engine.syncToPlaybackPosition();
@@ -1343,8 +1307,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (!player || !engine || !analysisRef.current) {
       return;
     }
-    if (isPlaybackBlockedForSwing()) {
-      showShortcutToast("Preparing Swing mode...");
+    if (isPlaybackBlockedForAudioMode()) {
+      showPreparingToast();
       return;
     }
     if (!player.getBuffer()) {
@@ -1368,9 +1332,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     isPausedRef.current = false;
     setIsRunning(true);
     setIsPaused(false);
-    if (document.fullscreenElement === vizPanelRef.current) {
-      void requestWakeLock();
-    }
+    requestWakeLockIfFullscreen();
   };
 
   const togglePlayback = () => {
@@ -1383,11 +1345,53 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       startAutocanonizerPlayback(startIndex, { resetSession: !isPaused });
       return;
     }
+    if (playMode === "wubmachine") {
+      startWubMachinePlayback(null, { resetSession: !isPaused });
+      return;
+    }
     if (isPaused) {
       startJukeboxPlayback(false);
       return;
     }
     startJukeboxPlayback(true);
+  };
+
+  // Plays the remix from `seconds`, or from the paused position (the start
+  // after a stop) when `seconds` is null.
+  const startWubMachinePlayback = (
+    seconds: number | null,
+    options?: { resetSession?: boolean },
+  ) => {
+    const wubmachine = wubmachineRef.current;
+    const player = playerRef.current;
+    if (!wubmachine || !player) {
+      return false;
+    }
+    if (isPlaybackBlockedForAudioMode()) {
+      showPreparingToast();
+      return false;
+    }
+    if (!wubmachine.isReady()) {
+      maybePrepareWubMachine();
+      return false;
+    }
+    const resetSession = options?.resetSession ?? true;
+    player.stop();
+    cowbellOverlayRef.current?.cancelScheduledHits();
+    engineRef.current?.stopJukebox();
+    if (resetSession) {
+      resetPlaybackSessionMetrics();
+    }
+    wubmachine.play(seconds ?? undefined);
+    if (resetSession || !isRunningRef.current) {
+      lastPlayStampRef.current = performance.now();
+    }
+    isRunningRef.current = true;
+    isPausedRef.current = false;
+    setIsRunning(true);
+    setIsPaused(false);
+    requestWakeLockIfFullscreen();
+    return true;
   };
 
   const startFromBeat = (index: number, analysisData?: AnalysisOutput | null) => {
@@ -1401,8 +1405,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (!activeAnalysis || !player || !engine) {
       return;
     }
-    if (isPlaybackBlockedForSwing()) {
-      showShortcutToast("Preparing Swing mode...");
+    if (isPlaybackBlockedForAudioMode()) {
+      showPreparingToast();
       return;
     }
     const beat = activeAnalysis.beats[index];
@@ -1424,9 +1428,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       isPausedRef.current = false;
       setIsRunning(true);
       setIsPaused(false);
-      if (document.fullscreenElement === vizPanelRef.current) {
-        void requestWakeLock();
-      }
+      requestWakeLockIfFullscreen();
       return;
     }
     if (!player.isPlaying()) {
@@ -1453,14 +1455,14 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       autocanonizer.resetVisualization();
     }
     autocanonizer.startAtIndex(index);
-    lastPlayStampRef.current = performance.now();
+    if (resetSession || !isRunningRef.current) {
+      lastPlayStampRef.current = performance.now();
+    }
     isRunningRef.current = true;
     isPausedRef.current = false;
     setIsRunning(true);
     setIsPaused(false);
-    if (document.fullscreenElement === vizPanelRef.current) {
-      void requestWakeLock();
-    }
+    requestWakeLockIfFullscreen();
     return true;
   };
 
@@ -1474,6 +1476,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     rebuildGraphAndSyncViz();
     clearSelectedBranch();
     syncTuneFormFromEngine();
+    persistCurrentTuning();
+    // Deleting the custom anchor's edge resets the anchor; the toast says which.
+    showShortcutToast(
+      isCustomAnchorEdge(edge) ? t("listen.anchorReset") : t("listen.branchDeleted"),
+    );
   };
 
   const selectAdjacentBranch = (direction: -1 | 1) => {
@@ -1488,12 +1495,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     const currentIndex = edges.findIndex((edge) => edge.id === selectedEdge.id);
-    const nextIndex =
-      currentIndex >= 0
-        ? (currentIndex + direction + edges.length) % edges.length
-        : direction > 0
-          ? 0
-          : edges.length - 1;
+    const nextIndex = nextEdgeIndex(currentIndex, direction, edges.length);
     const nextEdge = edges[nextIndex];
     setSelectedEdge(nextEdge);
     vizControllerRef.current?.setSelectedEdgeActive(nextEdge);
@@ -1501,15 +1503,32 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   const toggleSelectedAnchorBranch = () => {
     const engine = engineRef.current;
-    const edge = selectedEdge;
-    if (!engine || !edge || edge.deleted || edge.dest.which >= edge.src.which) {
+    let edge = selectedEdge;
+    if (!engine || !edge || edge.deleted) {
       return false;
+    }
+    if (edge.dest.which >= edge.src.which) {
+      // In layouts that draw a twin pair as one arc, a click may have
+      // grabbed the forward one; in layouts that draw the two directions
+      // apart, a forward selection is deliberate and gets no redirect.
+      const twin = visualizationSeparatesPairedEdges(activeVizIndexRef.current)
+        ? null
+        : findBackwardTwin(vizDataRef.current?.edges ?? [], edge);
+      if (!twin) {
+        showShortcutToast(t("listen.anchorRequiresBackward"));
+        return false;
+      }
+      edge = twin;
+      setSelectedEdge(twin);
     }
     const nextAnchor = engine.getUserAnchorEdgeId() === edge.id ? null : edge;
     engine.setUserAnchorEdge(nextAnchor);
     syncVizDataFromEngine();
     vizControllerRef.current?.setSelectedEdgeActive(edge);
-    showShortcutToast(nextAnchor ? "Anchor branch set" : "Anchor branch reset");
+    persistCurrentTuning();
+    showShortcutToast(
+      nextAnchor ? t("listen.anchorSet") : t("listen.anchorReset"),
+    );
     return true;
   };
 
@@ -1533,7 +1552,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       maxRandomBranchChance: maxProb / 100,
       randomBranchChanceDelta: tuneForm.ramp / RANDOM_BRANCH_DELTA_PERCENT_SCALE,
       justBackwards: tuneForm.justBackwards,
-      justLongBranches: tuneForm.justLongBranches,
+      justLongBranches: tuneForm.minLongBranchPercent > 0,
+      minLongBranchPercent:
+        tuneForm.minLongBranchPercent > 0
+          ? tuneForm.minLongBranchPercent
+          : DEFAULT_MIN_LONG_BRANCH_PERCENT,
       removeSequentialBranches: tuneForm.removeSequentialBranches,
     });
     setHighlightAnchorBranch(tuneForm.highlightAnchorBranch);
@@ -1542,12 +1565,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       tuneForm.highlightAnchorBranch,
     );
     rebuildGraphAndSyncViz();
-    // const volume = tuneForm.volume / 100;
-    const volume = Math.pow(tuneForm.volume / 100, 1.5)
+    const volume = tuneForm.volume / 100;
     player.setVolume(volume);
     autocanonizerRef.current?.setVolume(volume);
+    wubmachineRef.current?.setVolume(volume);
     cowbellOverlayRef.current?.setVolume(volume);
     syncTuneFormFromEngine(tuneForm.highlightAnchorBranch);
+    persistCurrentTuning();
     setIsTuningOpen(false);
   };
 
@@ -1557,14 +1581,15 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (!engine || !player) {
       return;
     }
+    customAnchor.discard();
     engine.clearDeletedEdges();
-    engine.updateConfig(DEFAULT_CONFIG);
+    engine.updateConfig(DEFAULT_JUKEBOX_CONFIG);
     rebuildGraphAndSyncViz();
     clearSelectedBranch();
-    player.setVolume(DEFAULT_PLAYBACK_VOLUME);
-    autocanonizerRef.current?.setVolume(DEFAULT_PLAYBACK_VOLUME);
-    cowbellOverlayRef.current?.setVolume(DEFAULT_PLAYBACK_VOLUME);
     syncTuneFormFromEngine();
+    if (fingerprintRef.current) {
+      removeTuning(fingerprintRef.current);
+    }
     setIsTuningOpen(false);
   };
 
@@ -1574,9 +1599,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     const previousAudioMode = jukeboxAudioMode;
+    const previousAudioIntensity = audioIntensity;
     const nextBranchStatsEnabled = playModeRef.current === "jukebox" && extrasForm.branchStatsEnabled;
     const nextBringItHomeMode = playModeRef.current === "jukebox" && extrasForm.bringItHomeMode;
     const nextAudioMode = extrasForm.audioMode;
+    const nextAudioIntensity = clampAudioModeIntensity(
+      extrasForm.audioIntensity,
+    );
     bringItHomeModeRef.current = nextBringItHomeMode;
     setBringItHomeMode(nextBringItHomeMode);
     if (nextBringItHomeMode) {
@@ -1585,30 +1614,51 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     engineRef.current?.setBringItHomeMode(nextBringItHomeMode);
     setBranchStatsEnabled(nextBranchStatsEnabled);
     storeBranchStatsEnabled(nextBranchStatsEnabled);
+    // The toggle only shows the editor button; an anchor already set keeps playing.
+    setCustomAnchorEnabled(extrasForm.customAnchorEnabled);
+    storeCustomAnchorEnabled(extrasForm.customAnchorEnabled);
+    if (!extrasForm.customAnchorEnabled) {
+      customAnchor.exit();
+    }
     setJukeboxAudioMode(nextAudioMode);
+    setAudioIntensity(nextAudioIntensity);
     if (nextAudioMode === "cowbell") {
       cowbellOverlayRef.current?.enable();
     } else {
       cowbellOverlayRef.current?.disable();
     }
+    if (nextAudioMode !== "instrumental") {
+      cancelInstrumentalRender();
+    }
     if (nextAudioMode === "swing") {
-      player.setJukeboxAudioMode("swing");
+      player.setJukeboxAudioMode("swing", nextAudioIntensity);
       if (canPrepareSwingMode()) {
         prepareSwingMode();
       } else {
-        showShortcutToast("Swing mode will prepare once audio is loaded");
+        showShortcutToast(t("listen.swingWhenLoaded"));
+      }
+    } else if (nextAudioMode === "instrumental") {
+      player.setJukeboxAudioMode("instrumental", nextAudioIntensity);
+      if (canPrepareInstrumentalMode()) {
+        prepareInstrumentalMode();
+      } else {
+        showShortcutToast(t("listen.instrumentalWhenLoaded"));
       }
     } else {
-      swingRenderTokenRef.current += 1;
-      setSwingPreparingState(false);
-      setSwingProgress(0);
-      player.setJukeboxAudioMode(nextAudioMode);
+      stopPreparing();
+      player.setJukeboxAudioMode(nextAudioMode, nextAudioIntensity);
     }
-    writeAudioModeToUrl(nextAudioMode, true);
+    writeAudioModeToUrl(nextAudioMode, nextAudioIntensity, true);
     if (
-      previousAudioMode !== nextAudioMode &&
+      audioModeChangeAffectsPlayback(
+        previousAudioMode,
+        nextAudioMode,
+        previousAudioIntensity,
+        nextAudioIntensity,
+      ) &&
       playModeRef.current === "jukebox" &&
       nextAudioMode !== "swing" &&
+      nextAudioMode !== "instrumental" &&
       (isRunningRef.current || isPausedRef.current)
     ) {
       engineRef.current?.syncToPlaybackPosition();
@@ -1622,24 +1672,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     const previousAudioMode = jukeboxAudioMode;
-    const defaultState: ExtrasFormState = {
-      branchStatsEnabled: false,
-      bringItHomeMode: false,
-      audioMode: "off",
-    };
     bringItHomeModeRef.current = false;
     setBringItHomeMode(false);
     engineRef.current?.setBringItHomeMode(false);
-    cowbellOverlayRef.current?.disable();
-    swingRenderTokenRef.current += 1;
-    setSwingPreparingState(false);
-    setSwingProgress(0);
-    setExtrasForm(defaultState);
-    setBranchStatsEnabled(false);
-    storeBranchStatsEnabled(false);
-    setJukeboxAudioMode("off");
-    player.setJukeboxAudioMode("off");
-    writeAudioModeToUrl("off", true);
+    setExtrasForm((prev) => ({ ...prev, bringItHomeMode: false }));
+    resetAudioModeToOff(player);
     if (
       previousAudioMode !== "off" &&
       playModeRef.current === "jukebox" &&
@@ -1658,6 +1695,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     onApplyTuning();
   };
 
+  const showTuningReset =
+    tuningActiveTab === "extras"
+      ? hasNonDefaultExtras({ audioMode: jukeboxAudioMode, bringItHomeMode }) ||
+        hasNonDefaultExtras(extrasForm)
+      : tuningNonDefault ||
+        (tuneFormBaseline !== null && tuneFormChanged(tuneFormBaseline, tuneForm));
+
   const onResetTuningModal = () => {
     if (tuningActiveTab === "extras") {
       onResetExtras();
@@ -1668,173 +1712,29 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   const onVolumeChange = (value: number) => {
     setTuneForm((prev) => ({ ...prev, volume: value }));
+    storeVolume(value);
     const volume = value / 100;
     playerRef.current?.setVolume(volume);
     autocanonizerRef.current?.setVolume(volume);
+    wubmachineRef.current?.setVolume(volume);
     cowbellOverlayRef.current?.setVolume(volume);
   };
 
-  const onExportJukeboxAudio = async () => {
-    const activeAnalysis = analysisRef.current ?? analysis;
-    const player = playerRef.current;
-    const engine = engineRef.current;
-    if (!activeAnalysis || !player || !engine || !file) {
-      return;
-    }
-
-    const sourceBuffer = player.getSourceBuffer() ?? player.getBuffer();
-    if (!sourceBuffer) {
-      setExportError("Playback buffer is not ready yet.");
-      return;
-    }
-
-    const durationSeconds = Number(exportForm.durationSeconds);
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      setExportError("Export duration must be a positive number of seconds.");
-      return;
-    }
-    if (durationSeconds > MAX_EXPORT_DURATION_SECONDS) {
-      setExportError(
-        `Export duration is capped at ${MAX_EXPORT_DURATION_SECONDS / 60} minutes.`,
-      );
-      return;
-    }
-
-    const requestedExtension = exportForm.format;
-    const requestedFilename = buildAudioExportName(file.name, requestedExtension);
-    const requestedDescription =
-      requestedExtension === "mp3" ? "MP3 Audio" : "WAV Audio";
-    const requestedMimeType =
-      requestedExtension === "mp3" ? "audio/mpeg" : "audio/wav";
-
-    let pickedHandle: Awaited<ReturnType<typeof pickBinaryExportFile>> = null;
-    try {
-      pickedHandle = await pickBinaryExportFile(requestedFilename, {
-        mimeType: requestedMimeType,
-        description: requestedDescription,
-        extension: `.${requestedExtension}`,
-      });
-    } catch (err) {
-      const name = err instanceof DOMException ? err.name : "";
-      if (name === "AbortError") {
-        return;
-      }
-      setExportError("Unable to open the file save dialog.");
-      return;
-    }
-
-    setExportError(null);
-    setExportProgress({
-      stage: "planning",
-      message: "Initializing export",
-      percent: 0,
-    });
-    setIsExporting(true);
-    await waitForNextPaint();
-
-    try {
-      let swingBuffer: AudioBuffer | undefined;
-      if (jukeboxAudioMode === "swing") {
-        const existingSwingBuffer = player.getRenderedJukeboxAudioBuffer("swing");
-        if (existingSwingBuffer) {
-          swingBuffer = existingSwingBuffer;
-        } else if (activeAnalysis.beats.length > 0) {
-          setExportProgress({
-            stage: "rendering",
-            message: "Preparing Swing mode",
-            percent: 2,
-          });
-          swingBuffer = await getOrCreateSwingBuffer(
-            sourceBuffer,
-            getCurrentSwingSourceIdentity(),
-            () =>
-              renderSwingBuffer(sourceBuffer, activeAnalysis.beats, {
-                onProgress: (progress) => {
-                  setExportProgress({
-                    stage: "rendering",
-                    message: "Preparing Swing mode",
-                    percent: 2 + Math.max(0, Math.min(1, progress)) * 6,
-                  });
-                },
-              }),
-          );
-          player.setRenderedJukeboxAudioBuffer("swing", swingBuffer);
-        } else {
-          throw new Error("Swing export requires beat analysis.");
-        }
-      }
-
-      const deletedEdges =
-        engine
-          .getGraphState()
-          ?.allEdges.filter((edge) => edge.deleted)
-          .map((edge) => ({ src: edge.src.which, dest: edge.dest.which })) ?? [];
-
-      const result = await exportJukeboxAudio({
-        analysis: activeAnalysis,
-        sourceBuffer,
-        config: engine.getConfig(),
-        deletedEdges,
-        durationSeconds,
-        format: exportForm.format,
-        bitrateKbps: exportForm.format === "mp3" ? exportForm.bitrateKbps : undefined,
-        gain: player.getVolume(),
-        audioMode: jukeboxAudioMode,
-        sectionStartBeatIndices: engine.getSectionStartBeatIndices(),
-        swingBuffer,
-        randomMode: "seeded",
-        seed: createSessionSeed(),
-        onProgress: (progress) => setExportProgress(progress),
-      });
-
-      const extension = result.extension;
-      const filename = buildAudioExportName(file.name, extension);
-      const description =
-        extension === "mp3" ? "MP3 Audio" : "WAV Audio";
-      await saveExportBinary(
-        filename,
-        result.bytes,
-        {
-          mimeType: result.mimeType,
-          description,
-          extension: `.${extension}`,
-        },
-        extension === requestedExtension ? pickedHandle : null,
-      );
-      setIsExportOpen(false);
-    } catch (err) {
-      const name = err instanceof DOMException ? err.name : "";
-      if (name === "AbortError") {
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      setExportError(message || "Audio export failed.");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const onToggleFullscreen = async () => {
-    if (!vizPanelRef.current) {
-      return;
-    }
-    if (document.fullscreenElement !== vizPanelRef.current) {
-      try {
-        await vizPanelRef.current.requestFullscreen();
-      } catch {
-        // ignore
-      }
-      return;
-    }
-    try {
-      await document.exitFullscreen();
-    } catch {
-      // ignore
-    }
+  const onAutocanonizerStreamPanChange = (
+    stream: "main" | "other",
+    value: number,
+  ) => {
+    const nextMain = stream === "main" ? value : autocanonizerMainPan;
+    const nextOther = stream === "other" ? value : autocanonizerOtherPan;
+    setAutocanonizerMainPan(nextMain);
+    setAutocanonizerOtherPan(nextOther);
+    autocanonizerMainPanRef.current = nextMain;
+    autocanonizerOtherPanRef.current = nextOther;
+    autocanonizerRef.current?.setStreamPans(nextMain / 100, nextOther / 100);
   };
 
   const onSetActiveViz = (index: number) => {
-    if (playMode === "autocanonizer") {
+    if (playMode !== "jukebox") {
       return;
     }
     const count = vizControllerRef.current?.getCount() ?? 1;
@@ -1845,257 +1745,221 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     setActiveVizIndex(index);
   };
 
-  const steps = React.useMemo<ProgressStep[]>(() => {
-    const stageIndex = STEP_ORDER.findIndex((step) => step.id === progressStage);
-    return STEP_ORDER.map((step, idx) => ({
-      id: step.id,
-      label: step.label,
-      status: idx < stageIndex ? "done" : idx === stageIndex ? "active" : "pending",
-    }));
-  }, [progressStage]);
+  const { forceBranchActive, freezeBeatActive } = useListenHotkeys({
+    isActive,
+    playMode,
+    selectedEdge,
+    isRunning,
+    isPaused,
+    isTuningOpen,
+    isInfoOpen,
+    isExportOpen,
+    engineRef,
+    bringItHomeModeRef,
+    setBringItHomeMode,
+    showShortcutToast,
+    t,
+    openTuningModalTab,
+    togglePlayback,
+    selectAdjacentBranch,
+    deleteSelectedBranch,
+    toggleSelectedAnchorBranch,
+    customAnchor,
+  });
 
   const graph = engineRef.current?.getGraphState();
   const totalBeats = graph?.totalBeats ?? analysis?.beats.length ?? 0;
-  const totalBranches = engineRef.current?.getVisualizationData()?.edges.length ?? 0;
+  // The custom anchor's synthetic edge is drawn with the branches but is not one.
+  const totalBranches =
+    engineRef.current?.getVisualizationData()?.edges.filter((edge) => !isCustomAnchorEdge(edge))
+      .length ?? 0;
   const deletedBranches = graph?.allEdges.filter((edge) => edge.deleted).length ?? 0;
   const vizCount = vizControllerRef.current?.getCount() ?? 1;
   const currentFileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : null;
+  const loading = usePresentedLoading(
+    liveLoading({
+      fileKey: currentFileKey ?? "",
+      isAnalyzing,
+      analysisDone: Boolean(analysis) && !error && !prepAborted,
+      stage: progressStage,
+      stageProgress,
+      preparingMode,
+      preparingPhase,
+      preparingProgress,
+      modelDownloaded,
+    }),
+  );
+  // The tabs stay hidden until the analysis steps have played out.
+  const analysisShown = loading.shown?.task === "localAnalysis" || loading.shown?.task === "track";
+  React.useEffect(() => {
+    setIsListenLoading(isAnalyzing || analysisShown);
+    return () => {
+      setIsListenLoading(false);
+    };
+  }, [isAnalyzing, analysisShown, setIsListenLoading]);
   const showPlaybackUi =
+    !loading.shown &&
     Boolean(analysis) &&
     !isAnalyzing &&
-    !swingPreparing &&
+    preparingMode === null &&
     readyFileKey === currentFileKey;
-  const playControlLabel = swingPreparing
-    ? "Preparing Swing mode"
-    : isRunning
-      ? "Pause"
-      : isPaused
-        ? "Resume"
-        : "Play";
+  const playControlLabel = playControlText({
+    preparingMode,
+    isRunning,
+    isPaused,
+    t,
+  });
+  const playIcon = playControlIcon(preparingMode !== null, isRunning);
+  const beatsLabel =
+    jukeboxAudioMode === "cowbell"
+      ? t("listen.totalCowbells")
+      : t("listen.totalBeats");
   const branchStats =
     branchStatsEnabled && playMode === "jukebox" && selectedEdge
-      ? (() => {
-          const startSeconds = Math.max(0, selectedEdge.src.start);
-          const endSeconds = Math.max(0, selectedEdge.dest.start);
-          const startDisplaySeconds = Math.floor(startSeconds);
-          const endDisplaySeconds = Math.floor(endSeconds);
-          const deltaSeconds = endDisplaySeconds - startDisplaySeconds;
-          const direction =
-            selectedEdge.dest.which < selectedEdge.src.which
-              ? "Backward"
-              : selectedEdge.dest.which > selectedEdge.src.which
-                ? "Forward"
-                : "Same beat";
-          const maxDistance = Math.max(
-            1,
-            engineRef.current?.getConfig().maxBranchThreshold ?? 80,
-          );
-          const signedDelta =
-            `${deltaSeconds >= 0 ? "+" : "-"}${formatDuration(Math.abs(deltaSeconds))}`;
-          return {
-            id: selectedEdge.id,
-            start: formatDuration(startDisplaySeconds),
-            end: formatDuration(endDisplaySeconds),
-            delta: signedDelta,
-            direction,
-            similarity: `${toSimilarityPercent(selectedEdge.distance, maxDistance)}%`,
-          };
-        })()
+      ? deriveBranchStats(
+          selectedEdge,
+          Math.max(1, engineRef.current?.getConfig().maxBranchThreshold ?? 80),
+          t,
+        )
       : null;
+
+  const anchorLabels = customAnchorLabels(t);
+  const anchorBeats = customAnchor.edit ? vizDataRef.current?.beats : undefined;
+  // Edge selection is off while editing, so a stale selection would only confuse.
+  const startCustomAnchorEdit = () => {
+    if (playModeRef.current !== "jukebox") {
+      return;
+    }
+    clearSelectedBranch();
+    customAnchor.start();
+  };
+
+  const closeSettings = () => setIsSettingsOpen(false);
+  const settingsModal = isSettingsOpen ? (
+    <SettingsModal
+      theme={theme}
+      onThemeChange={(option) => {
+        setTheme(option);
+        applyTheme(option);
+        vizControllerRef.current?.refresh();
+      }}
+      sleepTimer={sleepTimer}
+      pendingSleepTimerDurationMs={pendingSleepTimerDurationMs}
+      onPendingSleepTimerDurationChange={setPendingSleepTimerDurationMs}
+      onSetSleepTimer={setSleepTimer}
+      onClose={closeSettings}
+    />
+  ) : null;
+
+  // Computed before the early return (and file-guarded) so the marquee hooks
+  // below run unconditionally on every render, keeping hook order stable.
+  const displayTitle = file
+    ? formatTrackTitle(file.name, playMode, jukeboxAudioMode, t)
+    : "";
+  // The marquee controller owns each title node's text imperatively, so the
+  // title <div>s are left empty in JSX (see .play-title / .viz-title) and wired
+  // through these ref callbacks.
+  const playTitleRef = useMarquee(displayTitle);
+  const vizTitleRef = useMarquee(displayTitle);
 
   if (!file) {
     return (
-      <section className="panel panel--center">
-        <p>No file selected.</p>
-        <Link className="tab-btn" to="/">Go back</Link>
-      </section>
+      <>
+        <section className="panel panel--center">
+          <p>{t("listen.noFile")}</p>
+          <Link className="tab-btn" to="/">{t("listen.goBack")}</Link>
+        </section>
+        {settingsModal}
+      </>
     );
   }
-  const displayTitle = formatTrackTitle(file.name, playMode, jukeboxAudioMode);
 
   return (
-    <section className="listen-page">
-      {isAnalyzing ? (
-        <div className="panel" id="play-status">
-          <ProgressSteps
-            steps={steps}
-            currentMessage={progressMessage}
-            currentProgress={progressPercent}
-          />
-        </div>
-      ) : null}
-      {!isAnalyzing && swingPreparing ? (
-        <div className="panel" id="play-status">
-          <div className="progress">
-            <div className="progress__header">
-              <p className="progress__title">Preparing Swing mode: {swingProgress}%</p>
-              <p className="progress__message">Adding swing to the track...</p>
-            </div>
-            <div className="progress-bar" aria-hidden="true">
-              <div
-                className="progress-bar-fill"
-                style={{ width: `${swingProgress}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
+    <>
+      <section className="listen-page">
+      <StatusPanel
+        shown={loading.shown}
+        onFinished={loading.done}
+      />
 
       {error ? <div className="error">{error}</div> : null}
 
       {showPlaybackUi ? (
-        <div className="menu-bar">
-          <div className="menu-left">
-            <div className="play-title">{displayTitle}</div>
-            {playMode === "jukebox" && bringItHomeMode ? (
-              <span className="bring-home-note">Bringing it on home</span>
-            ) : null}
-          </div>
-          <div className="menu-right">
-            <button
-              id="tuning"
-              className={`tune-toggle ${playMode === "autocanonizer" ? "is-hidden" : ""}`}
-              type="button"
-              onClick={() => openTuningModalTab("tuning")}
-              disabled={!analysis || playMode === "autocanonizer"}
-              title="Tune"
-              aria-label="Tune"
-            >
-              <SymbolIcon className="tune-icon" name="tune" />
-            </button>
-            <button
-              id="track-info"
-              className={`info-toggle ${playMode === "autocanonizer" ? "is-hidden" : ""}`}
-              type="button"
-              onClick={() => setIsInfoOpen(true)}
-              disabled={!analysis || playMode === "autocanonizer"}
-              title="Info"
-              aria-label="Info"
-            >
-              <SymbolIcon className="info-icon" name="info" />
-            </button>
-            <button
-              id="track-audio-export"
-              className={`copy-toggle ${playMode === "autocanonizer" ? "is-hidden" : ""}`}
-              type="button"
-              onClick={() => {
-                setExportError(null);
-                setExportProgress(null);
-                setIsExportOpen(true);
-              }}
-              disabled={!analysis || isExporting || playMode === "autocanonizer"}
-              title="Export jukebox audio"
-              aria-label="Export jukebox audio"
-            >
-              <SymbolIcon className="copy-icon" name="download" />
-            </button>
-          </div>
-        </div>
+        <PlayMenu
+          playTitleRef={playTitleRef}
+          playMode={playMode}
+          bringItHomeMode={bringItHomeMode}
+          hasAnalysis={Boolean(analysis)}
+          isExporting={isExporting}
+          onOpenTuning={() => openTuningModalTab("tuning")}
+          onOpenInfo={() => setIsInfoOpen(true)}
+          onOpenExport={openExport}
+        />
       ) : null}
 
       <div id="viz-panel" ref={vizPanelRef} hidden={!showPlaybackUi}>
-        <div id="jukebox-viz" className={`viz ${playMode === "autocanonizer" ? "is-canonizer" : ""}`}>
+        <div id="jukebox-viz" className={`viz ${VIZ_CLASS_NAMES[playMode]}`}>
           {branchStats ? (
-            <div className="branch-stats-popup">
-              <div className="branch-stats-popup-header">
-                <div className="branch-stats-popup-title">
-                  Branch #{branchStats.id} stats
-                </div>
-                <button
-                  id="branch-stats-delete"
-                  className="branch-stats-delete"
-                  type="button"
-                  aria-label="Delete selected branch"
-                  title="Delete selected branch"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    deleteSelectedBranch();
-                  }}
-                  disabled={Boolean(selectedEdge?.deleted)}
-                >
-                  <SymbolIcon className="branch-stats-delete-icon" name="delete" />
-                </button>
-              </div>
-              <div className="branch-stats-popup-row">
-                <span className="branch-stats-popup-label">Direction:</span>
-                <span className="branch-stats-popup-value">{branchStats.direction}</span>
-              </div>
-              <div className="branch-stats-popup-row">
-                <span className="branch-stats-popup-label">Start:</span>
-                <span className="branch-stats-popup-value">{branchStats.start}</span>
-              </div>
-              <div className="branch-stats-popup-row">
-                <span className="branch-stats-popup-label">End:</span>
-                <span className="branch-stats-popup-value">{branchStats.end}</span>
-              </div>
-              <div className="branch-stats-popup-row">
-                <span className="branch-stats-popup-label">Difference:</span>
-                <span className="branch-stats-popup-value">{branchStats.delta}</span>
-              </div>
-              <div className="branch-stats-popup-row">
-                <span className="branch-stats-popup-label">Branch Match:</span>
-                <span className="branch-stats-popup-value">{branchStats.similarity}</span>
-              </div>
+            <BranchStatsPopup
+              stats={branchStats}
+              deleteDisabled={Boolean(selectedEdge?.deleted)}
+              onDelete={deleteSelectedBranch}
+            />
+          ) : null}
+          {customAnchor.edit && anchorBeats ? (
+            <CustomAnchorInfo edit={customAnchor.edit} beats={anchorBeats} labels={anchorLabels} />
+          ) : null}
+          {customAnchor.edit && anchorBeats ? (
+            <div className="viz-top">
+              <CustomAnchorToolbar
+                edit={customAnchor.edit}
+                beats={anchorBeats}
+                labels={anchorLabels}
+                onSelectEnd={customAnchor.selectEnd}
+                onSnap={customAnchor.snap}
+                onReset={customAnchor.reset}
+                onDone={customAnchor.exit}
+              />
+            </div>
+          ) : (
+            <VizTop
+              playMode={playMode}
+              onPlayModeChange={onSetPlayMode}
+              activeVizIndex={activeVizIndex}
+              vizCount={vizCount}
+              onActiveVizChange={onSetActiveViz}
+              finishOutSong={finishOutSong}
+              onFinishOutSongChange={setFinishOutSong}
+              loopTrack={loopTrack}
+              onLoopTrackChange={setLoopTrack}
+              action={
+                customAnchorEnabled && playMode === "jukebox" ? (
+                  <CustomAnchorButton
+                    labels={anchorLabels}
+                    disabled={!analysis}
+                    onStart={startCustomAnchorEdit}
+                  />
+                ) : null
+              }
+            />
+          )}
+          {forceBranchActive || freezeBeatActive ? (
+            <div className="modifier-badges" role="status" aria-live="polite">
+              {forceBranchActive ? (
+                <span className="modifier-badge">
+                  {t("listen.forceBranchBadge")}
+                </span>
+              ) : null}
+              {freezeBeatActive ? (
+                <span className="modifier-badge">
+                  {t("listen.freezeBeatBadge")}
+                </span>
+              ) : null}
             </div>
           ) : null}
-          <div className="viz-top">
-            <div className="viz-actions">
-              <label className="viz-select-group" htmlFor="play-mode-select">
-                <span className="viz-select-wrap">
-                  <select
-                    id="play-mode-select"
-                    className="viz-select"
-                    aria-label="Mode"
-                    value={playMode}
-                    onChange={(event) =>
-                      onSetPlayMode(
-                        event.target.value === "autocanonizer"
-                          ? "autocanonizer"
-                          : "jukebox"
-                      )
-                    }
-                  >
-                    <option value="autocanonizer">Autocanonizer</option>
-                    <option value="jukebox">Jukebox</option>
-                  </select>
-                  <SymbolIcon className="viz-select-arrow" name="arrow_drop_down" />
-                </span>
-              </label>
-            </div>
-            <div className="viz-controls">
-              <label className="viz-select-group" htmlFor="viz-select">
-                <span className="viz-select-wrap">
-                  <select
-                    id="viz-select"
-                    className="viz-select"
-                    aria-label="Visualization"
-                    value={String(activeVizIndex)}
-                    onChange={(event) => onSetActiveViz(Number(event.target.value))}
-                    disabled={playMode === "autocanonizer"}
-                  >
-                    {Array.from({ length: vizCount }, (_, index) => (
-                      <option key={index} value={index}>
-                        {getVisualizationLabel(index)}
-                      </option>
-                    ))}
-                  </select>
-                  <SymbolIcon className="viz-select-arrow" name="arrow_drop_down" />
-                </span>
-              </label>
-            </div>
-            <div className="canonizer-finish">
-              <input
-                id="canonizer-finish"
-                type="checkbox"
-                checked={finishOutSong}
-                onChange={(event) => setFinishOutSong(event.target.checked)}
-              />
-              <span>Finish out the track</span>
-            </div>
-          </div>
           <div id="viz-layer" className="viz-layer" ref={vizLayerRef} />
           <div id="canonizer-layer" className="canonizer-layer" ref={canonizerLayerRef} />
+          <div id="wubmachine-layer" className="wubmachine-layer" ref={wubMachineLayerRef} />
           <div className="viz-bottom" id="viz-stats">
             <div className="viz-bottom-left">
               <button
@@ -2103,69 +1967,64 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                 className="play-toggle viz-play-toggle"
                 type="button"
                 onClick={togglePlayback}
-                disabled={!analysis || swingPreparing}
+                disabled={!analysis || preparingMode !== null}
                 title={playControlLabel}
                 aria-label={playControlLabel}
               >
                 <SymbolIcon
                   className="play-icon"
-                  name={swingPreparing ? "hourglass_top" : isRunning ? "pause" : "play_arrow"}
+                  name={playIcon}
                 />
               </button>
-              <div className="viz-info">
-                <div className="viz-title" id="viz-now-playing">{displayTitle}</div>
-                <div className="viz-meta">
-                  <span>Listen Time:</span>
-                  <span>{formatDuration(listenSeconds)}</span>
-                  <span className={`viz-divider ${playMode === "autocanonizer" ? "is-hidden" : ""}`}>·</span>
-                  <span className={playMode === "autocanonizer" ? "is-hidden" : ""}>Total Beats:</span>
-                  <span className={playMode === "autocanonizer" ? "is-hidden" : ""}>{beatsPlayed}</span>
-                  {playMode === "jukebox" && bringItHomeMode ? (
-                    <span className="bring-home-fullscreen-note">· Bringing it on home</span>
-                  ) : null}
-                </div>
-              </div>
+              <VizInfo
+                vizTitleRef={vizTitleRef}
+                playMode={playMode}
+                autocanonizerMainSeconds={autocanonizerMainSeconds}
+                autocanonizerOtherSeconds={autocanonizerOtherSeconds}
+                wubMachineSeconds={wubMachineSeconds}
+                wubMachineDurationSeconds={wubMachineDurationSeconds}
+                trackDurationSeconds={analysis?.track?.duration ?? 0}
+                listenSeconds={listenSeconds}
+                beatsLabel={beatsLabel}
+                beatsPlayed={beatsPlayed}
+                bringItHomeMode={bringItHomeMode}
+              />
             </div>
             <div className="viz-bottom-right">
-              <div className="volume-control-wrap">
-                <div
-                  className={`volume-control-panel ${isVolumeOpen ? "" : "is-hidden"}`}
-                  ref={volumePanelRef}
-                >
-                  <label>
-                    <input
-                      className="volume-slider"
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={tuneForm.volume}
-                      onChange={(event) => onVolumeChange(Number(event.target.value))}
-                    />
-                    <div className="label-line">
-                      <span className="volume-value">{tuneForm.volume}</span>
-                    </div>
-                  </label>
-                </div>
-                <button
-                  id="volume-button"
-                  className="volume-button"
-                  type="button"
-                  ref={volumeButtonRef}
-                  onClick={() => setIsVolumeOpen((prev) => !prev)}
-                  title="Volume"
-                  aria-label="Volume"
-                >
-                  <SymbolIcon className="volume-icon" name="volume_up" />
-                </button>
-              </div>
+              {playMode === "autocanonizer" ? (
+                <PanPopover
+                  isOpen={isPanOpen}
+                  panelRef={panPanelRef}
+                  buttonRef={panButtonRef}
+                  mainPan={autocanonizerMainPan}
+                  otherPan={autocanonizerOtherPan}
+                  onPanChange={onAutocanonizerStreamPanChange}
+                  onToggle={togglePan}
+                />
+              ) : null}
+              <VolumePopover
+                isOpen={isVolumeOpen}
+                panelRef={volumePanelRef}
+                buttonRef={volumeButtonRef}
+                volume={tuneForm.volume}
+                onVolumeChange={onVolumeChange}
+                onToggle={toggleVolume}
+              />
               <button
                 id="fullscreen"
                 className="fullscreen-toggle"
                 type="button"
                 onClick={onToggleFullscreen}
-                title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                title={
+                  isFullscreen
+                    ? t("listen.exitFullscreen")
+                    : t("listen.fullscreen")
+                }
+                aria-label={
+                  isFullscreen
+                    ? t("listen.exitFullscreen")
+                    : t("listen.fullscreen")
+                }
               >
                 <SymbolIcon className="fullscreen-icon" name={isFullscreen ? "fullscreen_exit" : "fullscreen"} />
               </button>
@@ -2175,510 +2034,51 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       </div>
 
       {isExportOpen ? (
-        <div
-          className="modal open"
-          onClick={(event) =>
-            event.target === event.currentTarget && !isExporting && setIsExportOpen(false)
+        <ExportModal
+          form={exportForm}
+          setForm={setExportForm}
+          isExporting={isExporting}
+          progress={exportProgress}
+          error={exportError}
+          onClose={closeExport}
+          onExport={handleExportJukeboxAudio}
+          playMode={playMode}
+          remixDurationSeconds={
+            playMode === "autocanonizer"
+              ? (autocanonizerRef.current?.planRender()?.durationSeconds ?? 0)
+              : wubMachineDurationSeconds
           }
-        >
-          <div className="modal-panel">
-            <div className="modal-header">
-              <h2>Export Jukebox Audio</h2>
-              <button
-                className="modal-close"
-                type="button"
-                onClick={() => setIsExportOpen(false)}
-                aria-label="Close"
-                disabled={isExporting}
-              >
-                <SymbolIcon className="modal-close-icon" name="close" />
-              </button>
-            </div>
-            <div className="modal-body export-body">
-              <p className="export-note">
-                Exports using current tuning and deleted branches.
-              </p>
-              <label>
-                <div className="label-line">
-                  Export Duration:
-                  <span>{formatDuration(exportForm.durationSeconds)}</span>
-                </div>
-                <input
-                  className="field-input"
-                  type="number"
-                  min={5}
-                  max={MAX_EXPORT_DURATION_SECONDS}
-                  step={5}
-                  value={exportForm.durationSeconds}
-                  disabled={isExporting}
-                  onChange={(event) =>
-                    setExportForm((prev) => ({
-                      ...prev,
-                      durationSeconds: Number(event.target.value),
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                <div className="label-line">Format:</div>
-                <select
-                  className="field-input"
-                  value={exportForm.format}
-                  disabled={isExporting}
-                  onChange={(event) =>
-                    setExportForm((prev) => ({
-                      ...prev,
-                      format: event.target.value as AudioExportFormat,
-                    }))
-                  }
-                >
-                  <option value="mp3">MP3 (compressed)</option>
-                  <option value="wav">WAV (lossless)</option>
-                </select>
-              </label>
-              {exportForm.format === "mp3" ? (
-                <label>
-                  <div className="label-line">
-                    MP3 Bitrate:
-                    <span>{exportForm.bitrateKbps} kbps</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={64}
-                    max={320}
-                    step={32}
-                    value={exportForm.bitrateKbps}
-                    disabled={isExporting}
-                    onChange={(event) =>
-                      setExportForm((prev) => ({
-                        ...prev,
-                        bitrateKbps: Number(event.target.value),
-                      }))
-                    }
-                  />
-                </label>
-              ) : null}
-              {exportProgress ? (
-                <div className="export-status">
-                  {exportProgress.message} ({Math.round(exportProgress.percent)}%)
-                </div>
-              ) : null}
-              {exportError ? <div className="error">{exportError}</div> : null}
-            </div>
-            <div className="modal-footer">
-              <button
-                className="tab-btn"
-                type="button"
-                onClick={() => setIsExportOpen(false)}
-                disabled={isExporting}
-              >
-                Cancel
-              </button>
-              <button
-                className="tab-btn"
-                type="button"
-                onClick={() => void onExportJukeboxAudio()}
-                disabled={isExporting}
-              >
-                {isExporting ? "Exporting..." : "Export Audio"}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       ) : null}
 
       {isTuningOpen ? (
-        <div className="modal open" onClick={(event) => event.target === event.currentTarget && setIsTuningOpen(false)}>
-          <div className="modal-panel">
-            <div className="modal-header">
-              <div className="modal-header-main">
-                <h2
-                  id="tuning-title"
-                  className={tuningActiveTab === "extras" ? "is-extras-active" : ""}
-                >
-                  <span id="tuning-title-text">
-                    {tuningActiveTab === "tuning" ? "Tuning" : "Extras"}
-                  </span>
-                </h2>
-                <div className="modal-tabs" aria-label="Tune sections">
-                  <button
-                    id="tuning-tab-toggle"
-                    className={`modal-tab ${playMode !== "jukebox" ? "hidden" : ""}`}
-                    type="button"
-                    onClick={() =>
-                      setTuningActiveTab(tuningActiveTab === "tuning" ? "extras" : "tuning")
-                    }
-                    aria-label={
-                      tuningActiveTab === "tuning" ? "Switch to Extras" : "Switch to Tuning"
-                    }
-                  >
-                    <SymbolIcon
-                      className="modal-tab-icon"
-                      name={tuningActiveTab === "tuning" ? "science" : "tune"}
-                    />
-                    <span id="tuning-tab-toggle-label">
-                      {tuningActiveTab === "tuning" ? "Extras" : "Tuning"}
-                    </span>
-                  </button>
-                </div>
-              </div>
-              <div className="modal-header-actions">
-                <button
-                  id="sleep-timer-open"
-                  className="modal-icon-button"
-                  type="button"
-                  onClick={openSleepTimer}
-                  aria-label="Sleep Timer"
-                  title="Sleep Timer"
-                >
-                  <SymbolIcon className="modal-icon-button-icon" name="timer" />
-                </button>
-                <button className="modal-close" type="button" onClick={() => setIsTuningOpen(false)} aria-label="Close">
-                  <SymbolIcon className="modal-close-icon" name="close" />
-                </button>
-              </div>
-            </div>
-            <div className="modal-body">
-              <div id="tuning-panel-tuning" className={tuningActiveTab === "tuning" ? "" : "hidden"}>
-                <label>
-                  <div className="label-line">
-                    Branch Similarity Threshold:
-                    <span>{tuneForm.threshold}</span>
-                  </div>
-                  <div className="hint">
-                    Computed default threshold:
-                    <span>{tuneForm.computedThreshold}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={2}
-                    max={80}
-                    step={1}
-                    value={tuneForm.threshold}
-                    onChange={(event) =>
-                      setTuneForm((prev) => ({ ...prev, threshold: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <label>
-                  <div className="label-line">
-                    Branch Probability Min:
-                    <span>{tuneForm.minProb}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={2}
-                    value={tuneForm.minProb}
-                    onChange={(event) =>
-                      setTuneForm((prev) => ({ ...prev, minProb: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <label>
-                  <div className="label-line">
-                    Branch Probability Max:
-                    <span>{tuneForm.maxProb}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={2}
-                    value={tuneForm.maxProb}
-                    onChange={(event) =>
-                      setTuneForm((prev) => ({ ...prev, maxProb: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <label>
-                  <div className="label-line">
-                    Branch Ramp Speed:
-                    <span>{tuneForm.ramp}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={2}
-                    value={tuneForm.ramp}
-                    onChange={(event) =>
-                      setTuneForm((prev) => ({ ...prev, ramp: Number(event.target.value) }))
-                    }
-                  />
-                </label>
-                <div className="checkbox-row">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={tuneForm.justBackwards}
-                      onChange={(event) =>
-                        setTuneForm((prev) => ({ ...prev, justBackwards: event.target.checked }))
-                      }
-                    />
-                    Allow only reverse branches
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={tuneForm.justLongBranches}
-                      onChange={(event) =>
-                        setTuneForm((prev) => ({ ...prev, justLongBranches: event.target.checked }))
-                      }
-                    />
-                    Allow only long branches
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={tuneForm.removeSequentialBranches}
-                      onChange={(event) =>
-                        setTuneForm((prev) => ({ ...prev, removeSequentialBranches: event.target.checked }))
-                      }
-                    />
-                    Remove sequential branches
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={tuneForm.highlightAnchorBranch}
-                      onChange={(event) =>
-                        setTuneForm((prev) => ({
-                          ...prev,
-                          highlightAnchorBranch: event.target.checked,
-                        }))
-                      }
-                    />
-                    Highlight forced anchor jump
-                  </label>
-                </div>
-              </div>
-              <div id="tuning-panel-extras" className={tuningActiveTab === "extras" ? "" : "hidden"}>
-                <div className="checkbox-row extras-checkbox-row">
-                  <label>
-                    <input
-                      id="extras-enabled"
-                      type="checkbox"
-                      checked={extrasForm.branchStatsEnabled}
-                      onChange={(event) =>
-                        setExtrasForm((prev) => ({
-                          ...prev,
-                          branchStatsEnabled: event.target.checked,
-                        }))
-                      }
-                      disabled={playMode !== "jukebox"}
-                    />
-                    Show selected branch stats
-                  </label>
-                  <label>
-                    <input
-                      id="bring-home-enabled"
-                      type="checkbox"
-                      checked={extrasForm.bringItHomeMode}
-                      onChange={(event) =>
-                        setExtrasForm((prev) => ({
-                          ...prev,
-                          bringItHomeMode: event.target.checked,
-                        }))
-                      }
-                      disabled={playMode !== "jukebox"}
-                    />
-                    Bring It Home mode
-                  </label>
-                </div>
-                <div id="jukebox-audio-mode-group" className="audio-mode-group">
-                  <div className="label-line">Audio Mode</div>
-                  <div className="audio-mode-options" role="radiogroup" aria-label="Audio mode">
-                    <AudioModeRadio
-                      option={AUDIO_MODE_DEFAULT_OPTION}
-                      className="audio-mode-default-option"
-                      checked={extrasForm.audioMode === AUDIO_MODE_DEFAULT_OPTION.value}
-                      disabled={playMode !== "jukebox"}
-                      onChange={() =>
-                        setExtrasForm((prev) => ({
-                          ...prev,
-                          audioMode: AUDIO_MODE_DEFAULT_OPTION.value,
-                        }))
-                      }
-                    />
-                    {AUDIO_MODE_SECTIONS.map((section) => (
-                      <div className="audio-mode-section" key={section.title}>
-                        <div className="audio-mode-section-title">{section.title}</div>
-                        <div className="audio-mode-section-options">
-                          {section.options.map((option) => (
-                            <AudioModeRadio
-                              key={option.value}
-                              option={option}
-                              checked={extrasForm.audioMode === option.value}
-                              disabled={playMode !== "jukebox"}
-                              onChange={() =>
-                                setExtrasForm((prev) => ({
-                                  ...prev,
-                                  audioMode: option.value,
-                                }))
-                              }
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer tuning-footer">
-              <button className="tab-btn" type="button" onClick={onResetTuningModal}>Reset</button>
-              <button className="tab-btn" type="button" onClick={onApplyTuningModal}>Apply</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {isSleepTimerOpen ? (
-        <div
-          id="sleep-timer-modal"
-          className="modal open"
-          onClick={(event) =>
-            event.target === event.currentTarget && setIsSleepTimerOpen(false)
-          }
-        >
-          <div className="modal-panel sleep-timer-panel">
-            <div className="modal-header">
-              <h2>Sleep Timer</h2>
-              <button
-                id="sleep-timer-close"
-                className="modal-close"
-                type="button"
-                onClick={() => setIsSleepTimerOpen(false)}
-                aria-label="Close"
-              >
-                <SymbolIcon className="modal-close-icon" name="close" />
-              </button>
-            </div>
-            <div className="modal-body sleep-timer-body">
-              <div id="sleep-timer-current" className="sleep-timer-current">
-                {sleepTimer.remainingMs > 0
-                  ? `Current countdown: ${formatSleepTimerRemaining(
-                      sleepTimer.remainingMs,
-                    )}`
-                  : "Off"}
-              </div>
-              <label className="sleep-timer-select-group" htmlFor="sleep-timer-select">
-                <span className="label-line">Timer</span>
-                <span className="viz-select-wrap sleep-timer-select-wrap">
-                  <select
-                    id="sleep-timer-select"
-                    className="viz-select sleep-timer-select"
-                    value={getSleepTimerOptionValue(pendingSleepTimerDurationMs)}
-                    onChange={(event) =>
-                      setPendingSleepTimerDurationMs(
-                        getSleepTimerDurationFromValue(event.target.value),
-                      )
-                    }
-                  >
-                    {SLEEP_TIMER_OPTIONS.map((option) => (
-                      <option
-                        key={getSleepTimerOptionValue(option.durationMs)}
-                        value={getSleepTimerOptionValue(option.durationMs)}
-                      >
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <SymbolIcon className="viz-select-arrow" name="arrow_drop_down" />
-                </span>
-              </label>
-            </div>
-            <div className="modal-footer sleep-timer-footer">
-              <button
-                id="sleep-timer-cancel"
-                className="tab-btn"
-                type="button"
-                onClick={() => setIsSleepTimerOpen(false)}
-              >
-                Close
-              </button>
-              <button
-                id="sleep-timer-set"
-                className="tab-btn"
-                type="button"
-                onClick={() => {
-                  setSleepTimer(pendingSleepTimerDurationMs);
-                  setIsSleepTimerOpen(false);
-                }}
-              >
-                Set
-              </button>
-            </div>
-          </div>
-        </div>
+        <TuningModal
+          playMode={playMode}
+          activeTab={tuningActiveTab}
+          onTabChange={setTuningActiveTab}
+          tuneForm={tuneForm}
+          setTuneForm={setTuneForm}
+          extrasForm={extrasForm}
+          setExtrasForm={setExtrasForm}
+          onClose={() => setIsTuningOpen(false)}
+          showReset={showTuningReset}
+          onReset={onResetTuningModal}
+          onApply={onApplyTuningModal}
+        />
       ) : null}
 
       {isInfoOpen ? (
-        <div className="modal open" onClick={(event) => event.target === event.currentTarget && setIsInfoOpen(false)}>
-          <div className="modal-panel">
-            <div className="modal-header">
-              <h2>Track Info</h2>
-              <button className="modal-close" type="button" onClick={() => setIsInfoOpen(false)} aria-label="Close">
-                <SymbolIcon className="modal-close-icon" name="close" />
-              </button>
-            </div>
-            <div className="modal-body info-body">
-              <div className="info-row">
-                <span className="info-label">Track length:</span>
-                <span>{formatDuration(analysis?.track?.duration ?? 0)}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Total beats:</span>
-                <span>{totalBeats}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Total branches:</span>
-                <span>{totalBranches}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Deleted branches:</span>
-                <span>{deletedBranches}</span>
-              </div>
-              <h4>Keyboard commands</h4>
-              <div className="info-row">
-                <span className="info-label">Space:</span>
-                <span>Play/pause playback</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Shift (hold):</span>
-                <span>Force branching while playing</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Left/Right:</span>
-                <span>Cycle selected branch</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">A:</span>
-                <span>Set/reset selected anchor branch</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Delete:</span>
-                <span>Remove selected branch</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">E:</span>
-                <span>Open the Extras menu</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">H:</span>
-                <span>Toggle Bring It Home mode</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <InfoModal
+          trackDurationSeconds={analysis?.track?.duration ?? 0}
+          totalBeats={totalBeats}
+          totalBranches={totalBranches}
+          deletedBranches={deletedBranches}
+          onClose={() => setIsInfoOpen(false)}
+        />
       ) : null}
-      {shortcutToast ? (
-        <div className="shortcut-toast" role="status" aria-live="polite">
-          {shortcutToast}
-        </div>
-      ) : null}
-    </section>
+      <ShortcutToastStack queue={shortcutToastQueue} />
+      </section>
+      {settingsModal}
+    </>
   );
 }

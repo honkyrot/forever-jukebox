@@ -1,0 +1,1007 @@
+import {
+  AUDIO_MODE_SETTINGS,
+  DEFAULT_AUDIO_MODE_INTENSITY,
+  MODE_FILTER_Q,
+  PAN_STEP,
+  REVERB_SECONDS,
+  audioModeNeedsLimiter,
+  audioModeSupportsIntensity,
+  clampAudioModeIntensity,
+  createBitcrusherCurve,
+  createSafetyLimiter,
+  getAudioModeSettings,
+  renderBitcrushedBuffer,
+  type AudioModeSettings,
+  type JukeboxAudioMode,
+} from "./audioModes";
+import { clampVolume } from "./volume";
+
+export type { JukeboxAudioMode } from "./audioModes";
+
+const MAX_LATE_JUMP_FRAMES = 8;
+
+type AnchorJump = {
+  targetTime: number;
+  sourceStartTime: number;
+};
+
+export type JumpEvent = {
+  targetTime: number;
+  sourceStartTime: number;
+};
+
+export class BufferedAudioPlayer {
+  private readonly context: AudioContext;
+  private originalBuffer: AudioBuffer | null = null;
+  private buffer: AudioBuffer | null = null;
+  private source: AudioBufferSourceNode | null = null;
+  private pendingSource: AudioBufferSourceNode | null = null;
+  private pendingSwapAt: number | null = null;
+  private pendingStartAt = 0;
+  private pendingJumpEvent: JumpEvent | null = null;
+  private anchorPendingSource: AudioBufferSourceNode | null = null;
+  private anchorPendingSwapAt: number | null = null;
+  private anchorPendingStartAt = 0;
+  private anchorPendingJumpEvent: JumpEvent | null = null;
+  private anchorStopSource: AudioBufferSourceNode | null = null;
+  private anchorJump: AnchorJump | null = null;
+  private promotedJumpEvent: JumpEvent | null = null;
+  private scheduledStopSource: AudioBufferSourceNode | null = null;
+  private scheduledStopAt: number | null = null;
+  private scheduledStopOffset: number | null = null;
+  private readonly masterGain: GainNode;
+  private readonly sourceChainInput: GainNode;
+  private readonly sourceChainOutput: GainNode;
+  private limiter: DynamicsCompressorNode | null = null;
+  private masterRoutedThroughLimiter: boolean | null = null;
+  private stereoPanner: StereoPannerNode | null = null;
+  private chainNodes: AudioNode[] = [];
+  private chainHighPass: BiquadFilterNode | null = null;
+  private chainLowPass: BiquadFilterNode | null = null;
+  private chainDryGain: GainNode | null = null;
+  private chainWetGain: GainNode | null = null;
+  private readonly reverbImpulseBuffers = new Map<string, AudioBuffer>();
+  private volume = 1;
+  private startAt = 0;
+  private offset = 0;
+  private playing = false;
+  private playRequestId = 0;
+  private loadGeneration = 0;
+  private onEnded: (() => void) | null = null;
+  private audioMode: JukeboxAudioMode = "off";
+  private intensityPct = DEFAULT_AUDIO_MODE_INTENSITY;
+  private playbackRate = AUDIO_MODE_SETTINGS.off.rate;
+  private panOscillator: OscillatorNode | null = null;
+  private renderedModeBuffers: Partial<Record<JukeboxAudioMode, AudioBuffer>> =
+    {};
+
+  constructor(context?: AudioContext) {
+    this.context = context ?? new AudioContext();
+    this.masterGain = this.context.createGain();
+    this.masterGain.gain.value = this.volume;
+    // masterGain routes through the limiter per mode (syncMasterOutputRouting);
+    // the cowbell overlay connects straight to the destination, which stays
+    // aligned because cowbell mode never limits.
+    this.limiter = createSafetyLimiter(this.context);
+    if (this.limiter) {
+      this.limiter.connect(this.context.destination);
+    }
+    this.sourceChainInput = this.context.createGain();
+    this.sourceChainOutput = this.context.createGain();
+    if (typeof this.context.createStereoPanner === "function") {
+      this.stereoPanner = this.context.createStereoPanner();
+      this.sourceChainOutput.connect(this.stereoPanner);
+      this.stereoPanner.connect(this.masterGain);
+    } else {
+      this.sourceChainOutput.connect(this.masterGain);
+    }
+    this.rebuildSourceChain();
+  }
+
+  loadBuffer(buffer: AudioBuffer) {
+    this.loadGeneration += 1;
+    this.applyLoadedBuffer(buffer);
+  }
+
+  async decode(arrayBuffer: ArrayBuffer) {
+    const generation = ++this.loadGeneration;
+    const buffer = await this.context.decodeAudioData(arrayBuffer.slice(0));
+    // Two decodes can be in flight at once and finish out of order; a later
+    // load (decode or loadBuffer) bumps the generation, so drop this stale
+    // result rather than clobber the newer buffer.
+    if (generation !== this.loadGeneration) {
+      return;
+    }
+    this.applyLoadedBuffer(buffer);
+  }
+
+  private applyLoadedBuffer(buffer: AudioBuffer) {
+    this.stop();
+    this.clearAnchorJump();
+    this.originalBuffer = buffer;
+    this.renderedModeBuffers = {};
+    this.reverbImpulseBuffers.clear();
+    // Crush buffer derives from the source; re-render for the new buffer.
+    this.renderEightBitBuffer();
+    this.buffer = this.getActiveBuffer();
+    this.offset = 0;
+  }
+
+  getBuffer(): AudioBuffer | null {
+    return this.buffer;
+  }
+
+  getSourceBuffer(): AudioBuffer | null {
+    return this.originalBuffer;
+  }
+
+  getContext(): AudioContext {
+    return this.context;
+  }
+
+  play() {
+    if (!this.buffer || this.playing) {
+      return;
+    }
+    const requestId = ++this.playRequestId;
+    const startPlayback = () => {
+      if (
+        !this.buffer ||
+        this.playing ||
+        this.playRequestId !== requestId
+      ) {
+        return;
+      }
+      const now = this.context.currentTime;
+      this.startSourceAt(this.offset, now);
+    };
+    if (this.context.state === "suspended") {
+      void Promise.resolve(this.context.resume())
+        .then(() => {
+          startPlayback();
+        })
+        .catch(() => {
+          // no-op
+        });
+      return;
+    }
+    startPlayback();
+  }
+
+  pause() {
+    this.playRequestId += 1;
+    if (!this.playing) {
+      return;
+    }
+    this.offset = this.getCurrentTime();
+    this.stopSource();
+    this.playing = false;
+    this.stopPanMotion();
+  }
+
+  stop() {
+    this.playRequestId += 1;
+    this.stopSource();
+    this.playing = false;
+    this.offset = 0;
+    this.clearAnchorJump();
+    this.stopPanMotion();
+  }
+
+  seek(time: number) {
+    if (!this.buffer) {
+      return;
+    }
+    this.promotedJumpEvent = null;
+    const clamped = Math.max(0, Math.min(this.buffer.duration, time));
+    this.offset = clamped;
+    if (this.playing) {
+      const now = this.context.currentTime;
+      this.stopSource();
+      this.startSourceAt(this.offset, now);
+    }
+  }
+
+  getCurrentTime(): number {
+    this.maybePromotePending();
+    if (!this.buffer) {
+      return 0;
+    }
+    if (!this.playing) {
+      return this.offset;
+    }
+    return this.getCurrentTimeFromClock();
+  }
+
+  getAudioTime(): number {
+    return this.context.currentTime;
+  }
+
+  isPlaying(): boolean {
+    return this.playing;
+  }
+
+  setOnEnded(handler: (() => void) | null) {
+    this.onEnded = handler;
+  }
+
+  getDuration(): number | null {
+    return this.buffer ? this.buffer.duration : null;
+  }
+
+  setVolume(value: number) {
+    this.volume = clampVolume(value, this.volume);
+    this.masterGain.gain.value = this.volume;
+  }
+
+  getVolume(): number {
+    return this.volume;
+  }
+
+  // Pass `intensityPct` when changing both mode and intensity so the combined
+  // change does a single chain rebuild + source restart. Omitting it keeps the
+  // current intensity.
+  setJukeboxAudioMode(mode: JukeboxAudioMode, intensityPct?: number) {
+    this.applyModeAndIntensity(
+      mode,
+      intensityPct === undefined
+        ? this.intensityPct
+        : clampAudioModeIntensity(intensityPct),
+    );
+  }
+
+  private releaseInactiveRenderedModeBuffers(activeMode: JukeboxAudioMode) {
+    if (activeMode !== "eight_bit") {
+      delete this.renderedModeBuffers.eight_bit;
+    }
+    if (activeMode !== "swing") {
+      delete this.renderedModeBuffers.swing;
+    }
+    if (activeMode !== "instrumental") {
+      delete this.renderedModeBuffers.instrumental;
+    }
+  }
+
+  setRenderedJukeboxAudioBuffer(
+    mode: Extract<JukeboxAudioMode, "eight_bit" | "swing" | "instrumental">,
+    buffer: AudioBuffer,
+  ) {
+    this.renderedModeBuffers[mode] = buffer;
+    if (this.audioMode !== mode) {
+      return;
+    }
+    const shouldResume = this.playing;
+    const resumeOffset = shouldResume ? this.getCurrentTime() : this.offset;
+    this.buffer = this.getActiveBuffer();
+    if (!this.buffer) {
+      return;
+    }
+    this.offset = Math.max(0, Math.min(this.buffer.duration, resumeOffset));
+    if (!shouldResume) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.stopSource();
+    this.startSourceAt(this.offset, now);
+  }
+
+  getRenderedJukeboxAudioBuffer(
+    mode: Extract<JukeboxAudioMode, "eight_bit" | "swing" | "instrumental">,
+  ): AudioBuffer | null {
+    return this.renderedModeBuffers[mode] ?? null;
+  }
+
+  private getActiveBuffer(): AudioBuffer | null {
+    return this.renderedModeBuffers[this.audioMode] ?? this.originalBuffer;
+  }
+
+  // No-op unless eight-bit is the active mode with a valid source buffer.
+  private renderEightBitBuffer() {
+    const settings = AUDIO_MODE_SETTINGS.eight_bit;
+    if (
+      this.audioMode !== "eight_bit" ||
+      !this.originalBuffer ||
+      !Number.isFinite(this.originalBuffer.length) ||
+      this.originalBuffer.length <= 0 ||
+      !Number.isFinite(this.originalBuffer.sampleRate) ||
+      this.originalBuffer.sampleRate <= 0 ||
+      !Number.isInteger(this.originalBuffer.numberOfChannels) ||
+      this.originalBuffer.numberOfChannels <= 0 ||
+      typeof this.originalBuffer.getChannelData !== "function" ||
+      settings.crushBitDepth === undefined ||
+      settings.crushSampleRate === undefined
+    ) {
+      return;
+    }
+    this.renderedModeBuffers.eight_bit = renderBitcrushedBuffer(
+      this.context,
+      this.originalBuffer,
+      settings.crushBitDepth,
+      settings.crushSampleRate,
+    );
+  }
+
+  getJukeboxAudioMode(): JukeboxAudioMode {
+    return this.audioMode;
+  }
+
+  setJukeboxAudioModeIntensity(intensityPct: number) {
+    this.applyModeAndIntensity(
+      this.audioMode,
+      clampAudioModeIntensity(intensityPct),
+    );
+  }
+
+  private applyModeAndIntensity(mode: JukeboxAudioMode, intensityPct: number) {
+    const modeChanged = mode !== this.audioMode;
+    if (!modeChanged && intensityPct === this.intensityPct) {
+      return;
+    }
+    this.audioMode = mode;
+    this.intensityPct = intensityPct;
+    if (!modeChanged && !audioModeSupportsIntensity(mode)) {
+      // Intensity is inaudible for this mode — store it for the next switch
+      // to a mode that supports it.
+      return;
+    }
+    const shouldResume = this.playing && this.buffer !== null;
+    const resumeOffset = shouldResume ? this.getCurrentTime() : this.offset;
+    const settings = this.getActiveModeSettings();
+    this.playbackRate = settings.rate;
+    if (modeChanged) {
+      this.renderEightBitBuffer();
+      this.releaseInactiveRenderedModeBuffers(mode);
+      this.reverbImpulseBuffers.clear();
+      this.buffer = this.getActiveBuffer();
+      this.rebuildSourceChain();
+      this.syncPanMotion();
+    } else {
+      // Intensity only scales AudioParams (rate, filter cutoffs, reverb mix)
+      // and never changes a mode's chain topology, so write the params in
+      // place instead of tearing down the node graph. The source restart
+      // below still applies the new playback rate.
+      this.updateSourceChainParams(settings);
+    }
+    if (!this.buffer) {
+      return;
+    }
+    this.offset = Math.max(0, Math.min(this.buffer.duration, resumeOffset));
+    if (!shouldResume) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.stopSource();
+    this.startSourceAt(this.offset, now);
+  }
+
+  getJukeboxAudioModeIntensity(): number {
+    return this.intensityPct;
+  }
+
+  private getActiveModeSettings(): AudioModeSettings {
+    return getAudioModeSettings(this.audioMode, this.intensityPct);
+  }
+
+  getPlaybackRate(): number {
+    return this.playbackRate;
+  }
+
+  consumeJumpEvent(): JumpEvent | null {
+    this.maybePromotePending();
+    const event = this.promotedJumpEvent;
+    this.promotedJumpEvent = null;
+    return event;
+  }
+
+  scheduleJump(
+    targetTime: number,
+    sourceStartTime: number,
+    reportedJumpEvent?: JumpEvent | null,
+  ) {
+    if (!this.buffer || !this.playing) {
+      return false;
+    }
+    this.maybePromotePending();
+    // One clock read for both the source position and the swap time; the
+    // audio clock can advance between reads.
+    const now = this.context.currentTime;
+    const currentSourceTime = this.getCurrentTimeFromClock(now);
+    const lateBy = currentSourceTime - sourceStartTime;
+    const maxLateSeconds = MAX_LATE_JUMP_FRAMES / this.context.sampleRate;
+    if (lateBy > maxLateSeconds) {
+      return false;
+    }
+    this.cancelScheduledStop();
+    this.clearAnchorPendingSwap();
+    this.clearPendingSwap();
+    const sourceLead = Math.max(0, sourceStartTime - currentSourceTime);
+    const startTime = now + sourceLead / this.playbackRate;
+    const source = this.context.createBufferSource();
+    source.buffer = this.buffer;
+    source.playbackRate.value = this.playbackRate;
+    source.connect(this.sourceChainInput);
+    this.attachSourceEndedHandler(source);
+    const duration = this.buffer.duration - targetTime;
+    try {
+      source.start(startTime, targetTime, Math.max(0, duration));
+    } catch {
+      source.disconnect();
+      return false;
+    }
+    if (this.source) {
+      this.source.onended = null;
+      try {
+        this.source.stop(startTime);
+      } catch {
+        // no-op
+      }
+    }
+    this.pendingSource = source;
+    this.pendingStartAt = startTime - targetTime / this.playbackRate;
+    this.pendingSwapAt = startTime;
+    this.pendingJumpEvent =
+      reportedJumpEvent === undefined
+        ? { targetTime, sourceStartTime }
+        : reportedJumpEvent;
+    this.armAnchorPendingSwap(targetTime, startTime, source);
+    return true;
+  }
+
+  cancelScheduledJump() {
+    this.maybePromotePending();
+    this.clearAnchorPendingSwap();
+    this.clearPendingSwap({ restartCurrentSource: true });
+    this.syncAnchorPendingSwap();
+  }
+
+  scheduleStop(sourceStartTime: number) {
+    if (!this.buffer || !this.playing || !this.source) {
+      return false;
+    }
+    this.maybePromotePending();
+    this.cancelScheduledStop();
+    this.clearAnchorPendingSwap({ restartCurrentSource: true });
+    this.clearPendingSwap({ restartCurrentSource: true });
+    if (!this.source) {
+      return false;
+    }
+    const now = this.context.currentTime;
+    const sourceLead = Math.max(
+      0,
+      sourceStartTime - this.getCurrentTimeFromClock(now),
+    );
+    const stopAt = now + sourceLead / this.playbackRate;
+    try {
+      this.source.stop(stopAt);
+    } catch {
+      return false;
+    }
+    this.scheduledStopSource = this.source;
+    this.scheduledStopAt = stopAt;
+    this.scheduledStopOffset = sourceStartTime;
+    return true;
+  }
+
+  cancelScheduledStop() {
+    if (
+      !this.scheduledStopSource ||
+      this.scheduledStopAt === null ||
+      this.scheduledStopOffset === null
+    ) {
+      this.clearScheduledStopState();
+      return;
+    }
+    const now = this.context.currentTime;
+    if (now >= this.scheduledStopAt) {
+      return;
+    }
+    const restartOffset = this.getCurrentTimeFromClock(now);
+    this.clearScheduledStopState();
+    this.replaceCurrentSourceAt(restartOffset, now);
+  }
+
+  setAnchorJump(targetTime: number, sourceStartTime: number) {
+    if (
+      !this.buffer ||
+      !Number.isFinite(targetTime) ||
+      !Number.isFinite(sourceStartTime) ||
+      targetTime < 0 ||
+      targetTime >= this.buffer.duration ||
+      sourceStartTime < 0 ||
+      sourceStartTime > this.buffer.duration
+    ) {
+      this.clearAnchorJump();
+      return false;
+    }
+    this.cancelScheduledStop();
+    this.anchorJump = { targetTime, sourceStartTime };
+    this.syncAnchorPendingSwap();
+    return true;
+  }
+
+  clearAnchorJump() {
+    this.anchorJump = null;
+    this.clearAnchorPendingSwap({ restartCurrentSource: true });
+  }
+
+  private stopSource() {
+    this.clearScheduledStopState();
+    this.clearAnchorPendingSwap();
+    this.clearPendingSwap();
+    if (this.source) {
+      this.source.onended = null;
+      try {
+        this.source.stop(0);
+      } catch {
+        // no-op
+      }
+      this.source.disconnect();
+      this.source = null;
+    }
+    this.promotedJumpEvent = null;
+  }
+
+  private clearPendingSwap(options: { restartCurrentSource?: boolean } = {}) {
+    const now = this.context.currentTime;
+    const shouldRestartCurrentSource =
+      options.restartCurrentSource === true &&
+      this.playing &&
+      this.buffer !== null &&
+      this.source !== null &&
+      this.pendingSwapAt !== null &&
+      now < this.pendingSwapAt;
+    const restartOffset = shouldRestartCurrentSource
+      ? this.getCurrentTimeFromClock(now)
+      : null;
+    this.pendingSwapAt = null;
+    this.pendingJumpEvent = null;
+    if (!this.pendingSource) {
+      return;
+    }
+    this.pendingSource.onended = null;
+    try {
+      this.pendingSource.stop(0);
+    } catch {
+      // no-op
+    }
+    this.pendingSource.disconnect();
+    this.pendingSource = null;
+    if (restartOffset !== null) {
+      this.replaceCurrentSourceAt(restartOffset, now);
+    }
+  }
+
+  private maybePromotePending() {
+    if (!this.pendingSource || this.pendingSwapAt === null) {
+      this.maybePromoteAnchorPending();
+      return;
+    }
+    if (this.context.currentTime < this.pendingSwapAt) {
+      return;
+    }
+    const source = this.pendingSource;
+    if (this.source) {
+      this.source.disconnect();
+    }
+    this.source = source;
+    this.startAt = this.pendingStartAt;
+    this.promotedJumpEvent = this.pendingJumpEvent;
+    this.pendingSource = null;
+    this.pendingSwapAt = null;
+    this.pendingJumpEvent = null;
+    this.maybePromoteAnchorPending();
+  }
+
+  private maybePromoteAnchorPending(options: { syncAnchor?: boolean } = {}) {
+    if (!this.anchorPendingSource || this.anchorPendingSwapAt === null) {
+      return;
+    }
+    if (this.context.currentTime < this.anchorPendingSwapAt) {
+      return;
+    }
+    const source = this.anchorPendingSource;
+    if (this.source) {
+      this.source.disconnect();
+    }
+    this.source = source;
+    this.startAt = this.anchorPendingStartAt;
+    this.promotedJumpEvent = this.anchorPendingJumpEvent;
+    this.anchorPendingSource = null;
+    this.anchorPendingSwapAt = null;
+    this.anchorPendingJumpEvent = null;
+    this.anchorStopSource = null;
+    if (options.syncAnchor !== false) {
+      this.syncAnchorPendingSwap();
+    }
+  }
+
+  private startSourceAt(
+    offset: number,
+    startTime: number,
+    options: { syncAnchor?: boolean } = {},
+  ) {
+    if (!this.buffer) {
+      return;
+    }
+    const source = this.context.createBufferSource();
+    source.buffer = this.buffer;
+    source.playbackRate.value = this.playbackRate;
+    source.connect(this.sourceChainInput);
+    this.source = source;
+    this.startAt = startTime - offset / this.playbackRate;
+    this.playing = true;
+    this.syncPanMotion();
+    this.attachSourceEndedHandler(source);
+    const duration = this.buffer.duration - offset;
+    source.start(startTime, offset, Math.max(0, duration));
+    if (options.syncAnchor !== false) {
+      this.syncAnchorPendingSwap();
+    }
+  }
+
+  private replaceCurrentSourceAt(
+    offset: number,
+    startTime: number,
+    options: { syncAnchor?: boolean } = {},
+  ) {
+    if (this.source) {
+      this.source.onended = null;
+      try {
+        this.source.stop(0);
+      } catch {
+        // no-op
+      }
+      this.source.disconnect();
+      this.source = null;
+    }
+    this.startSourceAt(offset, startTime, options);
+  }
+
+  private getCurrentTimeFromClock(now = this.context.currentTime): number {
+    if (!this.buffer) {
+      return 0;
+    }
+    const elapsed = (now - this.startAt) * this.playbackRate;
+    return Math.max(0, Math.min(this.buffer.duration, elapsed));
+  }
+
+  private attachSourceEndedHandler(source: AudioBufferSourceNode) {
+    source.onended = () => {
+      if (this.source !== source) {
+        return;
+      }
+      if (this.isSourceStoppingForPendingAnchor(source)) {
+        return;
+      }
+      const stoppedAt =
+        this.scheduledStopSource === source ? this.scheduledStopOffset : null;
+      this.clearScheduledStopState();
+      if (this.playing) {
+        this.playing = false;
+        this.offset =
+          stoppedAt ?? (this.buffer ? this.buffer.duration : 0);
+        this.stopPanMotion();
+        this.onEnded?.();
+      }
+    };
+  }
+
+  private clearScheduledStopState() {
+    this.scheduledStopSource = null;
+    this.scheduledStopAt = null;
+    this.scheduledStopOffset = null;
+  }
+
+  private syncAnchorPendingSwap() {
+    this.clearAnchorPendingSwap({ restartCurrentSource: true });
+    if (!this.source || !this.playing) {
+      return;
+    }
+    const now = this.context.currentTime;
+    this.armAnchorPendingSwap(
+      this.getCurrentTimeFromClock(now),
+      now,
+      this.source,
+    );
+  }
+
+  private armAnchorPendingSwap(
+    sourceOffset: number,
+    contextStartTime: number,
+    sourceToStop: AudioBufferSourceNode,
+  ) {
+    if (!this.buffer || !this.anchorJump) {
+      return false;
+    }
+    const { targetTime, sourceStartTime } = this.anchorJump;
+    const lateBy = sourceOffset - sourceStartTime;
+    const maxLateSeconds = MAX_LATE_JUMP_FRAMES / this.context.sampleRate;
+    if (lateBy > maxLateSeconds) {
+      return false;
+    }
+    const sourceLead = Math.max(0, sourceStartTime - sourceOffset);
+    const startTime = contextStartTime + sourceLead / this.playbackRate;
+    const source = this.context.createBufferSource();
+    source.buffer = this.buffer;
+    source.playbackRate.value = this.playbackRate;
+    source.connect(this.sourceChainInput);
+    this.attachSourceEndedHandler(source);
+    const duration = this.buffer.duration - targetTime;
+    try {
+      source.start(startTime, targetTime, Math.max(0, duration));
+      sourceToStop.stop(startTime);
+    } catch {
+      source.disconnect();
+      return false;
+    }
+    this.anchorPendingSource = source;
+    this.anchorPendingStartAt = startTime - targetTime / this.playbackRate;
+    this.anchorPendingSwapAt = startTime;
+    this.anchorPendingJumpEvent = { targetTime, sourceStartTime };
+    this.anchorStopSource = sourceToStop;
+    return true;
+  }
+
+  private isSourceStoppingForPendingAnchor(source: AudioBufferSourceNode) {
+    return (
+      this.anchorStopSource === source &&
+      this.anchorPendingSource !== null &&
+      this.anchorPendingSwapAt !== null &&
+      this.context.currentTime + Number.EPSILON >= this.anchorPendingSwapAt
+    );
+  }
+
+  private clearAnchorPendingSwap(
+    options: { restartCurrentSource?: boolean } = {},
+  ) {
+    const now = this.context.currentTime;
+    if (
+      this.anchorPendingSource &&
+      this.anchorPendingSwapAt !== null &&
+      now >= this.anchorPendingSwapAt
+    ) {
+      this.maybePromoteAnchorPending({ syncAnchor: false });
+      return;
+    }
+    const shouldRestartCurrentSource =
+      options.restartCurrentSource === true &&
+      this.playing &&
+      this.buffer !== null &&
+      this.source !== null &&
+      this.anchorStopSource === this.source &&
+      this.anchorPendingSwapAt !== null &&
+      now < this.anchorPendingSwapAt;
+    const restartOffset = shouldRestartCurrentSource
+      ? this.getCurrentTimeFromClock(now)
+      : null;
+    this.anchorPendingSwapAt = null;
+    this.anchorPendingJumpEvent = null;
+    this.anchorStopSource = null;
+    if (!this.anchorPendingSource) {
+      if (restartOffset !== null) {
+        this.replaceCurrentSourceAt(restartOffset, now, { syncAnchor: false });
+      }
+      return;
+    }
+    this.anchorPendingSource.onended = null;
+    try {
+      this.anchorPendingSource.stop(0);
+    } catch {
+      // no-op
+    }
+    this.anchorPendingSource.disconnect();
+    this.anchorPendingSource = null;
+    if (restartOffset !== null) {
+      this.replaceCurrentSourceAt(restartOffset, now, { syncAnchor: false });
+    }
+  }
+
+  // Routes masterGain through the limiter only for modes that can produce
+  // overs; other modes connect straight to the destination.
+  private syncMasterOutputRouting(settings: AudioModeSettings) {
+    const useLimiter = this.limiter !== null && audioModeNeedsLimiter(settings);
+    if (useLimiter === this.masterRoutedThroughLimiter) {
+      return;
+    }
+    this.masterRoutedThroughLimiter = useLimiter;
+    try {
+      this.masterGain.disconnect();
+    } catch {
+      // no-op
+    }
+    this.masterGain.connect(
+      useLimiter && this.limiter ? this.limiter : this.context.destination,
+    );
+  }
+
+  private rebuildSourceChain() {
+    this.clearSourceChain();
+    const settings = this.getActiveModeSettings();
+    this.syncMasterOutputRouting(settings);
+    let lastNode: AudioNode = this.sourceChainInput;
+
+    if (settings.highPassFrequency !== null) {
+      const highPass = this.context.createBiquadFilter();
+      highPass.type = "highpass";
+      highPass.frequency.value = settings.highPassFrequency;
+      highPass.Q.value = MODE_FILTER_Q;
+      this.chainNodes.push(highPass);
+      this.chainHighPass = highPass;
+      lastNode.connect(highPass);
+      lastNode = highPass;
+    }
+
+    if (settings.crushBitDepth !== undefined) {
+      const bitcrusher = this.context.createWaveShaper();
+      bitcrusher.curve = createBitcrusherCurve(settings.crushBitDepth);
+      bitcrusher.oversample = "none";
+      this.chainNodes.push(bitcrusher);
+      lastNode.connect(bitcrusher);
+      lastNode = bitcrusher;
+    }
+
+    if (settings.lowPassFrequency !== null) {
+      const lowPass = this.context.createBiquadFilter();
+      lowPass.type = settings.useBandPass ? "bandpass" : "lowpass";
+      lowPass.frequency.value = settings.lowPassFrequency;
+      if (!settings.useBandPass) {
+        lowPass.Q.value = MODE_FILTER_Q;
+      }
+      this.chainNodes.push(lowPass);
+      this.chainLowPass = lowPass;
+      lastNode.connect(lowPass);
+      lastNode = lowPass;
+    }
+
+    if (settings.reverbMix > 0) {
+      const dryGain = this.context.createGain();
+      const wetGain = this.context.createGain();
+      const reverb = this.context.createConvolver();
+      dryGain.gain.value = settings.dryMix ?? 1;
+      wetGain.gain.value = settings.reverbMix;
+      reverb.buffer = this.getReverbImpulseBuffer(
+        settings.reverbSeconds ?? REVERB_SECONDS,
+        settings.reverbDecay ?? 2,
+      );
+      this.chainNodes.push(dryGain, wetGain, reverb);
+      this.chainDryGain = dryGain;
+      this.chainWetGain = wetGain;
+      lastNode.connect(dryGain);
+      dryGain.connect(this.sourceChainOutput);
+      lastNode.connect(reverb);
+      reverb.connect(wetGain);
+      wetGain.connect(this.sourceChainOutput);
+      return;
+    }
+
+    lastNode.connect(this.sourceChainOutput);
+  }
+
+  private clearSourceChain() {
+    try {
+      this.sourceChainInput.disconnect();
+    } catch {
+      // no-op
+    }
+    for (const node of this.chainNodes) {
+      try {
+        node.disconnect();
+      } catch {
+        // no-op
+      }
+    }
+    this.chainNodes = [];
+    this.chainHighPass = null;
+    this.chainLowPass = null;
+    this.chainDryGain = null;
+    this.chainWetGain = null;
+  }
+
+  private updateSourceChainParams(settings: AudioModeSettings) {
+    this.syncMasterOutputRouting(settings);
+    if (this.chainHighPass && settings.highPassFrequency !== null) {
+      this.chainHighPass.frequency.value = settings.highPassFrequency;
+    }
+    if (this.chainLowPass && settings.lowPassFrequency !== null) {
+      this.chainLowPass.frequency.value = settings.lowPassFrequency;
+    }
+    if (this.chainDryGain) {
+      this.chainDryGain.gain.value = settings.dryMix ?? 1;
+    }
+    if (this.chainWetGain) {
+      this.chainWetGain.gain.value = settings.reverbMix;
+    }
+  }
+
+  private syncPanMotion() {
+    const settings = this.getActiveModeSettings();
+    if (!settings.pan || !this.playing || !this.stereoPanner) {
+      this.stopPanMotion();
+      return;
+    }
+    if (this.panOscillator) {
+      return;
+    }
+    // The oscillator drives pan on the audio thread; its -1..1 output is the pan position.
+    const oscillator = this.context.createOscillator();
+    oscillator.frequency.value = (PAN_STEP * 60) / (2 * Math.PI);
+    this.stereoPanner.pan.value = 0;
+    oscillator.connect(this.stereoPanner.pan);
+    oscillator.start();
+    this.panOscillator = oscillator;
+  }
+
+  private stopPanMotion() {
+    if (this.panOscillator) {
+      this.panOscillator.stop();
+      this.panOscillator.disconnect();
+      this.panOscillator = null;
+    }
+    if (this.stereoPanner) {
+      this.stereoPanner.pan.value = 0;
+    }
+  }
+
+  private getReverbImpulseBuffer(seconds: number, decay: number) {
+    const cacheKey = `${seconds}:${decay}`;
+    const cached = this.reverbImpulseBuffers.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const length = Math.floor(this.context.sampleRate * seconds);
+    const impulse = this.context.createBuffer(2, length, this.context.sampleRate);
+    for (let channelIndex = 0; channelIndex < 2; channelIndex += 1) {
+      const channel = impulse.getChannelData(channelIndex);
+      for (let sampleIndex = 0; sampleIndex < length; sampleIndex += 1) {
+        channel[sampleIndex] =
+          (Math.random() * 2 - 1) * Math.pow(1 - sampleIndex / length, decay);
+      }
+    }
+    this.reverbImpulseBuffers.set(cacheKey, impulse);
+    return impulse;
+  }
+
+  async dispose() {
+    this.stop();
+    this.originalBuffer = null;
+    this.buffer = null;
+    this.renderedModeBuffers = {};
+    this.reverbImpulseBuffers.clear();
+    this.onEnded = null;
+    this.stopPanMotion();
+    this.clearSourceChain();
+    try {
+      this.sourceChainOutput.disconnect();
+    } catch {
+      // no-op
+    }
+    try {
+      this.masterGain.disconnect();
+    } catch {
+      // no-op
+    }
+    if (this.stereoPanner) {
+      try {
+        this.stereoPanner.disconnect();
+      } catch {
+        // no-op
+      }
+      this.stereoPanner = null;
+    }
+    if (this.limiter) {
+      try {
+        this.limiter.disconnect();
+      } catch {
+        // no-op
+      }
+      this.limiter = null;
+    }
+    if (this.context.state !== "closed") {
+      try {
+        await this.context.close();
+      } catch {
+        // no-op
+      }
+    }
+  }
+}

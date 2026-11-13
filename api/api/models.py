@@ -46,6 +46,7 @@ class SpotifyItem(BaseModel):
     name: str | None = None
     artist: str | None = None
     duration: int
+    image: str | None = None
 
 
 class SpotifySearchResponse(BaseModel):
@@ -69,6 +70,23 @@ class RecentSongsResponse(BaseModel):
     items: list[TopSongItem]
 
 
+class TrackReportRequest(BaseModel):
+    reason: Literal["wrong_track", "bad_audio", "other"]
+
+
+class ReportedTrackItem(BaseModel):
+    id: str
+    title: str | None = None
+    artist: str | None = None
+    source_provider: str | None = None
+    reason: str
+    reported_at: str
+
+
+class ReportedTracksResponse(BaseModel):
+    items: list[ReportedTrackItem]
+
+
 class PlayCountResponse(BaseModel):
     id: str
     play_count: int
@@ -78,12 +96,19 @@ class PlayCountUpdate(BaseModel):
     play_count: int
 
 
+# Vetted windows only: a free-form value here would be one typo from a near-total sweep.
+CleanupWindowDays = Literal[180, 365, 730]
+
+
 class StorageCleanupRequest(BaseModel):
     dry_run: bool = True
     confirm: str | None = None
+    days: CleanupWindowDays = 365
+    # Restricts cleanup to never-opened tracks; `days` then does not apply.
+    zero_plays_only: bool = False
 
 
-class StorageCleanupSampleItem(BaseModel):
+class StorageCleanupCandidateItem(BaseModel):
     job_id: str
     provider: str
     source_id: str | None = None
@@ -92,7 +117,6 @@ class StorageCleanupSampleItem(BaseModel):
     artist: str | None = None
     play_count: int
     updated_at: str
-    bytes: int
 
 
 class StorageCleanupError(BaseModel):
@@ -103,12 +127,15 @@ class StorageCleanupError(BaseModel):
 class StorageCleanupResponse(BaseModel):
     dry_run: bool
     days: int
-    play_count_below: int
+    zero_play_days: int
+    zero_plays_only: bool
     candidate_jobs: int
     candidate_bytes: int
-    sample: list[StorageCleanupSampleItem]
+    candidates: list[StorageCleanupCandidateItem]
+    orphaned_favorites: int
     deleted_jobs: int
-    deleted_bytes: int
+    freed_bytes: int
+    pruned_favorites: int
     failed_jobs: int
     errors: list[StorageCleanupError]
 
@@ -138,6 +165,7 @@ class AppConfigResponse(BaseModel):
     allow_user_upload: bool
     allow_user_url: bool
     allow_favorites_sync: bool = False
+    allow_track_reports: bool = False
     max_upload_size: int | None = None
     allowed_upload_exts: list[str] | None = None
     max_track_length: float | None = None
@@ -152,9 +180,16 @@ class FavoriteTrack(BaseModel):
     artist: str
     duration: float | None = None
     sourceType: Literal["youtube", "soundcloud", "bandcamp", "upload"] | None = None
+    # Opaque URL-param string holding all tuning (jb, thresh, bp, am, ab, ...).
     tuningParams: str | None = None
+    # Play mode the track was favorited in; absent/None on legacy favorites,
+    # which predate autocanonizer favorites and are treated as jukebox.
+    playMode: Literal["jukebox", "autocanonizer", "wubmachine"] | None = None
 
-    model_config = ConfigDict(extra="allow")
+    # The model enumerates every field the client persists, so unknown keys are
+    # dropped rather than stored verbatim. Adding a new favorite field requires
+    # adding it here too (it will otherwise be silently discarded on sync).
+    model_config = ConfigDict(extra="ignore")
 
 
 class FavoritesSyncRequest(BaseModel):

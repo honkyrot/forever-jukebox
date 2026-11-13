@@ -21,14 +21,14 @@ SQLITE_CONNECT_TIMEOUT_S = 30.0
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 CLAIM_BUSY_TIMEOUT_MS = 250
 CLAIM_RETRY_DELAYS_S = (0.05, 0.1, 0.2, 0.4)
+SELECT_JOB_SOURCE_REF_SQL = "SELECT source_ref FROM jobs WHERE id = ?"
+BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
 
 
 @dataclass
 class Job:
     id: str
     status: str
-    input_path: str
-    output_path: str
     error: Optional[str]
     track_title: Optional[str]
     track_artist: Optional[str]
@@ -42,7 +42,7 @@ class Job:
 
 
 JOB_SELECT_COLUMNS = (
-    "j.id, j.status, j.input_path, j.output_path, j.error, "
+    "j.id, j.status, j.error, "
     "s.track_title, s.track_artist, "
     "CASE WHEN s.provider = 'youtube' THEN s.source_id ELSE NULL END AS source_id, "
     "s.provider AS source_provider, s.source_url, "
@@ -152,7 +152,6 @@ def _normalize_provider(
     source_provider: str | None,
     source_id: str | None,
     source_url: str | None,
-    input_path: str | None,
 ) -> str:
     if source_provider:
         provider = source_provider.strip().lower()
@@ -163,8 +162,6 @@ def _normalize_provider(
         return url_provider
     if source_id:
         return "youtube"
-    if input_path:
-        return "upload"
     return "upload"
 
 
@@ -173,14 +170,12 @@ def _normalize_job_source(
     source_provider: str | None,
     source_id: str | None,
     source_url: str | None,
-    input_path: str,
 ) -> tuple[str, str | None, str | None]:
     normalized_url = _canonical_http_url(_clean_text(source_url))
     provider = _normalize_provider(
         _clean_text(source_provider),
         _clean_text(source_id),
         normalized_url,
-        _clean_text(input_path),
     )
     normalized_source_id = _clean_text(source_id) if provider == "youtube" else None
     if provider == "youtube" and not normalized_source_id and normalized_url:
@@ -331,8 +326,6 @@ def _upsert_source_for_job(
 def create_job(
     db_path: Path,
     job_id: str,
-    input_path: str,
-    output_path: str,
     status: str = "queued",
     track_title: Optional[str] = None,
     track_artist: Optional[str] = None,
@@ -341,13 +334,13 @@ def create_job(
     source_url: Optional[str] = None,
     progress: int = 0,
     play_count: int = 0,
-) -> None:
+) -> str:
+    """Create a job and return its ownership stamp (created_at)."""
     now = _utc_now()
     provider, normalized_source_id, normalized_source_url = _normalize_job_source(
         source_provider=source_provider,
         source_id=source_id,
         source_url=source_url,
-        input_path=input_path,
     )
     with _connect(db_path) as conn:
         source_ref = _upsert_source_for_job(
@@ -362,17 +355,15 @@ def create_job(
         conn.execute(
             """
             INSERT INTO jobs (
-                id, source_ref, status, input_path, output_path,
+                id, source_ref, status,
                 error, progress, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, NULL, ?, ?, ?)
             """,
             (
                 job_id,
                 source_ref,
                 status,
-                input_path,
-                output_path,
                 _clamp_progress(progress),
                 now,
                 now,
@@ -389,6 +380,106 @@ def create_job(
                 (max(0, int(play_count)), now, source_ref),
             )
         conn.commit()
+    return now
+
+
+def get_notify_state(db_path: Path, key: str) -> Optional[str]:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM notify_state WHERE key = ?", (key,)).fetchone()
+    return str(row[0]) if row else None
+
+
+def claim_notify_state(db_path: Path, key: str, expected: Optional[str], value: str) -> bool:
+    """Set the key to value only if it still holds expected; True when this caller won.
+
+    Lets concurrent workers agree on which one sends a notification.
+    """
+    with _connect(db_path) as conn:
+        if expected is None:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO notify_state (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE notify_state SET value = ? WHERE key = ? AND value = ?",
+                (value, key, expected),
+            )
+        conn.commit()
+    return int(cur.rowcount or 0) > 0
+
+
+def set_notify_state(db_path: Path, key: str, value: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO notify_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+
+def first_youtube_success_after(db_path: Path, after_iso: str, through_iso: str) -> Optional[str]:
+    """Earliest completion in (after, through] of a YouTube job also requested after `after`.
+
+    Requiring the request to be newer leaves out re-analysis of audio already on disk.
+    """
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT MIN(j.updated_at)
+            FROM jobs j
+            JOIN sources s ON s.id = j.source_ref
+            WHERE s.provider = 'youtube'
+              AND j.status = 'complete'
+              AND j.created_at > ?
+              AND j.updated_at > ?
+              AND j.updated_at <= ?
+            """,
+            (after_iso, after_iso, through_iso),
+        ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def youtube_jobs_finished_between(
+    db_path: Path, after_iso: str, through_iso: str
+) -> list[tuple[str, str, Optional[str]]]:
+    """(updated_at, status, error) of YouTube jobs that completed or failed in (after, through].
+
+    Retried jobs reuse their row, so a failure the user retried to success no
+    longer appears as one.
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT j.updated_at, j.status, j.error
+            FROM jobs j
+            JOIN sources s ON s.id = j.source_ref
+            WHERE s.provider = 'youtube'
+              AND j.status IN ('complete', 'failed')
+              AND j.updated_at > ?
+              AND j.updated_at <= ?
+            ORDER BY j.updated_at
+            """,
+            (after_iso, through_iso),
+        ).fetchall()
+    return [(str(row[0]), str(row[1]), row[2]) for row in rows]
+
+
+def latest_youtube_success(db_path: Path, through_iso: str) -> Optional[str]:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(j.updated_at)
+            FROM jobs j
+            JOIN sources s ON s.id = j.source_ref
+            WHERE s.provider = 'youtube'
+              AND j.status = 'complete'
+              AND j.updated_at <= ?
+            """,
+            (through_iso,),
+        ).fetchone()
+    return str(row[0]) if row and row[0] else None
 
 
 def get_job(db_path: Path, job_id: str) -> Optional[Job]:
@@ -400,14 +491,112 @@ def get_job(db_path: Path, job_id: str) -> Optional[Job]:
     return _job_from_row(row)
 
 
-def set_job_status(db_path: Path, job_id: str, status: str, error: Optional[str] = None) -> None:
+def set_job_status(
+    db_path: Path,
+    job_id: str,
+    status: str,
+    error: Optional[str] = None,
+    owner: Optional[str] = None,
+) -> bool:
+    """Set status, optionally only while `owner` still holds the job.
+
+    See set_job_progress for what `owner` means.
+    """
+    sql = "UPDATE jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?"
+    params: list[object] = [status, error, _utc_now(), job_id]
+    if owner is not None:
+        sql += " AND created_at = ?"
+        params.append(owner)
+    with _connect(db_path) as conn:
+        # Stamp under the write lock so concurrent writers commit in stamp order.
+        conn.execute(BEGIN_IMMEDIATE)
+        cur = conn.execute(sql, params)
+        conn.commit()
+    return int(cur.rowcount or 0) == 1
+
+
+def restart_failed_job(db_path: Path, job_id: str, expected_updated_at: str) -> Optional[str]:
+    """Restart a failed job and return its new ownership stamp, or None if lost."""
     now = _utc_now()
     with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?",
-            (status, error, now, job_id),
+        cur = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'downloading',
+                error = NULL,
+                progress = 0,
+                created_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'failed'
+              AND updated_at = ?
+            """,
+            (now, now, job_id, expected_updated_at),
         )
         conn.commit()
+    return now if int(cur.rowcount or 0) == 1 else None
+
+
+def restart_stalled_download(
+    db_path: Path,
+    job_id: str,
+    expected_updated_at: str,
+) -> Optional[str]:
+    """Restart a stalled download in place and return the new ownership stamp.
+
+    Keeps the job and source rows so links, favorites and play history survive.
+    Returns None when the job moved on since it was observed, leaving the other
+    writer in charge.
+    """
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        conn.execute(BEGIN_IMMEDIATE)
+        cur = conn.execute(
+            """
+            UPDATE jobs
+            SET error = NULL,
+                progress = 0,
+                created_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'downloading'
+              AND updated_at = ?
+            """,
+            (now, now, job_id, expected_updated_at),
+        )
+        conn.commit()
+    return now if int(cur.rowcount or 0) == 1 else None
+
+
+def claim_job_for_download(
+    db_path: Path,
+    job_id: str,
+    expected_updated_at: str,
+) -> Optional[str]:
+    """Take exclusive ownership of an idle job for a fresh download attempt.
+
+    Returns the new ownership stamp, or None when the job is already active or
+    another caller claimed it first.
+    """
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        conn.execute(BEGIN_IMMEDIATE)
+        cur = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'downloading',
+                error = NULL,
+                progress = 0,
+                created_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND updated_at = ?
+              AND status NOT IN ('downloading', 'queued', 'processing')
+            """,
+            (now, now, job_id, expected_updated_at),
+        )
+        conn.commit()
+    return now if int(cur.rowcount or 0) == 1 else None
 
 
 def recover_stalled_processing_jobs(db_path: Path) -> int:
@@ -424,9 +613,10 @@ def recover_stalled_processing_jobs(db_path: Path) -> int:
 
 def delete_job(db_path: Path, job_id: str) -> None:
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT source_ref FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute(SELECT_JOB_SOURCE_REF_SQL, (job_id,)).fetchone()
         source_ref = row[0] if row else None
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn.execute("DELETE FROM reported_tracks WHERE job_id = ?", (job_id,))
         if source_ref:
             remaining = conn.execute(
                 "SELECT COUNT(*) FROM jobs WHERE source_ref = ?",
@@ -447,7 +637,7 @@ def _claim_next_job_once(db_path: Path) -> Optional[Job]:
         conn.isolation_level = None
         transaction_started = False
         try:
-            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(BEGIN_IMMEDIATE)
             transaction_started = True
             row = conn.execute(
                 "SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at, id LIMIT 1"
@@ -551,7 +741,7 @@ def get_job_by_track(db_path: Path, title: str, artist: str) -> Optional[Job]:
 def increment_job_plays(db_path: Path, job_id: str) -> Optional[int]:
     now = _utc_now()
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT source_ref FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute(SELECT_JOB_SOURCE_REF_SQL, (job_id,)).fetchone()
         if not row:
             return None
         source_ref = row[0]
@@ -575,21 +765,21 @@ def increment_job_plays(db_path: Path, job_id: str) -> Optional[int]:
 
 
 def set_job_play_count(db_path: Path, job_id: str, play_count: int) -> Optional[int]:
-    now = _utc_now()
     clamped = max(0, int(play_count))
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT source_ref FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute(SELECT_JOB_SOURCE_REF_SQL, (job_id,)).fetchone()
         if not row:
             return None
         source_ref = row[0]
+        # Admin override of the counter is not a listen, so leave updated_at
+        # untouched: it tracks last play for storage-cleanup eligibility.
         conn.execute(
             """
             UPDATE sources
-            SET play_count = ?,
-                updated_at = ?
+            SET play_count = ?
             WHERE id = ?
             """,
-            (clamped, now, source_ref),
+            (clamped, source_ref),
         )
         count_row = conn.execute(
             "SELECT play_count FROM sources WHERE id = ?",
@@ -601,30 +791,35 @@ def set_job_play_count(db_path: Path, job_id: str, play_count: int) -> Optional[
     return int(count_row[0])
 
 
-def set_job_progress(db_path: Path, job_id: str, progress: int) -> None:
+def set_job_progress(
+    db_path: Path,
+    job_id: str,
+    progress: int,
+    owner: Optional[str] = None,
+) -> bool:
+    """Set progress, optionally only while `owner` still holds the job.
+
+    `owner` is a job's created_at stamp, which changes only when the job is
+    created or restarted. A worker that passes the stamp it started with cannot
+    write to a job that has since been restarted under a new attempt.
+    """
     clamped = _clamp_progress(progress)
+    sql = "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?"
+    params: list[object] = [clamped, _utc_now(), job_id]
+    if owner is not None:
+        sql += " AND created_at = ?"
+        params.append(owner)
     with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?",
-            (clamped, _utc_now(), job_id),
-        )
+        cur = conn.execute(sql, params)
         conn.commit()
-
-
-def update_job_input_path(db_path: Path, job_id: str, input_path: str) -> None:
-    with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jobs SET input_path = ?, updated_at = ? WHERE id = ?",
-            (input_path, _utc_now(), job_id),
-        )
-        conn.commit()
+    return int(cur.rowcount or 0) == 1
 
 
 def update_job_track_metadata(
     db_path: Path, job_id: str, track_title: Optional[str], track_artist: Optional[str]
 ) -> None:
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT source_ref FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute(SELECT_JOB_SOURCE_REF_SQL, (job_id,)).fetchone()
         if not row:
             return
         source_ref = row[0]
@@ -655,10 +850,8 @@ def _exclude_top_source_refs(conn: sqlite3.Connection, exclude_top_n: int) -> li
 def get_top_tracks(
     db_path: Path,
     limit: int = 10,
-    offset: int = 0,
     touched_within_days: int | None = None,
     exclude_top_n: int | None = None,
-    sort_by: str | None = None,
     min_play_count: int | None = None,
 ) -> list[dict]:
     cutoff: str | None = None
@@ -721,27 +914,19 @@ def get_top_tracks(
                   """
                 + activity_expr
                 + """ DESC
-                LIMIT ? OFFSET ?
+                LIMIT ?
                 """
             )
         else:
-            if sort_by == "newest":
-                query += f"\n            ORDER BY s.created_at DESC\n            LIMIT ? OFFSET ?"
-            elif sort_by == "title":
-                query += f"\n            ORDER BY s.track_title COLLATE NOCASE ASC, s.play_count DESC\n            LIMIT ? OFFSET ?"
-            elif sort_by == "artist":
-                query += f"\n            ORDER BY s.track_artist COLLATE NOCASE ASC, s.track_title COLLATE NOCASE ASC\n            LIMIT ? OFFSET ?"
-            else:
-                query += (
-                    """
-                    ORDER BY s.play_count DESC, """
-                    + activity_expr
-                    + """ DESC
-                    LIMIT ? OFFSET ?
-                    """
-                )
+            query += (
+                """
+                ORDER BY s.play_count DESC, """
+                + activity_expr
+                + """ DESC
+                LIMIT ?
+                """
+            )
         params.append(limit)
-        params.append(offset)
 
         rows = conn.execute(query, tuple(params)).fetchall()
     return [_top_track_from_row(row) for row in rows]
@@ -778,3 +963,44 @@ def get_recent_tracks(db_path: Path, limit: int = 10) -> list[dict]:
             (limit,),
         ).fetchall()
     return [_top_track_from_row(row) for row in rows]
+
+
+def report_track(db_path: Path, job_id: str, reason: str) -> None:
+    # Keeps the first report per job; unknown jobs are ignored.
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO reported_tracks (job_id, reason, created_at) "
+            "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ?)",
+            (job_id, reason, _utc_now(), job_id),
+        )
+        conn.commit()
+
+
+def get_reported_tracks(db_path: Path) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT r.job_id, s.track_title, s.track_artist, s.provider, r.reason, r.created_at
+            FROM reported_tracks r
+            JOIN jobs j ON j.id = r.job_id
+            JOIN sources s ON s.id = j.source_ref
+            ORDER BY r.created_at DESC, r.job_id
+            """
+        ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "title": row[1],
+            "artist": row[2],
+            "source_provider": row[3],
+            "reason": row[4],
+            "reported_at": row[5],
+        }
+        for row in rows
+    ]
+
+
+def delete_track_report(db_path: Path, job_id: str) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM reported_tracks WHERE job_id = ?", (job_id,))
+        conn.commit()

@@ -1,5 +1,5 @@
 // Adapted from web/src/app/browser-analysis.ts on 2026-02-11, reason: move analysis pipeline into a dedicated worker.
-import type { TrackMeta } from "@/shared/jukebox/engine/types";
+import type { TrackMeta } from "@forever-jukebox/shared/types";
 import {
   computeSections,
   computeTempo,
@@ -83,6 +83,13 @@ function postProgress(stage: ProgressStage, progress: number, message?: string) 
   self.postMessage(payload);
 }
 
+function madmomProgressStageName(stage: number) {
+  if (stage === 0) {
+    return "features";
+  }
+  return stage === 1 ? "inference" : "decode";
+}
+
 function formatNestedError(context: string, err: unknown) {
   const message = err instanceof Error
     ? err.message || err.toString()
@@ -163,13 +170,7 @@ async function runMadmomAnalysis(
       }
       if (data.type === "progress") {
         if (onProgress) {
-          const stageName =
-            data.stage === 0
-              ? "features"
-              : data.stage === 1
-                ? "inference"
-                : "decode";
-          onProgress(stageName, data.progress);
+          onProgress(madmomProgressStageName(data.stage), data.progress);
         }
         return;
       }

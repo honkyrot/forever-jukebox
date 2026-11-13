@@ -1,0 +1,83 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetAnalyticsForTests,
+  trackEvent,
+  trackModeEnabled,
+  trackPageView,
+  trackPlay,
+} from "./analytics";
+
+describe("analytics", () => {
+  const gtag = vi.fn();
+
+  beforeEach(() => {
+    window.gtag = gtag;
+    resetAnalyticsForTests();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    delete window.gtag;
+  });
+
+  it("is a no-op when gtag is absent", () => {
+    delete window.gtag;
+    expect(() => {
+      trackEvent("share", { track_id: "x" });
+      trackPageView("/faq");
+      trackPlay("jukebox", "x", "Song");
+    }).not.toThrow();
+    expect(gtag).not.toHaveBeenCalled();
+  });
+
+  it("forwards events with params", () => {
+    trackEvent("share", { track_id: "abc" });
+    expect(gtag).toHaveBeenCalledWith("event", "share", { track_id: "abc" });
+  });
+
+  it("reports a mode only when it turns on", () => {
+    trackModeEnabled("branch_stats_mode", false, true);
+    trackModeEnabled("branch_stats_mode", true, true);
+    trackModeEnabled("branch_stats_mode", true, false);
+    trackModeEnabled("bring_it_home_mode", false, true, { ui_source: "hotkey" });
+    expect(gtag.mock.calls).toEqual([
+      ["event", "branch_stats_mode", {}],
+      ["event", "bring_it_home_mode", { ui_source: "hotkey" }],
+    ]);
+  });
+
+  it("forwards numeric params unquoted for custom metrics", () => {
+    trackEvent("audio_mode", { audio_mode: "nightcore", audio_intensity: 120 });
+    expect(gtag).toHaveBeenCalledWith("event", "audio_mode", {
+      audio_mode: "nightcore",
+      audio_intensity: 120,
+    });
+  });
+
+  it("suppresses a page_view for the landing path but fires on navigation", () => {
+    trackPageView(window.location.pathname);
+    expect(gtag).not.toHaveBeenCalled();
+
+    trackPageView("/faq");
+    expect(gtag).toHaveBeenCalledTimes(1);
+    expect(gtag).toHaveBeenCalledWith(
+      "event",
+      "page_view",
+      expect.objectContaining({ page_path: "/faq" }),
+    );
+
+    trackPageView("/faq");
+    expect(gtag).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes plays per track and mode", () => {
+    trackPlay("jukebox", "a", "Song A");
+    trackPlay("jukebox", "a", "Song A");
+    expect(gtag).toHaveBeenCalledTimes(1);
+
+    trackPlay("autocanonizer", "a", "Song A");
+    trackPlay("jukebox", "b", "Song B");
+    expect(gtag).toHaveBeenCalledTimes(3);
+  });
+});
