@@ -11,30 +11,34 @@ export function Modal({
   open,
   onClose,
   panelClassName,
+  inline = false,
   role = "dialog",
-  ariaModal = true,
+  ariaModal = !inline,
   children,
 }: {
   id?: string;
   open: boolean;
   onClose: () => void;
   panelClassName?: string;
+  inline?: boolean;
   role?: string;
   ariaModal?: boolean;
   children: ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useModalKeyboard(rootRef, open, onClose);
+  useModalKeyboard(rootRef, open && !inline, onClose);
+
+  const baseClass = inline ? "modal inline-modal" : "modal";
 
   return (
     <div
       id={id}
       ref={rootRef}
-      className={open ? "modal open" : "modal"}
+      className={open ? `${baseClass} open` : baseClass}
       role={role}
       aria-modal={ariaModal}
       onClick={(event) => {
-        if (event.target === event.currentTarget) {
+        if (!inline && event.target === event.currentTarget) {
           onClose();
         }
       }}

@@ -21,10 +21,8 @@ import { SearchPanel } from "./SearchPanel";
 import { SettingsModal } from "./SettingsModal";
 import { Toast } from "./Toast";
 import { TopTracksPanel } from "./TopTracksPanel";
-import { InfoModal } from "./listen/InfoModal";
 import { ListenPanel } from "./listen/ListenPanel";
 import { PlaylistModal } from "./listen/PlaylistModal";
-import { TuningModal } from "./listen/TuningModal";
 
 // Derives activeTab from the URL on every location change and runs the
 // route handler (mode-from-URL, track loading, FAQ subtab sync) on
@@ -148,10 +146,8 @@ export function AppRoot() {
       {activeTab === "faq" ? <FaqPanel /> : null}
       <Footer />
       <Toast />
-      <TuningModal />
       <SettingsModal />
       <FeedbackModal />
-      <InfoModal />
       <PlaylistModal />
     </>
   );

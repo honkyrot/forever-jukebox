@@ -781,6 +781,79 @@ button.is-loading::after {
   display: flex;
 }
 
+.modal.inline-modal {
+  position: relative;
+  inset: auto;
+  background: transparent;
+  z-index: 1;
+  margin-top: 16px;
+}
+
+.modal.inline-modal .modal-panel {
+  width: min(900px, 100%);
+  max-height: none;
+}
+
+.tuning-section-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.tuning-sliders-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tuning-checkboxes-col {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tuning-reset-row {
+  margin-top: 4px;
+}
+
+.tuning-visuals-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tuning-visuals-section h3,
+#tuning-panel-extras h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.visual-mode-group {
+  border: 1px solid var(--border-control);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface-control);
+}
+
+.visual-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.visual-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 720px) {
+  .tuning-section-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .modal-panel {
   width: min(520px, 90vw);
   background: var(--surface-panel);
@@ -2791,7 +2864,25 @@ body.playlist-add-enabled .favorite-row:focus-within .playlist-add-button {
 }
 
 .pulse {
-  animation: none;
+  animation: pulse-highlight 0.5s ease-out;
+}
+
+@keyframes pulse-highlight {
+  0% {
+    box-shadow: 0 -1px 0px rgb(from var(--beat-highlight) r g b / 1);
+  }
+  100% {
+    box-shadow: 0 -1px 0px rgb(from var(--beat-highlight) r g b / 0);
+  }
+}
+
+.is-crossed {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.audio-mode-group:has(input[type="radio"]:checked:not([value="off"])) {
+  border-color: var(--accent);
 }
 
 .status-row {
@@ -2819,6 +2910,20 @@ body.playlist-add-enabled .favorite-row:focus-within .playlist-add-button {
 
 .status-retry-button:hover {
   text-decoration: underline;
+}
+
+.all-time-play-count {
+  margin-left: auto;
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.all-time-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
 }
 
 @keyframes spin {

@@ -51,6 +51,9 @@ export function updateTrackInfo(context: AppContext) {
 
 // React renders this pulse marker onto #viz-stats.
 export function pulseVizStats() {
+  if (!useAppStore.getState().bpmBarEnabled) {
+    return;
+  }
   useAppStore.setState({
     vizStatsPulseId: useAppStore.getState().vizStatsPulseId + 1,
   });
@@ -80,7 +83,8 @@ export function syncVolumeUI(context: AppContext) {
 // overlay. Centralised so the pct→fraction conversion can't drift — a missing
 // /100 here ships audio 100x too loud.
 export function setMasterVolume(context: AppContext, volumePct: number) {
-  const volume = volumePct / 100;
+  const linear = Math.max(0, Math.min(1, volumePct / 100));
+  const volume = Math.pow(linear, 1.5);
   context.player.setVolume(volume);
   context.autocanonizer?.setVolume(volume);
   context.wubmachine?.setVolume(volume);
@@ -97,9 +101,10 @@ export function setAutocanonizerStreamPans(
 
 function openTuningTab(context: AppContext, tab: "tuning" | "extras") {
   syncVolumeUI(context);
-  const hasExtrasTab = useAppStore.getState().playMode === "jukebox";
+  const state = useAppStore.getState();
+  const hasExtrasTab = state.playMode === "jukebox";
   useAppStore.setState({
-    tuningModalOpen: true,
+    tuningModalOpen: !state.tuningModalOpen,
     tuningModalTab: tab === "extras" && hasExtrasTab ? "extras" : "tuning",
   });
 }
@@ -118,7 +123,7 @@ export function closeTuning() {
 
 export function openInfo(context: AppContext) {
   updateTrackInfo(context);
-  useAppStore.setState({ infoModalOpen: true });
+  useAppStore.setState((state) => ({ infoModalOpen: !state.infoModalOpen }));
 }
 
 export function closeInfo() {

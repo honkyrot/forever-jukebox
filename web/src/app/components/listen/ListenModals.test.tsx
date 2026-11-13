@@ -101,14 +101,14 @@ afterEach(() => {
 });
 
 describe("TuningModal", () => {
-  it("snapshots the form on open and applies it", async () => {
+  it("snapshots the form on open and applies changes immediately", async () => {
     render(<TuningModal />);
     act(() => {
       useAppStore.setState({ tuningModalOpen: true });
     });
     expect(getTuningFormValues).toHaveBeenCalled();
     expect(document.getElementById("tuning-modal")?.className).toBe(
-      "modal open",
+      "modal inline-modal open",
     );
     expect(document.getElementById("threshold-val")?.textContent).toBe("45");
     expect(document.getElementById("computed-threshold")?.textContent).toBe(
@@ -118,10 +118,11 @@ describe("TuningModal", () => {
       "Any distance",
     );
 
-    await userEvent.click(document.getElementById("tuning-apply")!);
+    const slider = document.getElementById("threshold") as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: "50" } });
     expect(applyTuningChanges).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ threshold: 45, minProbPct: 18 }),
+      expect.objectContaining({ threshold: 50, minProbPct: 18 }),
     );
     // apply returns updated values which re-render the form
     expect(document.getElementById("computed-threshold")?.textContent).toBe(
@@ -141,14 +142,13 @@ describe("TuningModal", () => {
     expect(document.getElementById("min-jump-distance-val")?.textContent).toBe(
       ">20% of track",
     );
-    await userEvent.click(document.getElementById("tuning-apply")!);
     expect(applyTuningChanges).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ minLongBranchPercent: 20 }),
     );
   });
 
-  it("switches header and panels between tuning and extras", async () => {
+  it("shows tuning, visuals, and extras together in jukebox mode", () => {
     render(<TuningModal />);
     act(() => {
       useAppStore.setState({ tuningModalOpen: true });
@@ -160,52 +160,39 @@ describe("TuningModal", () => {
       document.getElementById("tuning-panel-extras")?.classList.contains(
         "hidden",
       ),
-    ).toBe(true);
-    await userEvent.click(document.getElementById("tuning-tab-toggle")!);
-    expect(document.getElementById("tuning-title-text")?.textContent).toBe(
-      "Extras",
-    );
-    expect(
-      document.getElementById("tuning-panel-tuning")?.classList.contains(
-        "hidden",
-      ),
-    ).toBe(true);
-    expect(
-      document
-        .getElementById("tuning-title")
-        ?.classList.contains("is-extras-active"),
-    ).toBe(true);
+    ).toBe(false);
+    expect(document.getElementById("tuning-panel-visuals")).not.toBeNull();
   });
 
-  it("hides the extras toggle and forces the tuning tab outside jukebox mode", () => {
+  it("hides the extras section outside jukebox mode", () => {
     act(() => {
       useAppStore.setState({
         tuningModalOpen: true,
-        tuningModalTab: "extras",
         playMode: "autocanonizer",
       });
     });
     render(<TuningModal />);
     expect(
-      document.getElementById("tuning-tab-toggle")?.classList.contains("hidden"),
+      document.getElementById("tuning-panel-extras")?.classList.contains(
+        "hidden",
+      ),
     ).toBe(true);
     expect(document.getElementById("tuning-title-text")?.textContent).toBe(
       "Tuning",
     );
   });
 
-  it("applies extras and closes", async () => {
+  it("applies extras immediately without closing the panel", async () => {
     render(<TuningModal />);
     act(() => {
-      useAppStore.setState({ tuningModalOpen: true, tuningModalTab: "extras" });
+      useAppStore.setState({ tuningModalOpen: true });
     });
     await userEvent.click(screen.getByLabelText("Nightcore"));
-    await userEvent.click(document.getElementById("tuning-apply")!);
     expect(applyExtrasChanges).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ audioMode: "nightcore" }),
     );
-    expect(useAppStore.getState().tuningModalOpen).toBe(false);
+    expect(useAppStore.getState().tuningModalOpen).toBe(true);
   });
 
   it("shows the intensity slider only for modes that support it", async () => {
@@ -257,14 +244,13 @@ describe("TuningModal", () => {
       "audio-intensity",
     ) as HTMLInputElement;
     fireEvent.change(slider, { target: { value: "130" } });
-    await userEvent.click(document.getElementById("tuning-apply")!);
     expect(applyExtrasChanges).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ audioMode: "nightcore", audioIntensity: 130 }),
     );
   });
 
-  it("resets tuning and closes", async () => {
+  it("resets tuning and extras while keeping the panel open", async () => {
     (hasNonDefaultTuning as Mock).mockReturnValue(true);
     render(<TuningModal />);
     act(() => {
@@ -272,16 +258,14 @@ describe("TuningModal", () => {
     });
     await userEvent.click(document.getElementById("tuning-reset")!);
     expect(resetTuningDefaults).toHaveBeenCalled();
-    expect(useAppStore.getState().tuningModalOpen).toBe(false);
+    expect(useAppStore.getState().tuningModalOpen).toBe(true);
   });
 
-  it("hides reset on both tabs when nothing differs from defaults", async () => {
+  it("hides reset when nothing differs from defaults", () => {
     render(<TuningModal />);
     act(() => {
       useAppStore.setState({ tuningModalOpen: true });
     });
-    expect(document.getElementById("tuning-reset")).toBeNull();
-    await userEvent.click(document.getElementById("tuning-tab-toggle")!);
     expect(document.getElementById("tuning-reset")).toBeNull();
   });
 

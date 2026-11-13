@@ -49,7 +49,13 @@ import { selectTrack } from "../track-select";
 import i18n from "../i18n";
 import { useTranslation } from "react-i18next";
 
-type TopSongsTabId = "top" | "trending" | "recent" | "reported" | "favorites";
+type TopSongsTabId =
+  | "top"
+  | "trending"
+  | "all-time"
+  | "recent"
+  | "reported"
+  | "favorites";
 
 const LIST_CONFIG: Record<
   TopSongsListTabId,
@@ -111,6 +117,8 @@ function topSongsTitle(subtab: TopSongsTabId) {
       return i18n.t("topTracks.top25");
     case "trending":
       return i18n.t("topTracks.trending");
+    case "all-time":
+      return "All Tracks";
     case "recent":
       return i18n.t("topTracks.recent");
     case "reported":
@@ -234,6 +242,172 @@ function SongList({
         );
       })}
     </ol>
+  );
+}
+
+const ALL_TIME_PAGE_LIMIT = 50;
+
+function AllTimeList({
+  active,
+  sortBy,
+  reloadToken,
+}: {
+  active: boolean;
+  sortBy: string;
+  reloadToken: number;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<TopSongsItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+  const loadedKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const key = `${sortBy}:${reloadToken}`;
+    if (loadedKeyRef.current === key) {
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setErrorText(null);
+    fetchTopSongs(ALL_TIME_PAGE_LIMIT, sortBy || undefined, 0)
+      .then((fetched) => {
+        if (cancelled) {
+          return;
+        }
+        loadedKeyRef.current = key;
+        setItems(fetched);
+        setHasMore(fetched.length >= ALL_TIME_PAGE_LIMIT);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setErrorText(
+          i18n.t("topTracks.unavailable", {
+            section: "All tracks",
+            error: formatErrorForDisplay(err),
+          }),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, sortBy, reloadToken]);
+
+  const handleLoadMore = () => {
+    if (loadingMore) {
+      return;
+    }
+    setLoadingMore(true);
+    fetchTopSongs(ALL_TIME_PAGE_LIMIT, sortBy || undefined, items.length)
+      .then((fetched) => {
+        setItems((prev) => [...prev, ...fetched]);
+        setHasMore(fetched.length >= ALL_TIME_PAGE_LIMIT);
+      })
+      .catch((err) => {
+        showToast(formatErrorForDisplay(err));
+      })
+      .finally(() => {
+        setLoadingMore(false);
+      });
+  };
+
+  if (!active) {
+    return null;
+  }
+  if (loading) {
+    return <ol className="top-list" id="all-time-songs">{t("topTracks.loadingTop")}</ol>;
+  }
+  if (errorText) {
+    return <ol className="top-list" id="all-time-songs">{errorText}</ol>;
+  }
+  if (items.length === 0) {
+    return <ol className="top-list" id="all-time-songs">{t("topTracks.emptyTop")}</ol>;
+  }
+  return (
+    <>
+      <ol className="top-list" id="all-time-songs">
+        {items.map((item) => {
+          const title =
+            typeof item.title === "string" ? item.title : t("common.untitled");
+          const artist = typeof item.artist === "string" ? item.artist : "";
+          const jobId = typeof item.id === "string" ? item.id : "";
+          const sourceProvider =
+            typeof item.source_provider === "string" ? item.source_provider : "";
+          const sourceType = normalizePlaylistSourceType(sourceProvider);
+          const listenId = jobId;
+          const label = artist ? `${title} — ${artist}` : title;
+          const key = topSongKey(item, label);
+          const playCount =
+            typeof item.play_count === "number" ? item.play_count : null;
+          if (!listenId) {
+            return <li key={key}>{label}</li>;
+          }
+          const playlistTrack: PlaylistTrack = {
+            id: jobId || listenId,
+            sourceType,
+            title,
+            artist,
+            duration: null,
+          };
+          return (
+            <li key={key} className="top-list-item">
+              <a
+                href={`/listen/${encodeURIComponent(listenId)}`}
+                data-track-id={listenId}
+                data-playlist-id={playlistTrack.id}
+                data-source-type={sourceType}
+                data-track-title={title}
+                data-track-artist={artist}
+                onClick={(event) => {
+                  event.preventDefault();
+                  trackEvent("select_track", {
+                    ui_source: "all-time",
+                    track_id: listenId,
+                    track_title: title,
+                  });
+                  selectTrack(listenId, playlistTrack);
+                }}
+              >
+                {label}
+              </a>
+              {playCount !== null ? (
+                <span className="all-time-play-count">
+                  {playCount} {playCount === 1 ? "play" : "plays"}
+                </span>
+              ) : null}
+              <PlaylistAddButton
+                track={playlistTrack}
+                onAdd={(added) => addToPlaylist(added, "all-time")}
+              />
+            </li>
+          );
+        })}
+      </ol>
+      {hasMore ? (
+        <div id="all-time-load-more-container" className="all-time-load-more">
+          <button
+            type="button"
+            id="all-time-load-more"
+            disabled={loadingMore}
+            onClick={handleLoadMore}
+          >
+            {loadingMore ? "Loading..." : "Load More"}
+          </button>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -883,6 +1057,8 @@ export function TopTracksPanel() {
     useAppStore((s) => s.appConfig?.max_favorites) ?? maxFavorites();
   const lists = useAppStore((s) => s.topSongsLists);
   const [query, setQuery] = useState("");
+  const [allTimeSort, setAllTimeSort] = useState("");
+  const [allTimeReloadToken, setAllTimeReloadToken] = useState(0);
   const [reportedReloadToken, setReportedReloadToken] = useState(0);
   const adminMode = isAdminMode();
   const loadList = useCallback(
@@ -929,7 +1105,11 @@ export function TopTracksPanel() {
   );
 
   useEffect(() => {
-    if (subtab !== "favorites" && subtab !== "reported") {
+    if (
+      subtab !== "favorites" &&
+      subtab !== "reported" &&
+      subtab !== "all-time"
+    ) {
       loadList(subtab).catch((err) => {
         console.warn(`Top tracks load failed: ${String(err)}`);
       });
@@ -966,6 +1146,7 @@ export function TopTracksPanel() {
       <div className="subtabs" id="top-subtabs">
         {subtabButton("top", t("topTracks.allTime"))}
         {subtabButton("trending", t("topTracks.trending"))}
+        {subtabButton("all-time", "All")}
         {subtabButton("recent", t("topTracks.recents"))}
         <span className="subtab-spacer" aria-hidden="true"></span>
         {adminMode ? (
@@ -1002,6 +1183,8 @@ export function TopTracksPanel() {
           onClick={() => {
             if (subtab === "reported") {
               setReportedReloadToken((token) => token + 1);
+            } else if (subtab === "all-time") {
+              setAllTimeReloadToken((token) => token + 1);
             } else if (subtab !== "favorites") {
               loadList(subtab, true).catch((err) => {
                 console.warn(`Top tracks refresh failed: ${String(err)}`);
@@ -1019,6 +1202,20 @@ export function TopTracksPanel() {
         <FavoritesSyncControls
           visible={subtab === "favorites" && allowSync}
         />
+        {subtab === "all-time" ? (
+          <select
+            id="all-time-sort"
+            className="viz-select"
+            aria-label="Sort all tracks"
+            value={allTimeSort}
+            onChange={(event) => setAllTimeSort(event.target.value)}
+          >
+            <option value="">Most Played</option>
+            <option value="newest">Newest</option>
+            <option value="title">Title (A-Z)</option>
+            <option value="artist">Artist (A-Z)</option>
+          </select>
+        ) : null}
         <div
           className={
             subtab === "favorites"
@@ -1044,6 +1241,11 @@ export function TopTracksPanel() {
         tabId="trending"
         state={lists.trending}
         hidden={subtab !== "trending"}
+      />
+      <AllTimeList
+        active={subtab === "all-time"}
+        sortBy={allTimeSort}
+        reloadToken={allTimeReloadToken}
       />
       <SongList
         tabId="recent"

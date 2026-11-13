@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PlayMode } from "../../context";
 import { attachViz, getAppContext } from "../../runtime";
 import { useAppStore } from "../../store";
@@ -29,6 +29,8 @@ export function VizContainer() {
   const loadingShown = useAppStore((s) => s.loadingShown);
   const playMode = useAppStore((s) => s.playMode);
   const vizStatsPulseId = useAppStore((s) => s.vizStatsPulseId);
+  const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
+  const vizStatsRef = useRef<HTMLDivElement | null>(null);
   const vizPanelRef = useRef<HTMLDivElement | null>(null);
   const vizLayerRef = useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = useRef<HTMLDivElement | null>(null);
@@ -86,6 +88,20 @@ export function VizContainer() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // Trigger the beat-pulse CSS animation without remounting #viz-stats.
+  useLayoutEffect(() => {
+    const el = vizStatsRef.current;
+    if (!el) {
+      return;
+    }
+    el.classList.remove("pulse");
+    if (!bpmBarEnabled || vizStatsPulseId <= 0) {
+      return;
+    }
+    void el.offsetWidth;
+    el.classList.add("pulse");
+  }, [vizStatsPulseId, bpmBarEnabled]);
+
   // Resize the active controller when the viz becomes visible.
   useEffect(() => {
     if (!visible) {
@@ -129,9 +145,9 @@ export function VizContainer() {
           ref={wubMachineLayerRef}
         ></div>
         <div
-          className={vizStatsPulseId > 0 ? "viz-bottom pulse" : "viz-bottom"}
+          className="viz-bottom"
           id="viz-stats"
-          key={vizStatsPulseId}
+          ref={vizStatsRef}
         >
           <div className="viz-bottom-left">
             <div className="viz-play-controls">

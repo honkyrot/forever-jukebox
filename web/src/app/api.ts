@@ -65,6 +65,7 @@ export type TopSongItem = {
   artist?: string;
   source_id?: string;
   source_provider?: string;
+  play_count?: number;
 };
 
 export type TrackReportReason = "wrong_track" | "bad_audio" | "other";
@@ -310,8 +311,19 @@ export async function searchYoutube(query: string, duration: number) {
   return Array.isArray(data?.items) ? (data.items as YoutubeSearchItem[]) : [];
 }
 
-export async function fetchTopSongs(limit: number) {
-  const data = await fetchJson(`/api/top?limit=${encodeURIComponent(limit)}`);
+export async function fetchTopSongs(
+  limit: number,
+  sortBy?: string,
+  offset = 0,
+) {
+  let url = `/api/top?limit=${encodeURIComponent(limit)}`;
+  if (offset > 0) {
+    url += `&offset=${encodeURIComponent(offset)}`;
+  }
+  if (sortBy) {
+    url += `&sort_by=${encodeURIComponent(sortBy)}`;
+  }
+  const data = await fetchJson(url);
   return Array.isArray(data?.items) ? (data.items as TopSongItem[]) : [];
 }
 

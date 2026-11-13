@@ -20,7 +20,7 @@ export type AppState = {
   activeTabId: TabId;
   activeVizIndex: number;
   playMode: PlayMode;
-  topSongsTab: "top" | "trending" | "recent" | "reported" | "favorites";
+  topSongsTab: "top" | "trending" | "all-time" | "recent" | "reported" | "favorites";
   searchTab: "search" | "upload";
   favorites: FavoriteTrack[];
   playlist: PlaylistState;

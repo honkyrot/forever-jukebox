@@ -850,8 +850,10 @@ def _exclude_top_source_refs(conn: sqlite3.Connection, exclude_top_n: int) -> li
 def get_top_tracks(
     db_path: Path,
     limit: int = 10,
+    offset: int = 0,
     touched_within_days: int | None = None,
     exclude_top_n: int | None = None,
+    sort_by: str | None = None,
     min_play_count: int | None = None,
 ) -> list[dict]:
     cutoff: str | None = None
@@ -914,19 +916,27 @@ def get_top_tracks(
                   """
                 + activity_expr
                 + """ DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """
             )
         else:
-            query += (
-                """
-                ORDER BY s.play_count DESC, """
-                + activity_expr
-                + """ DESC
-                LIMIT ?
-                """
-            )
+            if sort_by == "newest":
+                query += "\n            ORDER BY s.created_at DESC\n            LIMIT ? OFFSET ?"
+            elif sort_by == "title":
+                query += "\n            ORDER BY s.track_title COLLATE NOCASE ASC, s.play_count DESC\n            LIMIT ? OFFSET ?"
+            elif sort_by == "artist":
+                query += "\n            ORDER BY s.track_artist COLLATE NOCASE ASC, s.track_title COLLATE NOCASE ASC\n            LIMIT ? OFFSET ?"
+            else:
+                query += (
+                    """
+                    ORDER BY s.play_count DESC, """
+                    + activity_expr
+                    + """ DESC
+                    LIMIT ? OFFSET ?
+                    """
+                )
         params.append(limit)
+        params.append(offset)
 
         rows = conn.execute(query, tuple(params)).fetchall()
     return [_top_track_from_row(row) for row in rows]

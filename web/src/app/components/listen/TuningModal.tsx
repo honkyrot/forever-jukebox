@@ -1,6 +1,10 @@
 import { useLayoutEffect, useState } from "react";
 import { hasNonDefaultExtras } from "@forever-jukebox/shared";
 import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
+import type {
+  VisualEffectMode,
+  VisualPreferences,
+} from "@forever-jukebox/shared/viz/JukeboxViz";
 import {
   DEFAULT_AUDIO_MODE_INTENSITY,
   MAX_AUDIO_MODE_INTENSITY,
@@ -68,6 +72,17 @@ const AUDIO_MODE_OPTIONS: Array<{
   },
 ];
 
+const VISUAL_COLORING_OPTIONS: Array<{
+  id: string;
+  value: VisualEffectMode;
+  label: string;
+}> = [
+  { id: "visual-effect-default", value: "0", label: "Default" },
+  { id: "use-rgb-gradient", value: "1", label: "Rainbow Gradient" },
+  { id: "use-similarity-colors", value: "2", label: "Similarity Based" },
+  { id: "use-engine-colors", value: "3", label: "Engine Based" },
+];
+
 const MIN_JUMP_DISTANCE_OPTIONS = [0, 5, 10, 20, 30] as const;
 
 function formatMinJumpDistance(percent: number, t: TFunction) {
@@ -120,11 +135,10 @@ function RangeRow({
 export function TuningModal() {
   const { t } = useTranslation();
   const open = useAppStore((s) => s.tuningModalOpen);
-  const storedTab = useAppStore((s) => s.tuningModalTab);
   const playMode = useAppStore((s) => s.playMode);
+  const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
+  const visualPreferences = useAppStore((s) => s.visualPreferences);
   const hasExtrasTab = playMode === "jukebox";
-  const tab = hasExtrasTab ? storedTab : "tuning";
-  const tuningActive = tab === "tuning";
   const [form, setForm] = useState<TuningFormValues | null>(null);
   const [extras, setExtras] = useState<ExtrasFormValues | null>(null);
   const [extrasSnapshot, setExtrasSnapshot] = useState<ExtrasFormValues | null>(
@@ -135,9 +149,7 @@ export function TuningModal() {
   );
   const [tuningNonDefault, setTuningNonDefault] = useState(false);
 
-  // Snapshot engine config + extras state when the modal opens (the read
-  // half of the old syncTuningUI/syncExtrasUI). Layout effect so the open
-  // frame never paints the previous session's snapshot.
+  // Snapshot engine config + extras state when the panel opens.
   useLayoutEffect(() => {
     if (open) {
       const context = getAppContext();
@@ -153,76 +165,103 @@ export function TuningModal() {
 
   const close = () => useAppStore.setState({ tuningModalOpen: false });
 
-  const handleToggleTab = () => {
-    useAppStore.setState({
-      tuningModalTab: tab === "tuning" ? "extras" : "tuning",
-    });
-  };
-
-  const handleApply = () => {
-    if (tab === "extras") {
-      if (!extras) {
-        return;
-      }
-      applyExtrasAndSync(getAppContext(), extras);
-      close();
-      return;
-    }
-    if (!form) {
-      return;
-    }
-    setForm(applyTuningChanges(getAppContext(), form));
-  };
-
   const handleReset = () => {
-    if (tab === "extras") {
-      resetExtrasDefaults(getAppContext());
-      close();
-      return;
+    const context = getAppContext();
+    resetTuningDefaults(context);
+    if (hasExtrasTab) {
+      resetExtrasDefaults(context);
     }
-    resetTuningDefaults(getAppContext());
-    close();
+    const tuningValues = getTuningFormValues(context);
+    setForm(tuningValues);
+    setTuningSnapshot(tuningValues);
+    setTuningNonDefault(hasNonDefaultTuning(context));
+    const extrasValues = getExtrasFormValues();
+    setExtras(extrasValues);
+    setExtrasSnapshot(extrasValues);
   };
 
   // Anchor highlight is a sticky preference, so it never counts as a change to reset.
-  const showReset = tuningActive
-    ? tuningNonDefault ||
-      (tuningSnapshot !== null &&
-        form !== null &&
-        changedTuningControls(tuningSnapshot, form).some(
-          (control) => control !== "anchor_highlight",
-        ))
-    : (extrasSnapshot !== null && hasNonDefaultExtras(extrasSnapshot)) ||
-      (extras !== null && hasNonDefaultExtras(extras));
+  const showReset =
+    tuningNonDefault ||
+    (tuningSnapshot !== null &&
+      form !== null &&
+      changedTuningControls(tuningSnapshot, form).some(
+        (control) => control !== "anchor_highlight",
+      )) ||
+    (hasExtrasTab &&
+      ((extrasSnapshot !== null && hasNonDefaultExtras(extrasSnapshot)) ||
+        (extras !== null && hasNonDefaultExtras(extras))));
 
   const setFormField = <K extends keyof TuningFormValues>(
     key: K,
     value: TuningFormValues[K],
   ) => {
-    setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setForm((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = { ...prev, [key]: value };
+      const context = getAppContext();
+      const applied = applyTuningChanges(context, next);
+      setTuningNonDefault(hasNonDefaultTuning(context));
+      return applied;
+    });
   };
   const setExtrasField = <K extends keyof ExtrasFormValues>(
     key: K,
     value: ExtrasFormValues[K],
   ) => {
-    setExtras((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setExtras((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = { ...prev, [key]: value };
+      applyExtrasAndSync(getAppContext(), next);
+      return next;
+    });
   };
 
   // Picking a mode resets intensity to its canonical preset; reselecting the
-  // mode that was active when the modal opened restores its saved intensity.
+  // mode that was active when the panel opened restores its saved intensity.
   const selectAudioMode = (mode: JukeboxAudioMode) => {
-    setExtras((prev) =>
-      prev
-        ? {
-            ...prev,
-            audioMode: mode,
-            audioIntensity:
-              extrasSnapshot && mode === extrasSnapshot.audioMode
-                ? extrasSnapshot.audioIntensity
-                : DEFAULT_AUDIO_MODE_INTENSITY,
-          }
-        : prev,
-    );
+    setExtras((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next: ExtrasFormValues = {
+        ...prev,
+        audioMode: mode,
+        audioIntensity:
+          extrasSnapshot && mode === extrasSnapshot.audioMode
+            ? extrasSnapshot.audioIntensity
+            : DEFAULT_AUDIO_MODE_INTENSITY,
+      };
+      applyExtrasAndSync(getAppContext(), next);
+      return next;
+    });
+  };
+
+  const updateVisualPreferences = (patch: Partial<VisualPreferences>) => {
+    const next: VisualPreferences = {
+      ...visualPreferences,
+      ...patch,
+    };
+    if (patch.visualEffectMode !== undefined) {
+      localStorage.setItem("visualEffectMode", patch.visualEffectMode);
+    }
+    if (patch.useSquareBeats !== undefined) {
+      localStorage.setItem("useSquareBeats", String(patch.useSquareBeats));
+    }
+    if (patch.useAltSeekShape !== undefined) {
+      localStorage.setItem("useAltSeekShape", String(patch.useAltSeekShape));
+    }
+    useAppStore.setState({ visualPreferences: next });
+    getAppContext().jukebox?.setVisualPreferences(next);
+  };
+
+  const toggleBpmBar = (enabled: boolean) => {
+    localStorage.setItem("bpmBarEnabled", String(enabled));
+    useAppStore.setState({ bpmBarEnabled: enabled });
   };
 
   const audioModeOption = (option: (typeof AUDIO_MODE_OPTIONS)[number]) => (
@@ -248,41 +287,12 @@ export function TuningModal() {
   );
 
   return (
-    <Modal id="tuning-modal" open={open} onClose={close}>
+    <Modal id="tuning-modal" open={open} onClose={close} inline>
       <div className="modal-header">
         <div className="modal-header-main">
-          <h2
-            id="tuning-title"
-            className={tuningActive ? undefined : "is-extras-active"}
-          >
-            <span id="tuning-title-text">
-              {tuningActive ? t("tuning.title") : t("tuning.extras")}
-            </span>
+          <h2 id="tuning-title">
+            <span id="tuning-title-text">{t("tuning.title")}</span>
           </h2>
-          <div className="modal-tabs" aria-label={t("tuning.sections")}>
-            <button
-              id="tuning-tab-toggle"
-              className={hasExtrasTab ? "modal-tab" : "modal-tab hidden"}
-              type="button"
-              aria-label={
-                tuningActive
-                  ? t("tuning.switchToExtras")
-                  : t("tuning.switchToTuning")
-              }
-              onClick={handleToggleTab}
-            >
-              <span
-                id="tuning-tab-toggle-icon"
-                className="material-symbols-outlined modal-tab-icon"
-                aria-hidden="true"
-              >
-                {tuningActive ? "science" : "tune"}
-              </span>
-              <span id="tuning-tab-toggle-label">
-                {tuningActive ? t("tuning.extras") : t("tuning.title")}
-              </span>
-            </button>
-          </div>
         </div>
         <div className="modal-header-actions">
           <button
@@ -302,89 +312,98 @@ export function TuningModal() {
           </button>
         </div>
       </div>
-      <div className="modal-body">
-        <div id="tuning-panel-tuning" className={tuningActive ? undefined : "hidden"}>
-          <RangeRow
-            id="threshold"
-            label={t("tuning.similarityThreshold")}
-            valueText={`${form?.threshold ?? 2}`}
-            min={2}
-            max={80}
-            step={1}
-            value={form?.threshold ?? 2}
-            onChange={(value) => setFormField("threshold", value)}
-            hint={
-              <div className="hint">
-                {t("tuning.computedThreshold")}{" "}
-                <span id="computed-threshold">
-                  {form?.computedThreshold === null ||
-                  form?.computedThreshold === undefined
-                    ? "-"
-                    : `${form.computedThreshold}`}
-                </span>
+      <div className="modal-body tuning-body">
+        <div id="tuning-panel-tuning" className="tuning-section-grid">
+          <div className="tuning-sliders-col">
+            <RangeRow
+              id="threshold"
+              label={t("tuning.similarityThreshold")}
+              valueText={`${form?.threshold ?? 2}`}
+              min={2}
+              max={100}
+              step={1}
+              value={form?.threshold ?? 2}
+              onChange={(value) => setFormField("threshold", value)}
+              hint={
+                <div className="hint">
+                  {t("tuning.computedThreshold")}{" "}
+                  <span id="computed-threshold">
+                    {form?.computedThreshold === null ||
+                    form?.computedThreshold === undefined
+                      ? "-"
+                      : `${form.computedThreshold}`}
+                  </span>
+                </div>
+              }
+            />
+            <RangeRow
+              id="min-jump-distance"
+              label={t("tuning.minJumpDistance")}
+              valueText={formatMinJumpDistance(
+                form?.minLongBranchPercent ?? 0,
+                t,
+              )}
+              min={0}
+              max={MIN_JUMP_DISTANCE_OPTIONS.length - 1}
+              step={1}
+              value={Math.max(
+                0,
+                MIN_JUMP_DISTANCE_OPTIONS.indexOf(
+                  (form?.minLongBranchPercent ??
+                    0) as (typeof MIN_JUMP_DISTANCE_OPTIONS)[number],
+                ),
+              )}
+              onChange={(index) =>
+                setFormField(
+                  "minLongBranchPercent",
+                  MIN_JUMP_DISTANCE_OPTIONS[index] ?? 0,
+                )
+              }
+              hint={
+                <div className="hint">
+                  {t("tuning.minJumpDistanceHint")}
+                </div>
+              }
+            />
+            <RangeRow
+              id="min-prob"
+              label={t("tuning.probabilityMin")}
+              valueText={`${form?.minProbPct ?? 18}%`}
+              min={0}
+              max={100}
+              step={2}
+              value={form?.minProbPct ?? 18}
+              onChange={(value) => setFormField("minProbPct", value)}
+            />
+            <RangeRow
+              id="max-prob"
+              label={t("tuning.probabilityMax")}
+              valueText={`${form?.maxProbPct ?? 50}%`}
+              min={0}
+              max={100}
+              step={2}
+              value={form?.maxProbPct ?? 50}
+              onChange={(value) => setFormField("maxProbPct", value)}
+            />
+            <RangeRow
+              id="ramp"
+              label={t("tuning.rampSpeed")}
+              valueText={`${form?.rampPct ?? 10}%`}
+              min={0}
+              max={100}
+              step={2}
+              value={form?.rampPct ?? 10}
+              onChange={(value) => setFormField("rampPct", value)}
+            />
+            {showReset ? (
+              <div className="tuning-reset-row">
+                <button type="button" id="tuning-reset" onClick={handleReset}>
+                  {t("common.reset")}
+                </button>
               </div>
-            }
-          />
-          <RangeRow
-            id="min-jump-distance"
-            label={t("tuning.minJumpDistance")}
-            valueText={formatMinJumpDistance(
-              form?.minLongBranchPercent ?? 0,
-              t,
-            )}
-            min={0}
-            max={MIN_JUMP_DISTANCE_OPTIONS.length - 1}
-            step={1}
-            value={Math.max(
-              0,
-              MIN_JUMP_DISTANCE_OPTIONS.indexOf(
-                (form?.minLongBranchPercent ??
-                  0) as (typeof MIN_JUMP_DISTANCE_OPTIONS)[number],
-              ),
-            )}
-            onChange={(index) =>
-              setFormField(
-                "minLongBranchPercent",
-                MIN_JUMP_DISTANCE_OPTIONS[index] ?? 0,
-              )
-            }
-            hint={
-              <div className="hint">
-                {t("tuning.minJumpDistanceHint")}
-              </div>
-            }
-          />
-          <RangeRow
-            id="min-prob"
-            label={t("tuning.probabilityMin")}
-            valueText={`${form?.minProbPct ?? 18}%`}
-            min={0}
-            max={100}
-            step={2}
-            value={form?.minProbPct ?? 18}
-            onChange={(value) => setFormField("minProbPct", value)}
-          />
-          <RangeRow
-            id="max-prob"
-            label={t("tuning.probabilityMax")}
-            valueText={`${form?.maxProbPct ?? 50}%`}
-            min={0}
-            max={100}
-            step={2}
-            value={form?.maxProbPct ?? 50}
-            onChange={(value) => setFormField("maxProbPct", value)}
-          />
-          <RangeRow
-            id="ramp"
-            label={t("tuning.rampSpeed")}
-            valueText={`${form?.rampPct ?? 10}%`}
-            min={0}
-            max={100}
-            step={2}
-            value={form?.rampPct ?? 10}
-            onChange={(value) => setFormField("rampPct", value)}
-          />
-          <div className="checkbox-row">
+            ) : null}
+          </div>
+          <div className="checkbox-row tuning-checkboxes-col">
             <label>
               <input
                 id="just-backwards"
@@ -420,10 +439,79 @@ export function TuningModal() {
             </label>
           </div>
         </div>
+
+        <div id="tuning-panel-visuals" className="tuning-visuals-section">
+          <h3>Visuals</h3>
+          <div className="checkbox-row visuals-checkbox-row">
+            <label>
+              <input
+                id="bpm-bar-toggle"
+                type="checkbox"
+                checked={bpmBarEnabled}
+                onChange={(event) => toggleBpmBar(event.target.checked)}
+              />{" "}
+              Show BPM bar
+            </label>
+            <label>
+              <input
+                id="use-square-beats"
+                type="checkbox"
+                checked={visualPreferences.useSquareBeats}
+                onChange={(event) =>
+                  updateVisualPreferences({
+                    useSquareBeats: event.target.checked,
+                  })
+                }
+              />{" "}
+              Square beats
+            </label>
+            <label>
+              <input
+                id="use-alt-seek-shape"
+                type="checkbox"
+                checked={visualPreferences.useAltSeekShape}
+                onChange={(event) =>
+                  updateVisualPreferences({
+                    useAltSeekShape: event.target.checked,
+                  })
+                }
+              />{" "}
+              Alternate Seek Shape
+            </label>
+          </div>
+          <div className="visual-mode-group">
+            <div className="label-line">Coloring</div>
+            <div
+              className="visual-mode-options"
+              role="radiogroup"
+              aria-label="Coloring"
+            >
+              {VISUAL_COLORING_OPTIONS.map((option) => (
+                <label key={option.id} className="visual-mode-option">
+                  <input
+                    id={option.id}
+                    type="radio"
+                    name="visual-effect-mode"
+                    value={option.value}
+                    checked={visualPreferences.visualEffectMode === option.value}
+                    onChange={() =>
+                      updateVisualPreferences({
+                        visualEffectMode: option.value,
+                      })
+                    }
+                  />{" "}
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div
           id="tuning-panel-extras"
-          className={tuningActive ? "hidden" : undefined}
+          className={hasExtrasTab ? undefined : "hidden"}
         >
+          <h3>{t("tuning.extras")}</h3>
           <div className="checkbox-row extras-checkbox-row">
             <label>
               <input
@@ -504,16 +592,6 @@ export function TuningModal() {
             </div>
           </div>
         </div>
-      </div>
-      <div className="modal-footer tuning-footer">
-        {showReset ? (
-          <button type="button" id="tuning-reset" onClick={handleReset}>
-            {t("common.reset")}
-          </button>
-        ) : null}
-        <button type="button" id="tuning-apply" onClick={handleApply}>
-          {t("common.apply")}
-        </button>
       </div>
     </Modal>
   );

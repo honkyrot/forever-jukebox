@@ -1,5 +1,7 @@
+import { InfoModal } from "./InfoModal";
 import { PlayMenu } from "./PlayMenu";
 import { StatusPanel } from "./StatusPanel";
+import { TuningModal } from "./TuningModal";
 import { VizContainer } from "./VizContainer";
 
 // The Listen panel. It persists in the DOM permanently — visibility is
@@ -13,6 +15,8 @@ export function ListenPanel({ visible }: { visible: boolean }) {
       <StatusPanel />
       <PlayMenu />
       <VizContainer />
+      <TuningModal />
+      <InfoModal />
     </section>
   );
 }

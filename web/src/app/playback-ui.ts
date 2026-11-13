@@ -30,6 +30,7 @@ import {
   type ExtrasApplyResult,
   type ExtrasFormValues,
 } from "./playback";
+import { pulseVizStats } from "./playback/status-ui";
 import {
   advancePlaylistOnAutocanonizerEnded,
   getAttachedAppContext,
@@ -206,6 +207,7 @@ export function initializePlayback(): void {
         autocanonizerMainSeconds: cursorTimes.mainSeconds,
         autocanonizerOtherSeconds: cursorTimes.otherSeconds,
       });
+      pulseVizStats();
     });
     // A track that plays to its end hands over to the next playlist track.
     const handleLinearTrackEnded = () => {
@@ -254,12 +256,24 @@ export function initializePlayback(): void {
       // actually advances so we don't churn the store and wake subscribers on
       // every tick.
       const beatsPlayedText = `${engineState.beatsPlayed}`;
-      if (useAppStore.getState().beatsPlayedText !== beatsPlayedText) {
-        useAppStore.setState({ beatsPlayedText });
+      const branchChanceText = `${Math.round(engineState.curRandomBranchChance * 100)}%`;
+      const jukeboxCurrentSeconds = Math.floor(context.player.getCurrentTime() || 0);
+      const prev = useAppStore.getState();
+      if (
+        prev.beatsPlayedText !== beatsPlayedText ||
+        prev.branchChanceText !== branchChanceText ||
+        prev.jukeboxCurrentSeconds !== jukeboxCurrentSeconds
+      ) {
+        useAppStore.setState({
+          beatsPlayedText,
+          branchChanceText,
+          jukeboxCurrentSeconds,
+        });
       }
       if (engineState.currentBeatIndex >= 0) {
         if (engineState.beatsPlayed !== lastCowbellBeatsPlayed) {
           lastCowbellBeatsPlayed = engineState.beatsPlayed;
+          pulseVizStats();
           const beat = useAppStore.getState().vizData?.beats[engineState.currentBeatIndex];
           if (beat) {
             context.cowbellOverlay.handleBeatEnter(

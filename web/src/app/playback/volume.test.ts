@@ -21,9 +21,9 @@ describe("setMasterVolume", () => {
     setMasterVolume(context, 50);
 
     // The regression this guards: forgetting /100 ships audio 100x too loud.
-    expect(context.player.setVolume).toHaveBeenCalledWith(0.5);
-    expect(context.autocanonizer?.setVolume).toHaveBeenCalledWith(0.5);
-    expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(0.5);
+    expect(context.player.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
+    expect(context.autocanonizer?.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
+    expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
   });
 
   it("passes 0 and 100 through cleanly", () => {
@@ -42,8 +42,8 @@ describe("setMasterVolume", () => {
     });
 
     expect(() => setMasterVolume(context, 70)).not.toThrow();
-    expect(context.player.setVolume).toHaveBeenCalledWith(0.7);
-    expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(0.7);
+    expect(context.player.setVolume).toHaveBeenCalledWith(Math.pow(0.7, 1.5));
+    expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.7, 1.5));
   });
 });
 

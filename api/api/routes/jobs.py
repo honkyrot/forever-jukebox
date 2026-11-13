@@ -707,10 +707,14 @@ def set_play_count(
 @router.get("/api/top")
 def get_top_songs(
     limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    sort_by: str | None = Query(None, description="Sort field for all-time tracks"),
 ) -> JSONResponse:
     items = get_top_tracks(
         DB_PATH,
         limit=limit,
+        offset=offset,
+        sort_by=sort_by,
     )
     payload = TopSongsResponse(items=items)
     return JSONResponse(payload.model_dump(), status_code=200)

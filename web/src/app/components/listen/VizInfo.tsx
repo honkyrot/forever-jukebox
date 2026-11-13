@@ -17,11 +17,14 @@ export function VizInfo() {
   const playMode = useAppStore((s) => s.playMode);
   const audioMode = useAppStore((s) => s.jukeboxAudioMode);
   const bringItHomeMode = useAppStore((s) => s.bringItHomeMode);
+  const shiftBranching = useAppStore((s) => s.shiftBranching);
   const trackDurationSec = useAppStore((s) => s.trackDurationSec);
   const wubMachineDurationSec = useAppStore((s) => s.wubMachineDurationSec);
   const titleRef = useRef<HTMLDivElement | null>(null);
   const listenTimeRef = useRef<HTMLSpanElement | null>(null);
   const beatsPlayedRef = useRef<HTMLSpanElement | null>(null);
+  const branchChanceRef = useRef<HTMLSpanElement | null>(null);
+  const jukeboxCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const mainCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const otherCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const wubCursorTimeRef = useRef<HTMLSpanElement | null>(null);
@@ -38,6 +41,16 @@ export function VizInfo() {
     }
     if (beatsPlayedRef.current) {
       beatsPlayedRef.current.textContent = seed.beatsPlayedText;
+    }
+    if (branchChanceRef.current) {
+      branchChanceRef.current.textContent = seed.shiftBranching
+        ? "100%"
+        : seed.branchChanceText;
+    }
+    if (jukeboxCursorTimeRef.current) {
+      jukeboxCursorTimeRef.current.textContent = formatCursorTime(
+        seed.jukeboxCurrentSeconds,
+      );
     }
     if (mainCursorTimeRef.current) {
       mainCursorTimeRef.current.textContent = formatCursorTime(
@@ -66,6 +79,23 @@ export function VizInfo() {
         beatsPlayedRef.current
       ) {
         beatsPlayedRef.current.textContent = state.beatsPlayedText;
+      }
+      if (
+        (state.branchChanceText !== prev.branchChanceText ||
+          state.shiftBranching !== prev.shiftBranching) &&
+        branchChanceRef.current
+      ) {
+        branchChanceRef.current.textContent = state.shiftBranching
+          ? "100%"
+          : state.branchChanceText;
+      }
+      if (
+        state.jukeboxCurrentSeconds !== prev.jukeboxCurrentSeconds &&
+        jukeboxCursorTimeRef.current
+      ) {
+        jukeboxCursorTimeRef.current.textContent = formatCursorTime(
+          state.jukeboxCurrentSeconds,
+        );
       }
       if (
         state.autocanonizerMainSeconds !== prev.autocanonizerMainSeconds &&
@@ -107,6 +137,7 @@ export function VizInfo() {
       : t("common.appName");
   useMarquee(titleRef, displayTitle);
 
+  const isJukebox = playMode === "jukebox";
   const isCanonizer = playMode === "autocanonizer";
   const isWubMachine = playMode === "wubmachine";
   const hideBeats = playMode !== "jukebox";
@@ -120,6 +151,18 @@ export function VizInfo() {
     <>
       <div className="viz-title" id="viz-now-playing" ref={titleRef}></div>
       <div className="viz-meta">
+        <span
+          id="jukebox-times"
+          className={
+            isJukebox ? "autocanonizer-times" : "autocanonizer-times is-hidden"
+          }
+        >
+          <span id="jukebox-current-time" ref={jukeboxCursorTimeRef}></span>
+          <span aria-hidden="true">/</span>
+          <span id="jukebox-total-time">
+            {formatCursorTime(trackDurationSec ?? 0)}
+          </span>
+        </span>
         <span
           id="autocanonizer-times"
           className={
@@ -175,6 +218,29 @@ export function VizInfo() {
             id="beats-played"
             className={hideBeats ? "is-hidden" : undefined}
             ref={beatsPlayedRef}
+          ></span>
+          <span
+            id="viz-branch-chance-divider"
+            className={hideBeats ? "viz-divider is-hidden" : "viz-divider"}
+          >
+            ·
+          </span>
+          <span
+            id="viz-branch-chance-label"
+            className={hideBeats ? "is-hidden" : undefined}
+          >
+            Branch Chance:
+          </span>
+          <span
+            id="branch-chance"
+            className={
+              hideBeats
+                ? "is-hidden"
+                : bringItHomeMode && !shiftBranching
+                  ? "is-crossed"
+                  : undefined
+            }
+            ref={branchChanceRef}
           ></span>
         </span>
         <span

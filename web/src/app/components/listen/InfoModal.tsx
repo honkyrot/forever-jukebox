@@ -9,7 +9,7 @@ export function InfoModal() {
   const close = () => useAppStore.setState({ infoModalOpen: false });
 
   return (
-    <Modal id="info-modal" open={open} onClose={close}>
+    <Modal id="info-modal" open={open} onClose={close} inline>
       <div className="modal-header">
         <h2>{t("info.title")}</h2>
         <button

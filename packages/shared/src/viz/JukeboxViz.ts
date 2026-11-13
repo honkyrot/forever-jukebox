@@ -65,6 +65,32 @@ interface JumpLine {
 export type AnchorEditState = CustomAnchor & { active: CustomAnchorEnd };
 type AnchorEditHandler = (state: AnchorEditState) => void;
 
+export type VisualEffectMode = "0" | "1" | "2" | "3";
+
+export type VisualPreferences = {
+  visualEffectMode: VisualEffectMode;
+  useSquareBeats: boolean;
+  useAltSeekShape: boolean;
+};
+
+export function readStoredVisualPreferences(): VisualPreferences {
+  if (typeof localStorage === "undefined") {
+    return {
+      visualEffectMode: "0",
+      useSquareBeats: false,
+      useAltSeekShape: false,
+    };
+  }
+  const rawMode = localStorage.getItem("visualEffectMode");
+  const visualEffectMode: VisualEffectMode =
+    rawMode === "1" || rawMode === "2" || rawMode === "3" ? rawMode : "0";
+  return {
+    visualEffectMode,
+    useSquareBeats: localStorage.getItem("useSquareBeats") === "true",
+    useAltSeekShape: localStorage.getItem("useAltSeekShape") === "true",
+  };
+}
+
 const ANCHOR_HANDLE_RADIUS_PX = 7;
 const ANCHOR_ACTIVE_RING_RADIUS_PX = 12;
 const ANCHOR_ARROW_LENGTH_PX = 11;
@@ -140,6 +166,7 @@ class CanvasViz {
   private readonly edgeControlPointResolver: EdgeControlPointResolver | null;
   private visible = true;
   private anchorHighlightEnabled = false;
+  private visualPreferences: VisualPreferences = readStoredVisualPreferences();
 
   private edgeGeometry = new WeakMap<
     Edge,
@@ -482,6 +509,50 @@ class CanvasViz {
     return null;
   }
 
+  private clamp(value: number, min: number, max: number) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  private resolveVEMThreeColor(
+    beat: QuantumBase | null | undefined,
+    alpha: number,
+    fallback: string
+  ) {
+    const hueShift = 200;
+    const timbre = beat?.oseg?.timbre;
+    if (!timbre || timbre.length === 0) {
+      return fallback;
+    }
+    const loudness = beat?.oseg?.loudness_max ?? 0;
+    const decibel = 70 + loudness;
+    let vectorX = 0;
+    let vectorY = 0;
+    let energy = 0;
+    const scale = 24;
+    for (let i = 0; i < timbre.length; i += 1) {
+      const normalized = Math.tanh(timbre[i] / scale);
+      const angle = (i / timbre.length) * Math.PI * 2;
+      vectorX += normalized * Math.cos(angle);
+      vectorY += normalized * Math.sin(angle);
+      energy += normalized * normalized;
+    }
+    let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
+    if (hue < 0) {
+      hue += 360;
+    }
+    hue = (hue + hueShift) % 360;
+    const rms = Math.sqrt(energy / timbre.length);
+    const saturation = this.clamp(42 + rms * 68, 38, 96);
+    const normalizedAlpha = this.clamp(alpha, 0, 1);
+    return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${decibel.toFixed(1)}%, ${normalizedAlpha.toFixed(3)})`;
+  }
+
+  setVisualPreferences(prefs: VisualPreferences) {
+    this.visualPreferences = prefs;
+    this.drawBase();
+    this.drawOverlay();
+  }
+
   // An opaque base starts black, so its background is painted even before data arrives.
   private drawBase() {
     if (!this.visible || (!this.data && !this.backgroundFill)) {
@@ -506,34 +577,107 @@ class CanvasViz {
         ? Math.ceil(edges.length / MAX_EDGES_BASE)
         : 1;
 
-    // One path and one stroke for all edges, so overlapping edges composite once.
-    this.baseCtx.strokeStyle = this.theme.edgeStroke;
-    this.baseCtx.beginPath();
-    for (let i = 0; i < edges.length; i += step) {
-      const edge = edges[i];
-      if (edge.deleted) {
-        continue;
-      }
-      const from = this.positions[edge.src.which];
-      const to = this.positions[edge.dest.which];
-      if (!from || !to) {
-        continue;
-      }
-      const geometry = this.getEdgeGeometry(edge);
-      this.baseCtx.moveTo(from.x, from.y);
-      if (geometry?.bend && geometry.control) {
-        this.baseCtx.quadraticCurveTo(
-          geometry.control[0],
-          geometry.control[1],
-          to.x,
-          to.y
-        );
-      } else {
-        this.baseCtx.lineTo(to.x, to.y);
+    const { visualEffectMode, useSquareBeats } = this.visualPreferences;
+    let maxDistance = 0;
+    if (visualEffectMode === "2") {
+      for (const e of edges) {
+        if (!e.deleted && e.distance > maxDistance) {
+          maxDistance = e.distance;
+        }
       }
     }
-    if (edges.length > 0) {
-      this.baseCtx.stroke();
+
+    if (visualEffectMode === "0") {
+      // One path and one stroke for all edges, so overlapping edges composite once.
+      this.baseCtx.strokeStyle = this.theme.edgeStroke;
+      this.baseCtx.beginPath();
+      for (let i = 0; i < edges.length; i += step) {
+        const edge = edges[i];
+        if (edge.deleted) {
+          continue;
+        }
+        const from = this.positions[edge.src.which];
+        const to = this.positions[edge.dest.which];
+        if (!from || !to) {
+          continue;
+        }
+        const geometry = this.getEdgeGeometry(edge);
+        this.baseCtx.moveTo(from.x, from.y);
+        if (geometry?.bend && geometry.control) {
+          this.baseCtx.quadraticCurveTo(
+            geometry.control[0],
+            geometry.control[1],
+            to.x,
+            to.y
+          );
+        } else {
+          this.baseCtx.lineTo(to.x, to.y);
+        }
+      }
+      if (edges.length > 0) {
+        this.baseCtx.stroke();
+      }
+    } else {
+      for (let i = 0; i < edges.length; i += step) {
+        const edge = edges[i];
+        if (edge.deleted) {
+          continue;
+        }
+        const from = this.positions[edge.src.which];
+        const to = this.positions[edge.dest.which];
+        if (!from || !to) {
+          continue;
+        }
+        if (visualEffectMode === "1") {
+          const gradient = this.baseCtx.createLinearGradient(
+            from.x,
+            from.y,
+            to.x,
+            to.y
+          );
+          let hue1 = (edge.src.which / Math.max(1, this.positions.length)) * 360;
+          let hue2 = (edge.dest.which / Math.max(1, this.positions.length)) * 360;
+          if (Math.abs(hue1 - hue2) > 180) {
+            if (hue1 < hue2) {
+              hue1 += 360;
+            } else {
+              hue2 += 360;
+            }
+          }
+          gradient.addColorStop(0, `hsla(${hue1 % 360}, 100%, 65%, 0.6)`);
+          gradient.addColorStop(
+            0.5,
+            `hsla(${((hue1 + hue2) / 2) % 360}, 100%, 65%, 0.6)`
+          );
+          gradient.addColorStop(1, `hsla(${hue2 % 360}, 100%, 65%, 0.6)`);
+          this.baseCtx.strokeStyle = gradient;
+        } else if (visualEffectMode === "2") {
+          const similarity =
+            maxDistance > 0 ? 1 - edge.distance / maxDistance : 1;
+          const hue = similarity * 140;
+          this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
+        } else {
+          this.baseCtx.strokeStyle = this.resolveVEMThreeColor(
+            edge.src,
+            0.6,
+            this.theme.edgeStroke
+          );
+        }
+        const geometry = this.getEdgeGeometry(edge);
+        this.baseCtx.beginPath();
+        this.baseCtx.moveTo(from.x, from.y);
+        if (geometry?.bend && geometry.control) {
+          this.baseCtx.quadraticCurveTo(
+            geometry.control[0],
+            geometry.control[1],
+            to.x,
+            to.y
+          );
+        } else {
+          this.baseCtx.lineTo(to.x, to.y);
+        }
+        this.baseCtx.stroke();
+      }
     }
 
     const highlightedAnchorEdgeId =
@@ -550,13 +694,53 @@ class CanvasViz {
     }
 
     if (!this.tileCanvas) {
-      this.baseCtx.fillStyle = this.theme.beatFill;
-      this.baseCtx.beginPath();
-      for (const p of this.positions) {
-        this.baseCtx.moveTo(p.x + BEAT_DOT_RADIUS_PX, p.y);
-        this.baseCtx.arc(p.x, p.y, BEAT_DOT_RADIUS_PX, 0, Math.PI * 2);
+      if (visualEffectMode === "0" && !useSquareBeats) {
+        this.baseCtx.fillStyle = this.theme.beatFill;
+        this.baseCtx.beginPath();
+        for (const p of this.positions) {
+          this.baseCtx.moveTo(p.x + BEAT_DOT_RADIUS_PX, p.y);
+          this.baseCtx.arc(p.x, p.y, BEAT_DOT_RADIUS_PX, 0, Math.PI * 2);
+        }
+        this.baseCtx.fill();
+      } else {
+        this.baseCtx.fillStyle = this.theme.beatFill;
+        for (let i = 0; i < this.positions.length; i += 1) {
+          if (visualEffectMode === "1") {
+            this.baseCtx.fillStyle = `hsl(${(i / Math.max(1, this.positions.length)) * 360}, 100%, 65%)`;
+          } else if (visualEffectMode === "2") {
+            let bestDistance = maxDistance;
+            for (const e of edges) {
+              if (!e.deleted && e.src.which === i && e.distance < bestDistance) {
+                bestDistance = e.distance;
+              }
+            }
+            const similarity =
+              maxDistance > 0 ? 1 - bestDistance / maxDistance : 1;
+            const hue = similarity * 140;
+            this.baseCtx.fillStyle = `hsla(${hue}, 100%, 65%, 0.8)`;
+          } else if (visualEffectMode === "3") {
+            const beat = this.data.beats[i];
+            this.baseCtx.fillStyle = this.resolveVEMThreeColor(
+              beat,
+              0.8,
+              this.theme.beatFill
+            );
+          }
+          const p = this.positions[i];
+          if (useSquareBeats) {
+            this.baseCtx.save();
+            this.baseCtx.translate(p.x, p.y);
+            const angle = Math.atan2(p.y - this.center.y, p.x - this.center.x);
+            this.baseCtx.rotate(angle);
+            this.baseCtx.fillRect(-2, -2, 4, 4);
+            this.baseCtx.restore();
+          } else {
+            this.baseCtx.beginPath();
+            this.baseCtx.arc(p.x, p.y, BEAT_DOT_RADIUS_PX, 0, Math.PI * 2);
+            this.baseCtx.fill();
+          }
+        }
       }
-      this.baseCtx.fill();
     }
     this.baseCtx.restore();
   }
@@ -710,8 +894,26 @@ class CanvasViz {
     return bestDist <= BEAT_SELECT_RADIUS_PX ? bestIndex : null;
   }
 
-  private drawBeatCursor(point: Point, color: string) {
+  private drawBeatCursor(point: Point, color: string, index?: number) {
     this.overlayCtx.fillStyle = color;
+    if (
+      this.visualPreferences.useAltSeekShape &&
+      index !== undefined &&
+      this.positions.length > 0
+    ) {
+      const nextIndex =
+        index + 1 < this.positions.length ? index + 1 : index;
+      const next = this.positions[nextIndex];
+      const angle = next
+        ? Math.atan2(next.y - point.y, next.x - point.x)
+        : 0;
+      this.overlayCtx.save();
+      this.overlayCtx.translate(point.x, point.y);
+      this.overlayCtx.rotate(angle);
+      this.overlayCtx.fillRect(-2, -10, 4, 20);
+      this.overlayCtx.restore();
+      return;
+    }
     this.overlayCtx.beginPath();
     this.overlayCtx.arc(point.x, point.y, BEAT_CURSOR_RADIUS_PX, 0, Math.PI * 2);
     this.overlayCtx.fill();
@@ -757,10 +959,25 @@ class CanvasViz {
       return;
     }
     const current = this.positions[this.currentIndex];
-    if (current && this.tileCanvas) {
-      this.drawTileMarker(this.currentIndex, this.theme.beatHighlight);
-    } else if (current) {
-      this.drawBeatCursor(current, this.theme.beatHighlight);
+    if (current) {
+      let cursorColor = this.theme.beatHighlight;
+      if (this.visualPreferences.visualEffectMode === "1") {
+        const progress =
+          this.currentIndex / Math.max(1, this.positions.length);
+        cursorColor = `hsl(${progress * 360}, 100%, 70%)`;
+      } else if (this.visualPreferences.visualEffectMode === "3") {
+        const beat = this.data.beats[this.currentIndex];
+        cursorColor = this.resolveVEMThreeColor(
+          beat,
+          1,
+          this.theme.beatHighlight
+        );
+      }
+      if (this.tileCanvas) {
+        this.drawTileMarker(this.currentIndex, cursorColor);
+      } else {
+        this.drawBeatCursor(current, cursorColor, this.currentIndex);
+      }
     }
     if (this.jumpLine) {
       const age = performance.now() - this.jumpLine.at;
@@ -1519,6 +1736,37 @@ function createGalaxyPositioner(): Positioner {
   };
 }
 
+function createSpiralPositioner(): Positioner {
+  return (data: VisualizationData, width: number, height: number) => {
+    const count = data.beats.length;
+    const cx = width / 2;
+    const cy = height / 2;
+    const maxRadius = Math.min(width, height) * 0.44;
+    const minRadius = Math.min(width, height) * 0.05;
+    const turns = 5;
+    return Array.from({ length: count }, (_, i) => {
+      const t = i / Math.max(1, count - 1);
+      const angle = t * Math.PI * 2 * turns;
+      const radius = minRadius + (maxRadius - minRadius) * t;
+      return {
+        x: cx + Math.cos(angle) * radius,
+        y: cy + Math.sin(angle) * radius,
+      };
+    });
+  };
+}
+
+function createRandomPositioner(): Positioner {
+  return (data: VisualizationData, width: number, height: number) => {
+    const count = data.beats.length;
+    const padding = 20;
+    return Array.from({ length: count }, () => ({
+      x: padding + Math.random() * Math.max(0, width - padding * 2),
+      y: padding + Math.random() * Math.max(0, height - padding * 2),
+    }));
+  };
+}
+
 function getDefaultVisualizationDefinitions(): VisualizationDefinition[] {
   return [
     {
@@ -1536,6 +1784,8 @@ function getDefaultVisualizationDefinitions(): VisualizationDefinition[] {
     { positioner: createGridPositioner() },
     { positioner: createInfinitePositioner() },
     { positioner: createWavePositioner() },
+    { positioner: createSpiralPositioner() },
+    { positioner: createRandomPositioner() },
   ];
 }
 
@@ -1551,6 +1801,7 @@ export class JukeboxViz {
   private selectedEdge: Edge | null = null;
   private lastUpdate: LastUpdate | null = null;
   private anchorHighlightEnabled = false;
+  private visualPreferences: VisualPreferences = readStoredVisualPreferences();
   private onSelectHandler: ((index: number) => void) | null = null;
   private onEdgeSelectHandler: ((edge: Edge | null) => void) | null = null;
   private anchorEdit: AnchorEditState | null = null;
@@ -1609,6 +1860,7 @@ export class JukeboxViz {
       ...definition.options,
     });
     viz.setAnchorHighlightEnabled(this.anchorHighlightEnabled);
+    viz.setVisualPreferences(this.visualPreferences);
     viz.setVisible(this.visible);
     if (this.onSelectHandler) {
       viz.setOnSelect(this.onSelectHandler);
@@ -1676,6 +1928,11 @@ export class JukeboxViz {
   setAnchorHighlightEnabled(enabled: boolean) {
     this.anchorHighlightEnabled = enabled;
     this.activeViz?.setAnchorHighlightEnabled(enabled);
+  }
+
+  setVisualPreferences(prefs: VisualPreferences) {
+    this.visualPreferences = prefs;
+    this.activeViz?.setVisualPreferences(prefs);
   }
 
   refresh() {

@@ -1,7 +1,11 @@
 import type { LoadingStepId, LoadingTask } from "@forever-jukebox/shared/ui/LoadingProgress";
 import { create, type StateCreator } from "zustand";
 import type { ToastQueueItem } from "@forever-jukebox/shared/ui/toastQueue";
-import type { AnchorEditState } from "@forever-jukebox/shared/viz/JukeboxViz";
+import {
+  readStoredVisualPreferences,
+  type AnchorEditState,
+  type VisualPreferences,
+} from "@forever-jukebox/shared/viz/JukeboxViz";
 import i18n from "./i18n";
 import type { SpotifySearchItem, YoutubeSearchItem } from "./api";
 import type { AppState, SleepTimerState, TabId } from "./context";
@@ -80,6 +84,7 @@ export type TopSongsItem = {
   artist?: string;
   source_id?: string;
   source_provider?: string;
+  play_count?: number;
 };
 
 export type TopSongsListState =
@@ -148,7 +153,11 @@ type ShellSlice = {
   // only appears once per fresh load (a new search/reload re-enables it).
   retryInFlightJobId: string | null;
   listenTimeText: string;
+  jukeboxCurrentSeconds: number;
   beatsPlayedText: string;
+  branchChanceText: string;
+  bpmBarEnabled: boolean;
+  visualPreferences: VisualPreferences;
   playlistLoadBusy: boolean;
   branchStats: BranchStatsState | null;
   // Non-null while the custom anchor editor is open on the viz.
@@ -245,7 +254,11 @@ const createUiSlice: Slice<
     | "analysisRetryJobId"
     | "retryInFlightJobId"
     | "listenTimeText"
+    | "jukeboxCurrentSeconds"
     | "beatsPlayedText"
+    | "branchChanceText"
+    | "bpmBarEnabled"
+    | "visualPreferences"
     | "playlistLoadBusy"
     | "branchStats"
     | "customAnchorEdit"
@@ -309,11 +322,22 @@ const createUiSlice: Slice<
     analysisRetryJobId: null,
     retryInFlightJobId: null,
     listenTimeText: "00:00:00",
+    jukeboxCurrentSeconds: 0,
     beatsPlayedText: "0",
+    branchChanceText: "0%",
+    bpmBarEnabled:
+      typeof localStorage === "undefined" ||
+      localStorage.getItem("bpmBarEnabled") !== "false",
+    visualPreferences: readStoredVisualPreferences(),
     playlistLoadBusy: false,
     branchStats: null,
     customAnchorEdit: null,
-    setActiveTab: (activeTabId) => set({ activeTabId }),
+    setActiveTab: (activeTabId) =>
+      set((state) => ({
+        activeTabId,
+        tuningModalOpen: activeTabId === "play" ? state.tuningModalOpen : false,
+        infoModalOpen: activeTabId === "play" ? state.infoModalOpen : false,
+      })),
     setTheme: (theme) => set({ theme }),
     setPlayTabPulsing: (isPlayTabPulsing) => set({ isPlayTabPulsing }),
     setFooterCredit: (footerCredit) => set({ footerCredit }),

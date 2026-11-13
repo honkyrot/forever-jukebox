@@ -1,5 +1,9 @@
 import type { Edge } from "../engine/types";
-import { JukeboxViz, type AnchorEditState } from "./JukeboxViz";
+import {
+  JukeboxViz,
+  type AnchorEditState,
+  type VisualPreferences,
+} from "./JukeboxViz";
 
 export class JukeboxController {
   private readonly viz: JukeboxViz;
@@ -26,6 +30,10 @@ export class JukeboxController {
 
   setAnchorHighlightEnabled(enabled: boolean) {
     this.viz.setAnchorHighlightEnabled(enabled);
+  }
+
+  setVisualPreferences(prefs: VisualPreferences) {
+    this.viz.setVisualPreferences(prefs);
   }
 
   refresh() {
