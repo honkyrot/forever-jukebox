@@ -142,6 +142,9 @@ describe("VizBottomRight", () => {
       -40,
       0,
     );
+    expect(localStorage.getItem("audioBalance")).toBe(
+      JSON.stringify({ blue: -40, green: 0 }),
+    );
     expect(slider.value).toBe("-40");
     expect(
       (

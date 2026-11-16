@@ -416,7 +416,8 @@ describe("playback tuning", () => {
     expect(window.location.search).toBe("?jb=1&d=2,8");
   });
 
-  it("applies tuning changes and normalizes min/max", () => {
+  it("applies tuning changes and normalizes min/max without closing the tuning modal", () => {
+    useAppStore.setState({ tuningModalOpen: true });
     const context = createContext();
     const result = applyTuningChanges(
       context,
@@ -438,6 +439,7 @@ describe("playback tuning", () => {
       }),
     );
     expect(result.threshold).toBe(45);
+    expect(useAppStore.getState().tuningModalOpen).toBe(true);
   });
 
   it("returns the threshold to auto when it is set back to the computed value", () => {

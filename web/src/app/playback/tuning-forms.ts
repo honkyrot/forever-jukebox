@@ -24,7 +24,6 @@ import {
 } from "@forever-jukebox/shared/audio/audioModes";
 import { trackEvent, trackModeEnabled } from "../analytics";
 import {
-  closeTuning,
   updatePlayButton,
   updateTrackInfo,
 } from "./status-ui";
@@ -413,7 +412,6 @@ export function applyTuningChanges(
   }
   syncTuningParamsState(context);
   writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
-  closeTuning();
   return {
     ...form,
     threshold: nextThreshold,

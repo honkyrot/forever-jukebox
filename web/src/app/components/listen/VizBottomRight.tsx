@@ -15,6 +15,7 @@ import { getAppContext } from "../../runtime";
 import { useAppStore } from "../../store";
 import { toggleFullscreen } from "../../fullscreen";
 import { storeVolumePct } from "../../volume";
+import { storeAudioBalance } from "../../audioBalance";
 import { useTranslation } from "react-i18next";
 
 // The right-hand cluster of the viz bottom bar: playlist-open button,
@@ -87,6 +88,7 @@ export function VizBottomRight() {
       autocanonizerOtherPan: nextOther,
     });
     setAutocanonizerStreamPans(getAppContext(), nextMain, nextOther);
+    storeAudioBalance(nextMain, nextOther);
   };
 
   return (

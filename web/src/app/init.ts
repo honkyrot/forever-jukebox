@@ -15,6 +15,7 @@ import {
   handleAnchorEditCommit,
 } from "./playback/custom-anchor";
 import { resolveStoredVolumePct } from "./volume";
+import { resolveStoredAudioBalance } from "./audioBalance";
 import {
   setAnalysisStatus,
   setLoadingStep,
@@ -89,6 +90,8 @@ export function initRuntime(): void {
   const engine = new JukeboxEngine(player, { randomMode: "random" });
   const highlightAnchorBranch = resolveStoredAnchorHighlight();
   const branchStatsEnabled = resolveStoredBranchStatsEnabled();
+  const { mainPan: autocanonizerMainPan, otherPan: autocanonizerOtherPan } =
+    resolveStoredAudioBalance();
   const defaultConfig = engine.getConfig();
   // The store holds all app state (defaults live in store.ts); hydrate the
   // persisted bits here, pre-render.
@@ -101,6 +104,8 @@ export function initRuntime(): void {
     highlightAnchorBranch,
     customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
     volumePct,
+    autocanonizerMainPan,
+    autocanonizerOtherPan,
   });
   // Controllers need their DOM nodes, which exist only after <VizContainer>
   // renders; attachViz (below) constructs them and fills these slots before
