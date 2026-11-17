@@ -12,8 +12,9 @@ import {
 } from "./constants";
 import { trackEvent, trackModeEnabled } from "./analytics";
 import { formatErrorForDisplay } from "./errorDisplay";
-import { formatDuration } from "./format";
-import type { AppContext, PlayMode } from "./context";
+import { formatDuration } from "@forever-jukebox/shared/ui/format";
+import type { AppContext } from "./context";
+import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import {
   applyExtrasChanges,
   cancelWubMachineRender,
@@ -41,7 +42,8 @@ import {
   serializeParams,
   writeTuningParamsToUrl,
 } from "./tuning";
-import { isEditableTarget, setAnalysisStatus, showToast } from "./ui";
+import { setAnalysisStatus, showToast } from "./ui";
+import { isEditableTarget } from "@forever-jukebox/shared/ui/editableTarget";
 import i18n from "./i18n";
 
 let lastCowbellBeatsPlayed = 0;
@@ -121,6 +123,12 @@ function syncExtrasPopup(edge: Edge | null) {
 // applyExtrasChanges owns the disable half of the branch-stats invariant
 // (it nulls branchStats itself); this wrapper completes the enable half so
 // no caller can leave the popup stale for the already-selected branch.
+function clearSelectedEdge(jukebox: NonNullable<AppContext["jukebox"]>) {
+  useAppStore.setState({ selectedEdge: null });
+  jukebox.setSelectedEdge(null);
+  syncExtrasPopup(null);
+}
+
 export function applyExtrasAndSync(
   context: AppContext,
   values: ExtrasFormValues,
@@ -156,9 +164,7 @@ export function deleteSelectedBranch(): void {
     syncDeletedEdgeState(context);
     updateTrackInfo(context);
     writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
-    useAppStore.setState({ selectedEdge: null });
-    jukebox.setSelectedEdge(null);
-    syncExtrasPopup(null);
+    clearSelectedEdge(jukebox);
     showToast(
       resetsAnchor ? i18n.t("playback.anchorReset") : i18n.t("playback.branchDeleted"),
     );
@@ -298,7 +304,9 @@ export function initializePlayback(): void {
         if (jumpTo !== engineState.currentBeatIndex) {
           jukebox.update(engineState.currentBeatIndex, false, jumpTo);
         }
-        useAppStore.setState({ lastBeatIndex: engineState.currentBeatIndex });
+        if (lastBeatIndex !== engineState.currentBeatIndex) {
+          useAppStore.setState({ lastBeatIndex: engineState.currentBeatIndex });
+        }
       }
     });
   }
@@ -397,7 +405,12 @@ export function setWubMachineLoop(checked: boolean): void {
     if (data) {
       jukebox.setData(data);
     }
-    jukebox.setSelectedEdgeActive(edge);
+    // Unpinning a branch the tuning filters out removes it from the viz, so the selection is cleared.
+    if (data && !data.edges.includes(edge)) {
+      clearSelectedEdge(jukebox);
+    } else {
+      jukebox.setSelectedEdgeActive(edge);
+    }
     const tuningParams = getTuningParamsFromEngine(context);
     const result = serializeParams(tuningParams);
     useAppStore.setState({ tuningParams: result.length > 0 ? result : null });

@@ -34,7 +34,7 @@ import {
 import { setAppRuntime } from "./runtime";
 import { PLAYLIST_MAX_TRACKS } from "./playlist";
 import { useAppStore } from "./store";
-import { showToast } from "./ui";
+import { setAnalysisStatus, setLoadingStep, showToast } from "./ui";
 import {
   applyExtrasAndSync,
   handleEdgeSelect,
@@ -46,11 +46,18 @@ import {
 } from "./playback-ui";
 import { setWindowUrl } from "./__tests__/test-utils";
 
-vi.mock("./ui", async (importActual) => ({
-  ...(await importActual<typeof import("./ui")>()),
-  showToast: vi.fn(),
-  // The real isEditableTarget references HTMLElement, undefined in this
-  // DOM-less test env; the keyboard handlers only need a falsy result.
+vi.mock("./ui", async (importActual) => {
+  const actual = await importActual<typeof import("./ui")>();
+  return {
+    ...actual,
+    showToast: vi.fn(),
+    setAnalysisStatus: vi.fn(actual.setAnalysisStatus),
+    setLoadingStep: vi.fn(actual.setLoadingStep),
+  };
+});
+// The real isEditableTarget references HTMLElement, undefined in this
+// DOM-less test env; the keyboard handlers only need a falsy result.
+vi.mock("@forever-jukebox/shared/ui/editableTarget", () => ({
   isEditableTarget: vi.fn(() => false),
 }));
 vi.mock("./playback", async (importActual) => ({
@@ -248,6 +255,7 @@ function createContext(overrides?: Partial<AppContext>): TestAppContext {
   const player = {
     getVolume: vi.fn(() => 0.5),
     getDuration: vi.fn(() => null),
+    getCurrentTime: vi.fn(() => 0),
     setVolume: vi.fn(),
     setOnEnded: vi.fn(),
     play: vi.fn(),
@@ -1739,6 +1747,51 @@ describe("playback controls", () => {
     expect(context.jukebox.update).toHaveBeenCalledTimes(1);
     expect(context.jukebox.update).toHaveBeenCalledWith(2, false, 9);
   });
+
+  it("skips store writes on a tick with no beat or counter change", () => {
+    const context = createContext();
+    useAppStore.setState({
+      lastBeatIndex: 2,
+      beatsPlayedText: "12",
+      branchChanceText: "20%",
+    });
+
+    initializePlayback();
+    const onUpdate = context.engine.onUpdate as ReturnType<typeof vi.fn>;
+    const listener = onUpdate.mock.calls[0]?.[0] as
+      | ((state: {
+          beatsPlayed: number;
+          currentBeatIndex: number;
+          currentTime: number;
+          lastJumped: boolean;
+          lastJumpTime: number | null;
+          lastJumpFromIndex: number | null;
+          lastJumpToIndex: number | null;
+          currentThreshold: number;
+          lastBranchPoint: number;
+          curRandomBranchChance: number;
+        }) => void)
+      | undefined;
+    const storeListener = vi.fn();
+    const unsubscribe = useAppStore.subscribe(storeListener);
+
+    listener?.({
+      beatsPlayed: 12,
+      currentBeatIndex: 2,
+      currentTime: 1.2,
+      lastJumped: false,
+      lastJumpTime: null,
+      lastJumpFromIndex: null,
+      lastJumpToIndex: null,
+      currentThreshold: 20,
+      lastBranchPoint: 1,
+      curRandomBranchChance: 0.2,
+    });
+    unsubscribe();
+
+    expect(context.jukebox.update).toHaveBeenCalledWith(2, false, 2);
+    expect(storeListener).not.toHaveBeenCalled();
+  });
 });
 
 describe("playback branch shortcuts", () => {
@@ -2276,6 +2329,25 @@ describe("playback branch shortcuts", () => {
     expect(context.engine.setForceBranch).toHaveBeenLastCalledWith(false);
   });
 
+  it("clears the selection when A unpins a branch the tuning filters out", () => {
+    const context = createContext();
+    const edge = { id: 7, deleted: false, src: { which: 12 }, dest: { which: 4 } };
+    context.engine.setUserAnchorEdge(edge as Parameters<AppContext["engine"]["setUserAnchorEdge"]>[0]);
+    useAppStore.setState({
+      playMode: "jukebox",
+      deleteConfirmOpen: false,
+      selectedEdge: edge as never,
+    });
+    const { handlers } = makeHandlers(context);
+
+    handlers.handleKeydown(keyEvent("a"));
+
+    expect(context.engine.setUserAnchorEdge).toHaveBeenLastCalledWith(null);
+    expect(useAppStore.getState().selectedEdge).toBeNull();
+    expect(context.jukebox.setSelectedEdge).toHaveBeenLastCalledWith(null);
+    expect(context.jukebox.setSelectedEdgeActive).not.toHaveBeenCalled();
+  });
+
   it("reports Bring It Home turned on by hotkey, and not turned off", () => {
     const context = createContext();
     useAppStore.setState({ playMode: "jukebox", deleteConfirmOpen: false, bringItHomeMode: false });
@@ -2294,15 +2366,17 @@ describe("playback branch shortcuts", () => {
 describe("playback loading", () => {
   function createLoadDeps() {
     return {
-      setActiveTab: vi.fn(),
-      navigateToTab: vi.fn(),
-      updateTrackUrl: vi.fn(),
-      setAnalysisStatus: vi.fn(),
-      setLoadingStep: vi.fn(),
       onTrackChange: vi.fn(),
       onPlaylistChange: vi.fn(),
     };
   }
+
+  const setActiveTab = vi.fn();
+  const navigateToTrackWithState = vi.fn();
+
+  beforeEach(() => {
+    useAppStore.setState({ setActiveTab, navigateToTrackWithState });
+  });
 
   it("loads bare track ids as YouTube sources", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2326,7 +2400,10 @@ describe("playback loading", () => {
     expect(useAppStore.getState().lastJobId).toBe(jobId);
     expect(useAppStore.getState().lastSourceProvider).toBe("youtube");
     expect(deps.onTrackChange).toHaveBeenCalledWith(jobId);
-    expect(deps.updateTrackUrl).toHaveBeenCalledWith(jobId, true);
+    expect(navigateToTrackWithState).toHaveBeenCalledWith(
+      jobId,
+      expect.objectContaining({ replace: true }),
+    );
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
       "/api/jobs/by-source/youtube/abc123def45",
     );
@@ -2343,8 +2420,8 @@ describe("playback loading", () => {
     expect(useAppStore.getState().lastTrackId).toBe(jobId);
     expect(useAppStore.getState().lastJobId).toBe(jobId);
     expect(useAppStore.getState().lastSourceProvider).toBeNull();
-    expect(deps.setActiveTab).toHaveBeenCalledTimes(1);
-    expect(deps.setActiveTab).toHaveBeenCalledWith("play");
+    expect(setActiveTab).toHaveBeenCalledTimes(1);
+    expect(setActiveTab).toHaveBeenCalledWith("play");
     expect(deps.onTrackChange).toHaveBeenCalledWith(jobId);
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toBe(
       `/api/analysis/${jobId}`,
@@ -2400,7 +2477,8 @@ describe("playback loading", () => {
     );
     expect(fetchMock.mock.calls[2]?.[0]).toBe(`/api/analysis/${jobId}`);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(lastLocalizedCall(deps.setAnalysisStatus)).toEqual([
+    expect(lastLocalizedCall(setAnalysisStatus)).toEqual([
+      context,
       "SoundCloud fetch failed.",
     ]);
   });
@@ -2517,7 +2595,8 @@ describe("playback loading", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[0]).toBe(`/api/jobs/${jobId}/retry`);
-    expect(lastLocalizedCall(deps.setAnalysisStatus)).toEqual([
+    expect(lastLocalizedCall(setAnalysisStatus)).toEqual([
+      context,
       "No beats or downbeats were detected in this audio.",
     ]);
   });
@@ -2549,7 +2628,8 @@ describe("playback loading", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[0]).toBe(`/api/jobs/${jobId}/retry`);
-    expect(lastLocalizedCall(deps.setAnalysisStatus)).toEqual([
+    expect(lastLocalizedCall(setAnalysisStatus)).toEqual([
+      context,
       "Engine exited with status 1",
     ]);
   });
@@ -2847,11 +2927,12 @@ describe("playback loading", () => {
     expect(useAppStore.getState().audioLoaded).toBe(true);
     expect(useAppStore.getState().analysisLoaded).toBe(true);
     // Only a load that showed the analysis steps switches to their last step.
-    expect(deps.setLoadingStep).not.toHaveBeenCalledWith(
+    expect(setLoadingStep).not.toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({ task: "serverAnalysis", activeId: "track" }),
     );
     // finishing a load never switches tabs; only selection does
-    expect(deps.setActiveTab).not.toHaveBeenCalled();
+    expect(setActiveTab).not.toHaveBeenCalled();
   });
 
   it("shows a generic load error when polling returns missing analysis", async () => {
@@ -2865,7 +2946,8 @@ describe("playback loading", () => {
 
     await pollAnalysis(context, deps, "missing-job");
 
-    expect(localizedCalls(deps.setAnalysisStatus)).toContainEqual([
+    expect(localizedCalls(setAnalysisStatus)).toContainEqual([
+      context,
       "Something went wrong. Please try again or report an issue on GitHub.",
     ]);
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
@@ -2912,7 +2994,7 @@ describe("playback loading", () => {
     expect(context.player.decode).not.toHaveBeenCalled();
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
     expect(useAppStore.getState().audioLoaded).toBe(false);
-    expect(deps.setActiveTab).not.toHaveBeenCalledWith("play");
+    expect(setActiveTab).not.toHaveBeenCalledWith("play");
   });
 
   it("stops a poll iteration when a newer load supersedes it mid-await", async () => {
@@ -2945,7 +3027,7 @@ describe("playback loading", () => {
 
     // the stale iteration must not apply its analysis over the newer track
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
-    expect(deps.setActiveTab).not.toHaveBeenCalledWith("play");
+    expect(setActiveTab).not.toHaveBeenCalledWith("play");
   });
 
   it("exits silently when the poll is cancelled mid-request", async () => {
@@ -2961,7 +3043,7 @@ describe("playback loading", () => {
 
     await pollAnalysis(context, deps, "job-cancelled");
 
-    expect(deps.setAnalysisStatus).not.toHaveBeenCalled();
+    expect(setAnalysisStatus).not.toHaveBeenCalled();
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
     expect(useAppStore.getState().analysisPollInFlight).toBe(false);
   });
@@ -2983,7 +3065,8 @@ describe("playback loading", () => {
 
     await pollAnalysis(context, deps, "job-failed");
 
-    expect(localizedCalls(deps.setAnalysisStatus)).toContainEqual([
+    expect(localizedCalls(setAnalysisStatus)).toContainEqual([
+      context,
       "YouTube fetch failed.",
     ]);
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();

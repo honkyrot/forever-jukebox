@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AnalysisOutput } from "@/shared/analysis-schema";
+import type { AnalysisOutput } from "@/shared/analysis-schema/schema";
 import {
   buildJumpGraph,
   calculateMinLongBranch,
@@ -201,6 +201,41 @@ describe("planJukeboxPath", () => {
         (segment) => segment.beatIndex === anchorEdge.dest.which,
       ),
     ).toBe(true);
+  });
+
+  it("forces a pinned edge that the threshold filters out", () => {
+    const analysis = createAnalysis(48, 0.5);
+    const normalized = normalizeAnalysis(analysis);
+    const minLongBranch = calculateMinLongBranch(
+      normalized.beats.length,
+      baseConfig.minLongBranchPercent,
+    );
+    const pin = buildJumpGraph(normalized, { ...baseConfig, minLongBranch })
+      .allEdges.filter((edge) => edge.dest.which < edge.src.which)
+      .sort((a, b) => b.distance - a.distance)[0];
+    const config: JukeboxConfig = {
+      ...baseConfig,
+      currentThreshold: Math.max(1, Math.floor(pin.distance) - 1),
+    };
+    const filtered = buildJumpGraph(normalizeAnalysis(analysis), { ...config, minLongBranch });
+    const filteredPin = filtered.allEdges.find((edge) => edge.id === pin.id)!;
+    expect(filteredPin.src.neighbors.some((edge) => edge.id === pin.id)).toBe(false);
+
+    const planned = planJukeboxPath({
+      analysis,
+      bufferDurationSeconds: 24,
+      durationSeconds: 20,
+      config,
+      randomMode: "seeded",
+      seed: 5,
+      userAnchorEdge: { src: pin.src.which, dest: pin.dest.which },
+    });
+
+    const anchorJumps = planned.segments.filter(
+      (segment) => segment.jumped && segment.jumpFromIndex === pin.src.which,
+    );
+    expect(anchorJumps.length).toBeGreaterThan(0);
+    expect(anchorJumps.every((segment) => segment.beatIndex === pin.dest.which)).toBe(true);
   });
 
   it("forces a custom anchor pair that has no edge in the graph", () => {

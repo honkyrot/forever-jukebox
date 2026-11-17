@@ -14,7 +14,7 @@ import {
   saveTuning,
 } from "@/core/infrastructure/cache/tuningStore";
 import { AnalyzeAudioUseCase, AnalyzeStage } from "@/core/application/usecases/analyzeAudio";
-import { AnalysisOutput } from "@/shared/analysis-schema";
+import type { AnalysisOutput } from "@/shared/analysis-schema/schema";
 import {
   BufferedAudioPlayer,
   type JukeboxAudioMode,
@@ -32,6 +32,7 @@ import {
   renderInstrumentalBuffer,
 } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import {
+  countTuningBranches,
   DEFAULT_JUKEBOX_CONFIG,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
   Edge,
@@ -59,7 +60,8 @@ import { SymbolIcon } from "@/ui/components/SymbolIcon";
 import { useMarquee } from "./listen/useMarquee";
 import { useTranslation } from "react-i18next";
 import { applyTheme, resolveStoredTheme, type ThemeName } from "../theme";
-import type { PlayMode, TuningModalTab } from "./listen/types";
+import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
+import type { TuningModalTab } from "./listen/types";
 import {
   resolveAudioIntensityFromUrl,
   resolveAudioModeFromUrl,
@@ -115,6 +117,7 @@ import { StatusPanel, liveLoading, type PreparingPhase } from "./listen/StatusPa
 import { usePresentedLoading } from "@forever-jukebox/shared/ui/LoadingProgress";
 import { TuningModal } from "./listen/TuningModal";
 import { VizInfo } from "./listen/VizInfo";
+import { createPlaybackCounters } from "./listen/playbackCounters";
 import { VizTop } from "./listen/VizTop";
 import { VolumePopover } from "./listen/VolumePopover";
 import { useAudioExport } from "./listen/useAudioExport";
@@ -152,15 +155,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   const [isRunning, setIsRunning] = React.useState(false);
   const [isPaused, setIsPaused] = React.useState(false);
-  const [beatsPlayed, setBeatsPlayed] = React.useState(0);
-  const [listenSeconds, setListenSeconds] = React.useState(0);
-  const [autocanonizerMainSeconds, setAutocanonizerMainSeconds] =
-    React.useState(0);
-  const [autocanonizerOtherSeconds, setAutocanonizerOtherSeconds] =
-    React.useState(0);
+  const [counters] = React.useState(createPlaybackCounters);
   const [autocanonizerMainPan, setAutocanonizerMainPan] = React.useState(0);
   const [autocanonizerOtherPan, setAutocanonizerOtherPan] = React.useState(0);
-  const [wubMachineSeconds, setWubMachineSeconds] = React.useState(0);
   const [wubMachineDurationSeconds, setWubMachineDurationSeconds] =
     React.useState(0);
   const [loopTrack, setLoopTrack] = React.useState<boolean>(() =>
@@ -187,6 +184,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   );
   const [jukeboxAudioMode, setJukeboxAudioMode] =
     React.useState<JukeboxAudioMode>(initialAudioMode);
+  // Mirrors jukeboxAudioMode for async callbacks that outlive their render.
+  const jukeboxAudioModeRef = React.useRef<JukeboxAudioMode>(initialAudioMode);
   const [audioIntensity, setAudioIntensity] = React.useState(
     initialAudioIntensity,
   );
@@ -371,6 +370,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   function resetAudioModeToOff(player: BufferedAudioPlayer) {
     cowbellOverlayRef.current?.disable();
     stopPreparing();
+    jukeboxAudioModeRef.current = "off";
     setJukeboxAudioMode("off");
     setAudioIntensity(DEFAULT_AUDIO_MODE_INTENSITY);
     setExtrasForm((prev) =>
@@ -392,11 +392,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     lastPlayStampRef.current = null;
     lastBeatRef.current = null;
     lastCowbellBeatsPlayedRef.current = null;
-    setListenSeconds(0);
-    setBeatsPlayed(0);
-    setAutocanonizerMainSeconds(0);
-    setAutocanonizerOtherSeconds(0);
-    setWubMachineSeconds(0);
+    counters.set({
+      listenSeconds: 0,
+      beatsPlayed: 0,
+      autocanonizerMainSeconds: 0,
+      autocanonizerOtherSeconds: 0,
+      wubMachineSeconds: 0,
+    });
   }
 
   function clearSelectedBranch() {
@@ -487,10 +489,12 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     );
     autocanonizer.setVolume(playerRef.current?.getVolume() ?? 1);
     autocanonizer.setOnBeat((index, _beat, cursorTimes) => {
-      setBeatsPlayed(index + 1);
       lastBeatRef.current = index;
-      setAutocanonizerMainSeconds(cursorTimes.mainSeconds);
-      setAutocanonizerOtherSeconds(cursorTimes.otherSeconds);
+      counters.set({
+        beatsPlayed: index + 1,
+        autocanonizerMainSeconds: cursorTimes.mainSeconds,
+        autocanonizerOtherSeconds: cursorTimes.otherSeconds,
+      });
     });
     autocanonizer.setOnEnded(() => {
       if (!isRunningRef.current) {
@@ -509,10 +513,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     wubmachine.setLoop(loopTrack);
     wubmachine.setVolume(playerRef.current?.getVolume() ?? 1);
     wubmachine.setOnTick((seconds) => {
-      // Fires every frame; the display only changes once a second.
-      setWubMachineSeconds((prev) =>
-        prev === Math.floor(seconds) ? prev : Math.floor(seconds),
-      );
+      // Fires every frame; floored so subscribers run once a second.
+      counters.set({ wubMachineSeconds: Math.floor(seconds) });
     });
     wubmachine.setOnEnded(() => {
       if (!isRunningRef.current) {
@@ -682,14 +684,15 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         );
         initializeEngine(result.analysis);
         restoreSavedTuning(result.fingerprint);
-        if (jukeboxAudioMode === "cowbell") {
+        const audioMode = jukeboxAudioModeRef.current;
+        if (audioMode === "cowbell") {
           cowbellOverlayRef.current?.enable();
         }
-        if (jukeboxAudioMode === "swing") {
+        if (audioMode === "swing") {
           playerRef.current?.setJukeboxAudioMode("swing");
           maybePrepareSwingMode();
         }
-        if (jukeboxAudioMode === "instrumental") {
+        if (audioMode === "instrumental") {
           playerRef.current?.setJukeboxAudioMode("instrumental");
           maybePrepareInstrumentalMode();
         }
@@ -719,7 +722,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       const totalMs =
         playTimerMsRef.current +
         (lastPlayStampRef.current !== null ? now - lastPlayStampRef.current : 0);
-      setListenSeconds(totalMs / 1000);
+      counters.set({ listenSeconds: totalMs / 1000 });
     }, 200);
 
     return () => {
@@ -786,9 +789,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     playModeRef.current = mode;
     setPlayMode(mode);
-    setAutocanonizerMainSeconds(0);
-    setAutocanonizerOtherSeconds(0);
-    setWubMachineSeconds(0);
+    counters.set({
+      autocanonizerMainSeconds: 0,
+      autocanonizerOtherSeconds: 0,
+      wubMachineSeconds: 0,
+    });
     if (mode !== "jukebox") {
       setIsTuningOpen(false);
       setIsInfoOpen(false);
@@ -815,7 +820,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       engine.getSectionStartBeatIndices(),
     );
     engine.onUpdate((state) => {
-      setBeatsPlayed(state.beatsPlayed);
+      counters.set({ beatsPlayed: state.beatsPlayed });
       if (state.currentBeatIndex >= 0) {
         if (state.beatsPlayed !== lastCowbellBeatsPlayedRef.current) {
           lastCowbellBeatsPlayedRef.current = state.beatsPlayed;
@@ -1066,7 +1071,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           player.getContext(),
           render.parts,
         );
-        setWubMachineSeconds(0);
+        counters.set({ wubMachineSeconds: 0 });
         setWubMachineDurationSeconds(render.buffer.duration);
         setPreparingState(null, true);
       })
@@ -1110,7 +1115,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }
 
   function maybePrepareSwingMode() {
-    if (jukeboxAudioMode !== "swing" || !canPrepareSwingMode()) {
+    if (jukeboxAudioModeRef.current !== "swing" || !canPrepareSwingMode()) {
       return;
     }
     prepareSwingMode();
@@ -1195,7 +1200,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }
 
   function maybePrepareInstrumentalMode() {
-    if (jukeboxAudioMode !== "instrumental" || !canPrepareInstrumentalMode()) {
+    if (jukeboxAudioModeRef.current !== "instrumental" || !canPrepareInstrumentalMode()) {
       return;
     }
     prepareInstrumentalMode();
@@ -1523,8 +1528,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     const nextAnchor = engine.getUserAnchorEdgeId() === edge.id ? null : edge;
     engine.setUserAnchorEdge(nextAnchor);
-    syncVizDataFromEngine();
-    vizControllerRef.current?.setSelectedEdgeActive(edge);
+    const data = syncVizDataFromEngine();
+    // Unpinning a branch the tuning filters out removes it from the viz, so the selection is cleared.
+    if (data && !data.edges.includes(edge)) {
+      clearSelectedBranch();
+    } else {
+      vizControllerRef.current?.setSelectedEdgeActive(edge);
+    }
     persistCurrentTuning();
     showShortcutToast(
       nextAnchor ? t("listen.anchorSet") : t("listen.anchorReset"),
@@ -1620,6 +1630,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (!extrasForm.customAnchorEnabled) {
       customAnchor.exit();
     }
+    jukeboxAudioModeRef.current = nextAudioMode;
     setJukeboxAudioMode(nextAudioMode);
     setAudioIntensity(nextAudioIntensity);
     if (nextAudioMode === "cowbell") {
@@ -1769,10 +1780,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   const graph = engineRef.current?.getGraphState();
   const totalBeats = graph?.totalBeats ?? analysis?.beats.length ?? 0;
-  // The custom anchor's synthetic edge is drawn with the branches but is not one.
-  const totalBranches =
-    engineRef.current?.getVisualizationData()?.edges.filter((edge) => !isCustomAnchorEdge(edge))
-      .length ?? 0;
+  const vizDataForCount = engineRef.current?.getVisualizationData();
+  const totalBranches = vizDataForCount ? countTuningBranches(vizDataForCount) : 0;
   const deletedBranches = graph?.allEdges.filter((edge) => edge.deleted).length ?? 0;
   const vizCount = vizControllerRef.current?.getCount() ?? 1;
   const currentFileKey = file ? `${file.name}:${file.size}:${file.lastModified}` : null;
@@ -1979,14 +1988,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
               <VizInfo
                 vizTitleRef={vizTitleRef}
                 playMode={playMode}
-                autocanonizerMainSeconds={autocanonizerMainSeconds}
-                autocanonizerOtherSeconds={autocanonizerOtherSeconds}
-                wubMachineSeconds={wubMachineSeconds}
+                counters={counters}
                 wubMachineDurationSeconds={wubMachineDurationSeconds}
                 trackDurationSeconds={analysis?.track?.duration ?? 0}
-                listenSeconds={listenSeconds}
                 beatsLabel={beatsLabel}
-                beatsPlayed={beatsPlayed}
                 bringItHomeMode={bringItHomeMode}
               />
             </div>

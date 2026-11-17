@@ -53,11 +53,11 @@ describe("VizTop", () => {
   });
 
   it("falls back to the index for visualizations beyond the label list", async () => {
-    h.getCount.mockReturnValue(8);
+    h.getCount.mockReturnValue(9);
     render(<VizTop />);
-    await userEvent.selectOptions(document.getElementById("viz-select")!, "6");
+    await userEvent.selectOptions(document.getElementById("viz-select")!, "8");
 
-    expect(h.trackEvent).toHaveBeenCalledWith("select_viz", { viz: "6" });
+    expect(h.trackEvent).toHaveBeenCalledWith("select_viz", { viz: "8" });
   });
 
   it("does not report while the selector is disabled", async () => {
