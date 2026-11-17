@@ -1162,4 +1162,27 @@ describe("threshold auto resolution", () => {
     expect(second.computedThreshold).toBe(first.computedThreshold);
     expect(second.currentThreshold).toBe(first.currentThreshold);
   });
+
+  it("recomputes cached neighbors when maxBranches changes on the same analysis", () => {
+    const analysis = normalizeAnalysis(longBranchDensityAnalysis(96));
+    const small = buildJumpGraph(
+      analysis,
+      defaultConfig({ maxBranches: 2, currentThreshold: 80 }),
+    );
+    expect(small.allEdges.length).toBe(192);
+
+    const expanded = buildJumpGraph(
+      analysis,
+      defaultConfig({ maxBranches: 6, currentThreshold: 80 }),
+    );
+    expect(expanded.allEdges.length).toBe(576);
+    expect(Math.max(...analysis.beats.map((beat) => beat.allNeighbors.length))).toBe(6);
+
+    const reduced = buildJumpGraph(
+      analysis,
+      defaultConfig({ maxBranches: 2, currentThreshold: 80 }),
+    );
+    expect(reduced.allEdges.length).toBe(192);
+    expect(Math.max(...analysis.beats.map((beat) => beat.allNeighbors.length))).toBe(2);
+  });
 });

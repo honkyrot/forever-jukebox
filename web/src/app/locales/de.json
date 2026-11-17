@@ -316,7 +316,10 @@
     "audioIntensity": "Intensität",
     "playbackStyles": "Wiedergabestile",
     "remixToys": "Remix-Spielzeuge",
-    "customAnchor": "Editor für eigenen Anker"
+    "customAnchor": "Editor für eigenen Anker",
+    "advanced": "Erweitert",
+    "maxBranches": "Max. Zweige pro Beat:",
+    "maxBranchesHint": "Maximale Anzahl ausgehender Zweige pro Beat (1–32). Wird nicht in Teilen-Links gespeichert."
   },
   "settings": {
     "title": "Einstellungen",

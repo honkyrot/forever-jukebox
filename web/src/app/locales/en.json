@@ -316,7 +316,10 @@
     "audioIntensity": "Intensity",
     "playbackStyles": "Playback Styles",
     "remixToys": "Remix Toys",
-    "customAnchor": "Custom anchor editor"
+    "customAnchor": "Custom anchor editor",
+    "advanced": "Advanced",
+    "maxBranches": "Max Branches per Beat:",
+    "maxBranchesHint": "Maximum number of outgoing branches each beat can keep (1-128). Not saved in share links."
   },
   "settings": {
     "title": "Settings",

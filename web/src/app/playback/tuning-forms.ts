@@ -14,6 +14,7 @@ import {
 } from "../tuning";
 import { clearModeLoadingStep, showToast } from "../ui";
 import {
+  clampMaxBranches,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
   hasNonDefaultTuning as engineHasNonDefaultTuning,
 } from "@forever-jukebox/shared";
@@ -276,6 +277,7 @@ export function resetExtrasDefaults(context: AppContext) {
 export type TuningFormValues = {
   threshold: number;
   computedThreshold: number | null;
+  maxBranches: number;
   minProbPct: number;
   maxProbPct: number;
   rampPct: number;
@@ -304,6 +306,7 @@ export function getTuningFormValues(context: AppContext): TuningFormValues {
   return {
     threshold: thresholdValue,
     computedThreshold: computedValue,
+    maxBranches: config.maxBranches,
     minProbPct: Math.round(config.minRandomBranchChance * 100),
     maxProbPct: Math.round(config.maxRandomBranchChance * 100),
     rampPct:
@@ -328,6 +331,9 @@ export function changedTuningControls(
   const controls: string[] = [];
   if (previous.threshold !== next.threshold) {
     controls.push("threshold");
+  }
+  if (previous.maxBranches !== next.maxBranches) {
+    controls.push("maxBranches");
   }
   if (
     previous.minProbPct !== next.minProbPct ||
@@ -372,7 +378,9 @@ export function applyTuningChanges(
   if (minProb > maxProb) {
     [minProb, maxProb] = [maxProb, minProb];
   }
+  const maxBranches = clampMaxBranches(form.maxBranches);
   engine.updateConfig({
+    maxBranches,
     currentThreshold: useAutoThreshold ? 0 : threshold,
     minRandomBranchChance: minProb,
     maxRandomBranchChance: maxProb,
@@ -413,6 +421,7 @@ export function applyTuningChanges(
   writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
   return {
     ...form,
+    maxBranches,
     threshold: nextThreshold,
     computedThreshold: nextComputed,
     minProbPct: Math.round(minProb * 100),

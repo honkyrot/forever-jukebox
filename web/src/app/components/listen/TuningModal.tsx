@@ -1,5 +1,9 @@
 import { useLayoutEffect, useState } from "react";
-import { hasNonDefaultExtras } from "@forever-jukebox/shared";
+import {
+  hasNonDefaultExtras,
+  MAX_MAX_BRANCHES,
+  MIN_MAX_BRANCHES,
+} from "@forever-jukebox/shared";
 import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import type {
   VisualEffectMode,
@@ -591,6 +595,23 @@ export function TuningModal() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div id="tuning-panel-advanced" className="tuning-advanced-section">
+          <h3>{t("tuning.advanced")}</h3>
+          <RangeRow
+            id="max-branches"
+            label={t("tuning.maxBranches")}
+            valueText={`${form?.maxBranches ?? 4}`}
+            min={MIN_MAX_BRANCHES}
+            max={MAX_MAX_BRANCHES}
+            step={1}
+            value={form?.maxBranches ?? 4}
+            onChange={(value) => setFormField("maxBranches", value)}
+            hint={
+              <div className="hint">{t("tuning.maxBranchesHint")}</div>
+            }
+          />
         </div>
       </div>
     </Modal>

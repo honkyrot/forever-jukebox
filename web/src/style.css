@@ -782,13 +782,15 @@ button.is-loading::after {
   margin-top: 4px;
 }
 
-.tuning-visuals-section {
+.tuning-visuals-section,
+.tuning-advanced-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
 .tuning-visuals-section h3,
+.tuning-advanced-section h3,
 #tuning-panel-extras h3 {
   margin: 0;
   font-size: 16px;

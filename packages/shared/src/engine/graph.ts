@@ -24,6 +24,16 @@ export const DEFAULT_MIN_LONG_BRANCH_PERCENT = 20;
 // convention rather than by construction.
 export const MIN_THRESHOLD = 2;
 export const MAX_THRESHOLD = 80;
+export const MIN_MAX_BRANCHES = 1;
+export const MAX_MAX_BRANCHES = 128;
+
+// Clamps maxBranches to a valid integer in [MIN_MAX_BRANCHES, MAX_MAX_BRANCHES].
+export function clampMaxBranches(raw: number): number {
+  if (!Number.isFinite(raw)) {
+    return 4;
+  }
+  return Math.max(MIN_MAX_BRANCHES, Math.min(MAX_MAX_BRANCHES, Math.round(raw)));
+}
 
 // Reads a pinned threshold from a URL param or a stored config value. Auto is
 // the ground state, so anything that is not a usable pin — missing, unparseable,
@@ -174,6 +184,11 @@ function calculateNearestNeighborsForQuantum(
   }
 }
 
+const cachedNeighborParams = new WeakMap<
+  QuantumBase[],
+  { maxNeighbors: number; maxThreshold: number }
+>();
+
 function precalculateNearestNeighbors(
   quanta: QuantumBase[],
   maxNeighbors: number,
@@ -183,7 +198,15 @@ function precalculateNearestNeighbors(
   if (quanta.length === 0) {
     return;
   }
-  if (quanta[0].allNeighbors.length > 0) {
+  const cached = cachedNeighborParams.get(quanta);
+  // Reuse precalculated neighbors when they were manually seeded (no cache entry)
+  // or when the neighbor cap and distance ceiling still match.
+  const canReuseCached =
+    quanta[0].allNeighbors.length > 0 &&
+    (!cached ||
+      (cached.maxNeighbors === maxNeighbors &&
+        cached.maxThreshold === maxThreshold));
+  if (canReuseCached) {
     allEdges.length = 0;
     for (const q of quanta) {
       for (const edge of q.allNeighbors) {
@@ -202,6 +225,7 @@ function precalculateNearestNeighbors(
       allEdges,
     );
   }
+  cachedNeighborParams.set(quanta, { maxNeighbors, maxThreshold });
 }
 
 function extractNearestNeighbors(
@@ -1073,7 +1097,7 @@ export function buildJumpGraph(
   const allEdges: Edge[] = [];
   precalculateNearestNeighbors(
     quanta,
-    config.maxBranches,
+    clampMaxBranches(config.maxBranches),
     config.maxBranchThreshold,
     allEdges,
   );

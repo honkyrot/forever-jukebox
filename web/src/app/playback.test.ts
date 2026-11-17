@@ -347,6 +347,7 @@ describe("changedTuningControls", () => {
   const base: TuningFormValues = {
     threshold: 45,
     computedThreshold: 45,
+    maxBranches: 4,
     minProbPct: 18,
     maxProbPct: 50,
     rampPct: 10,
@@ -448,6 +449,19 @@ describe("playback tuning", () => {
     );
     expect(result.threshold).toBe(45);
     expect(useAppStore.getState().tuningModalOpen).toBe(true);
+  });
+
+  it("applies maxBranches to engine config without persisting it to URL params", () => {
+    const context = createContext();
+    applyTuningChanges(
+      context,
+      formValues(context, { threshold: 30, maxBranches: 12 }),
+    );
+
+    expect(context.engine.updateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ maxBranches: 12 }),
+    );
+    expect(useAppStore.getState().tuningParams).toBeNull();
   });
 
   it("returns the threshold to auto when it is set back to the computed value", () => {

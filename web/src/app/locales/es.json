@@ -316,7 +316,10 @@
     "audioIntensity": "Intensidad",
     "playbackStyles": "Estilos de reproducción",
     "remixToys": "Herramientas de remix",
-    "customAnchor": "Editor de ancla personalizada"
+    "customAnchor": "Editor de ancla personalizada",
+    "advanced": "Avanzado",
+    "maxBranches": "Máx. de ramas por pulso:",
+    "maxBranchesHint": "Número máximo de ramas salientes que puede conservar cada pulso (1–32). No se guarda en enlaces compartidos."
   },
   "settings": {
     "title": "Configuración",

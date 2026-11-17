@@ -48,6 +48,7 @@ vi.mock("../../runtime", () => ({
 const TUNING_FORM: TuningFormValues = {
   threshold: 45,
   computedThreshold: 45,
+  maxBranches: 4,
   minProbPct: 18,
   maxProbPct: 50,
   rampPct: 10,
@@ -145,6 +146,27 @@ describe("TuningModal", () => {
     expect(applyTuningChanges).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ minLongBranchPercent: 20 }),
+    );
+  });
+
+  it("renders the Advanced max-branches slider (1-32) and applies changes", () => {
+    render(<TuningModal />);
+    act(() => {
+      useAppStore.setState({ tuningModalOpen: true });
+    });
+
+    const section = document.getElementById("tuning-panel-advanced");
+    expect(section).not.toBeNull();
+    const slider = document.getElementById("max-branches") as HTMLInputElement;
+    expect(slider).not.toBeNull();
+    expect(slider.min).toBe("1");
+    expect(slider.max).toBe("32");
+    expect(document.getElementById("max-branches-val")?.textContent).toBe("4");
+
+    fireEvent.change(slider, { target: { value: "16" } });
+    expect(applyTuningChanges).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ maxBranches: 16 }),
     );
   });
 

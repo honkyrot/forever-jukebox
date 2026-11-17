@@ -8,6 +8,7 @@ export function hasNonDefaultTuningConfig(
   defaults: JukeboxConfig = DEFAULT_JUKEBOX_CONFIG,
 ): boolean {
   return (
+    config.maxBranches !== defaults.maxBranches ||
     config.currentThreshold !== defaults.currentThreshold ||
     config.justBackwards !== defaults.justBackwards ||
     config.justLongBranches !== defaults.justLongBranches ||
