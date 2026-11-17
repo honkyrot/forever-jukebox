@@ -9,6 +9,12 @@ also includes an installable offline PWA.
 It replaces reliance on the deprecated Spotify Audio Analysis engine by
 generating similar beat/segment/section data locally.
 
+### Fork Notes
+
+This fork adds and changes some features in this project.
+- moved the tuning modal around.
+- extra features for the tuning modal.
+
 ## Structure
 
 - `engine/` — the Forever Jukebox audio analysis engine.
