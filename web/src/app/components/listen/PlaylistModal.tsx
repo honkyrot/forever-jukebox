@@ -7,6 +7,8 @@ import {
   type PointerEvent,
 } from "react";
 import { useAppStore } from "../../store";
+import { disableMultiTrackMix, loadMultiTrackMix } from "../../playback";
+import { getAppContext } from "../../runtime";
 import {
   clearPlaylist,
   movePlaylistIndex,
@@ -56,6 +58,8 @@ export function PlaylistModal() {
   const { t } = useTranslation();
   const open = useAppStore((s) => s.playlistModalOpen);
   const playlist = useAppStore((s) => s.playlist);
+  const playMode = useAppStore((s) => s.playMode);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const close = () => useAppStore.setState({ playlistModalOpen: false });
   const isEmpty = playlist.tracks.length === 0;
   const canReorder = playlist.tracks.length > 1;
@@ -337,6 +341,24 @@ export function PlaylistModal() {
         </div>
       </div>
       <div className="modal-footer">
+        {playMode === "jukebox" &&
+        (playlist.tracks.length >= 2 || multiTrackEnabled) ? (
+          <button
+            id="playlist-mix-toggle"
+            type="button"
+            onClick={() => {
+              close();
+              const ctx = getAppContext();
+              if (multiTrackEnabled) {
+                void disableMultiTrackMix(ctx);
+              } else {
+                void loadMultiTrackMix(ctx);
+              }
+            }}
+          >
+            {multiTrackEnabled ? "Unmix Songs" : "Mix Songs"}
+          </button>
+        ) : null}
         <button
           id="playlist-clear"
           type="button"

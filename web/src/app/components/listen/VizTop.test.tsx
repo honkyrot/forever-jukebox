@@ -31,11 +31,15 @@ describe("VizTop", () => {
     h.getCount.mockReturnValue(6);
     act(() => {
       useAppStore.setState({
+        activeTabId: "play",
         playMode: "jukebox",
         activeVizIndex: 1,
         audioLoaded: true,
         analysisLoaded: true,
         audioModePreparing: false,
+        multiTrackEnabled: false,
+        playlistAddSticky: false,
+        playlist: { tracks: [], currentIndex: -1 },
       });
     });
   });
@@ -69,5 +73,16 @@ describe("VizTop", () => {
 
     expect(select.disabled).toBe(true);
     expect(h.trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("sends the user to the tracks list with sticky add mode when Mix Songs is clicked with 1 track", async () => {
+    render(<VizTop />);
+    const mixBtn = document.getElementById("multi-track-mix-toggle");
+    expect(mixBtn).not.toBeNull();
+
+    await userEvent.click(mixBtn!);
+
+    expect(useAppStore.getState().playlistAddSticky).toBe(true);
+    expect(useAppStore.getState().activeTabId).toBe("top");
   });
 });

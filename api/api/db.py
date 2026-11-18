@@ -855,6 +855,7 @@ def get_top_tracks(
     exclude_top_n: int | None = None,
     sort_by: str | None = None,
     min_play_count: int | None = None,
+    search_query: str | None = None,
 ) -> list[dict]:
     cutoff: str | None = None
     if touched_within_days is not None:
@@ -876,6 +877,12 @@ def get_top_tracks(
         if min_play_count is not None:
             where_parts.append("s.play_count >= ?")
             params.append(max(1, int(min_play_count)))
+        if search_query and search_query.strip():
+            pattern = f"%{search_query.strip().lower()}%"
+            where_parts.append(
+                "(LOWER(COALESCE(s.track_title, '')) LIKE ? OR LOWER(COALESCE(s.track_artist, '')) LIKE ?)"
+            )
+            params.extend([pattern, pattern])
 
         if excluded_refs:
             placeholders = ",".join("?" for _ in excluded_refs)

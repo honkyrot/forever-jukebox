@@ -1431,6 +1431,13 @@ body.playlist-add-enabled .favorite-row:focus-within .playlist-add-button {
   pointer-events: auto;
 }
 
+body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
+  opacity: 1;
+  pointer-events: auto;
+  background: var(--surface-control);
+  color: var(--text);
+}
+
 .playlist-add-button:hover {
   background: var(--surface-control);
   color: var(--text);

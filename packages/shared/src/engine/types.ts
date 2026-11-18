@@ -6,11 +6,26 @@ export interface TrackMeta {
   time_signature?: number;
 }
 
+export interface TrackSliceMeta {
+  trackIndex: number;
+  title?: string;
+  artist?: string;
+  duration: number;
+  tempo?: number;
+  tempoRatio: number;
+  startTimeOffset: number;
+  startBeatIndex: number;
+  beatCount: number;
+}
+
 export interface QuantumBase {
   start: number;
   duration: number;
   confidence?: number;
   which: number;
+  trackIndex?: number;
+  localWhich?: number;
+  trackBeatCount?: number;
   prev: QuantumBase | null;
   next: QuantumBase | null;
   parent?: QuantumBase;
@@ -50,6 +65,7 @@ export interface TrackAnalysis {
   tatums: QuantumBase[];
   segments: Segment[];
   track?: TrackMeta;
+  tracks?: TrackSliceMeta[];
 }
 
 export interface JukeboxConfig {
@@ -64,6 +80,9 @@ export interface JukeboxConfig {
   randomBranchChanceDelta: number;
   minLongBranch: number;
   minLongBranchPercent?: number;
+  maxLongBranch?: number;
+  maxLongBranchPercent?: number;
+  crossTrackOnly?: boolean;
 }
 
 export interface JukeboxGraphState {

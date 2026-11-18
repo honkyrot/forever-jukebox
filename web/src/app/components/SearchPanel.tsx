@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
 import { formatTrackDuration } from "../format";
+import { addToPlaylist } from "../playlist-actions";
 import { selectSpotify, selectYoutube, submitSearch } from "../search";
 import { useAppStore } from "../store";
+import { blurMouseActivatedControl } from "../ui";
 import { uploadFile, uploadUrl } from "../upload";
 import { useTranslation } from "react-i18next";
 import { Modal, ModalHeader } from "./Modal";
@@ -104,6 +106,7 @@ function ResultThumbnail({ src }: { src: string | null | undefined }) {
 function SearchResults() {
   const { t } = useTranslation();
   const results = useAppStore((s) => s.searchResults);
+  const canAddToPlaylist = useAppStore((s) => s.audioLoaded && s.analysisLoaded);
   const [youtubePreview, setYoutubePreview] = useState<{
     youtubeId: string;
     title: string;
@@ -198,6 +201,38 @@ function SearchResults() {
                   <strong>{title}</strong>
                   <span>{formatTrackDuration(item.duration)}</span>
                 </button>
+                {youtubeId && canAddToPlaylist ? (
+                  <button
+                    type="button"
+                    className="playlist-add-button"
+                    title={t("playlist.add")}
+                    aria-label={t("playlist.addNamed", {
+                      title: name || title || t("common.track"),
+                    })}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      addToPlaylist(
+                        {
+                          id: youtubeId,
+                          sourceType: "youtube",
+                          title: name || title,
+                          artist,
+                          duration: ytDuration || null,
+                        },
+                        "search",
+                      );
+                      blurMouseActivatedControl(event.nativeEvent);
+                    }}
+                  >
+                    <span
+                      className="material-symbols-outlined playlist-add-icon"
+                      aria-hidden="true"
+                    >
+                      add_circle
+                    </span>
+                  </button>
+                ) : null}
               </div>
             </li>
           );

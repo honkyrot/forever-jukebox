@@ -315,6 +315,7 @@ export async function fetchTopSongs(
   limit: number,
   sortBy?: string,
   offset = 0,
+  query?: string,
 ) {
   let url = `/api/top?limit=${encodeURIComponent(limit)}`;
   if (offset > 0) {
@@ -322,6 +323,9 @@ export async function fetchTopSongs(
   }
   if (sortBy) {
     url += `&sort_by=${encodeURIComponent(sortBy)}`;
+  }
+  if (query && query.trim()) {
+    url += `&q=${encodeURIComponent(query.trim())}`;
   }
   const data = await fetchJson(url);
   return Array.isArray(data?.items) ? (data.items as TopSongItem[]) : [];

@@ -709,12 +709,14 @@ def get_top_songs(
     limit: int = Query(10, ge=1, le=50),
     offset: int = Query(0, ge=0),
     sort_by: str | None = Query(None, description="Sort field for all-time tracks"),
+    q: str | None = Query(None, description="Search query for track title or artist"),
 ) -> JSONResponse:
     items = get_top_tracks(
         DB_PATH,
         limit=limit,
         offset=offset,
         sort_by=sort_by,
+        search_query=q,
     )
     payload = TopSongsResponse(items=items)
     return JSONResponse(payload.model_dump(), status_code=200)

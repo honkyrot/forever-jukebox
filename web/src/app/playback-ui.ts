@@ -82,6 +82,46 @@ function branchDirection(edge: Edge) {
   return i18n.t("playback.sameBeat");
 }
 
+/**
+ * Resolves the current cursor second and total duration for display.
+ * In multi-track mode, translates concatenated buffer time into the active
+ * track slice's local time and duration.
+ */
+function resolvePlaybackCursorTiming(
+  rawSeconds: number,
+  currentBeatIndex: number,
+): { currentSeconds: number; durationSec: number | null } {
+  const { vizData, trackDurationSec } = useAppStore.getState();
+  const tracks = vizData?.tracks;
+  if (!tracks || tracks.length < 2) {
+    return {
+      currentSeconds: Math.floor(Math.max(0, rawSeconds)),
+      durationSec: trackDurationSec,
+    };
+  }
+  const beatTrackIndex =
+    currentBeatIndex >= 0 ? vizData.beats[currentBeatIndex]?.trackIndex : undefined;
+  let slice =
+    beatTrackIndex !== undefined ? tracks[beatTrackIndex] : undefined;
+  if (!slice) {
+    // Fall back to the latest track slice whose offset precedes rawSeconds.
+    slice = tracks[0];
+    for (const candidate of tracks) {
+      if (candidate.startTimeOffset <= rawSeconds) {
+        slice = candidate;
+      }
+    }
+  }
+  const localSeconds = Math.max(
+    0,
+    Math.min(slice.duration, rawSeconds - slice.startTimeOffset),
+  );
+  return {
+    currentSeconds: Math.floor(localSeconds),
+    durationSec: slice.duration,
+  };
+}
+
 function syncExtrasPopup(edge: Edge | null) {
     const context = getAttachedAppContext();
     if (!context) {
@@ -96,8 +136,19 @@ function syncExtrasPopup(edge: Edge | null) {
       useAppStore.setState({ branchStats: null });
       return;
     }
-    const startSeconds = Math.max(0, edge.src.start);
-    const endSeconds = Math.max(0, edge.dest.start);
+    // Subtract each endpoint track's timeline offset in multi-track mixes so
+    // Branch Stats displays local song timestamps rather than buffer offsets.
+    const tracks = useAppStore.getState().vizData?.tracks;
+    const srcOffset =
+      edge.src.trackIndex !== undefined
+        ? (tracks?.[edge.src.trackIndex]?.startTimeOffset ?? 0)
+        : 0;
+    const destOffset =
+      edge.dest.trackIndex !== undefined
+        ? (tracks?.[edge.dest.trackIndex]?.startTimeOffset ?? 0)
+        : 0;
+    const startSeconds = Math.max(0, edge.src.start - srcOffset);
+    const endSeconds = Math.max(0, edge.dest.start - destOffset);
     const startDisplaySeconds = Math.floor(startSeconds);
     const endDisplaySeconds = Math.floor(endSeconds);
     const maxDistance = Math.max(1, engine.getConfig().maxBranchThreshold);
@@ -263,17 +314,23 @@ export function initializePlayback(): void {
       // every tick.
       const beatsPlayedText = `${engineState.beatsPlayed}`;
       const branchChanceText = `${Math.round(engineState.curRandomBranchChance * 100)}%`;
-      const jukeboxCurrentSeconds = Math.floor(context.player.getCurrentTime() || 0);
+      const { currentSeconds: jukeboxCurrentSeconds, durationSec } =
+        resolvePlaybackCursorTiming(
+          context.player.getCurrentTime() || 0,
+          engineState.currentBeatIndex,
+        );
       const prev = useAppStore.getState();
       if (
         prev.beatsPlayedText !== beatsPlayedText ||
         prev.branchChanceText !== branchChanceText ||
-        prev.jukeboxCurrentSeconds !== jukeboxCurrentSeconds
+        prev.jukeboxCurrentSeconds !== jukeboxCurrentSeconds ||
+        prev.trackDurationSec !== durationSec
       ) {
         useAppStore.setState({
           beatsPlayedText,
           branchChanceText,
           jukeboxCurrentSeconds,
+          trackDurationSec: durationSec,
         });
       }
       if (engineState.currentBeatIndex >= 0) {
@@ -619,6 +676,12 @@ export function handleBeatSelect(index: number): void {
       return;
     }
     startJukeboxFromBeat(context, index);
+    const { currentSeconds: jukeboxCurrentSeconds, durationSec } =
+      resolvePlaybackCursorTiming(beat.start, index);
+    useAppStore.setState({
+      jukeboxCurrentSeconds,
+      trackDurationSec: durationSec,
+    });
     jukebox.update(index, true, null);
   }
 

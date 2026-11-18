@@ -19,7 +19,14 @@ export type AppState = {
   activeTabId: TabId;
   activeVizIndex: number;
   playMode: PlayMode;
-  topSongsTab: "top" | "trending" | "all-time" | "recent" | "reported" | "favorites";
+  topSongsTab:
+    | "top"
+    | "trending"
+    | "all-time"
+    | "recent"
+    | "search"
+    | "reported"
+    | "favorites";
   searchTab: "search" | "upload";
   favorites: FavoriteTrack[];
   playlist: PlaylistState;
@@ -66,6 +73,12 @@ export type AppState = {
   deletedEdgeIds: number[];
   highlightAnchorBranch: boolean;
   customAnchorEnabled: boolean;
+  multiTrackEnabled: boolean;
+  crossTrackOnly: boolean;
+  tempoSyncEnabled: boolean;
+  normalizeVolumeEnabled: boolean;
+  mixTrackGainsPct: number[];
+  playlistAddSticky: boolean;
 };
 
 export type SleepTimerState = {

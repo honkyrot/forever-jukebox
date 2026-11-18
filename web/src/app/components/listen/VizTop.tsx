@@ -6,6 +6,11 @@ import {
 } from "../../constants";
 import { trackEvent } from "../../analytics";
 import { getAppContext } from "../../runtime";
+import {
+  disableMultiTrackMix,
+  loadMultiTrackMix,
+} from "../../playback";
+import { showToast } from "../../ui";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import { useAppStore } from "../../store";
 import {
@@ -43,6 +48,8 @@ export function VizTop() {
   const analysisLoaded = useAppStore((s) => s.analysisLoaded);
   const audioModePreparing = useAppStore((s) => s.audioModePreparing);
   const anchorEditing = useAppStore((s) => s.customAnchorEdit !== null);
+  const playlistCount = useAppStore((s) => s.playlist.tracks.length);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const [finishOutSong, setFinishOutSong] = useState(
     () => localStorage.getItem(CANONIZER_FINISH_KEY) === "true",
   );
@@ -90,6 +97,35 @@ export function VizTop() {
           </span>
         </label>
         <CustomAnchorButton />
+        {playMode === "jukebox" &&
+        ((audioLoaded && analysisLoaded) || multiTrackEnabled) ? (
+          <button
+            type="button"
+            id="multi-track-mix-toggle"
+            className={
+              multiTrackEnabled
+                ? "custom-anchor-button is-active"
+                : "custom-anchor-button"
+            }
+            onClick={() => {
+              const ctx = getAppContext();
+              if (multiTrackEnabled) {
+                void disableMultiTrackMix(ctx);
+                return;
+              }
+              if (playlistCount >= 2) {
+                useAppStore.setState({ playlistAddSticky: false });
+                void loadMultiTrackMix(ctx);
+                return;
+              }
+              useAppStore.setState({ playlistAddSticky: true });
+              useAppStore.getState().selectTab("top");
+              showToast("Click + on a song to add it to your mix");
+            }}
+          >
+            {multiTrackEnabled ? "Unmix Songs" : "Mix Songs"}
+          </button>
+        ) : null}
       </div>
       <div className="viz-controls">
         <label className="viz-select-group" htmlFor="viz-select">

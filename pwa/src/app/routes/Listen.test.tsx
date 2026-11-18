@@ -351,7 +351,7 @@ vi.mock("@forever-jukebox/shared", async (importOriginal) => ({
   JukeboxEngine: class JukeboxEngine {
     private updateListener: ((state: any) => void) | null = null;
     private config = {
-      maxBranches: 4,
+      maxBranches: 8,
       maxBranchThreshold: 80,
       currentThreshold: 0,
       justBackwards: false,

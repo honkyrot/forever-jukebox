@@ -14,6 +14,7 @@ generating similar beat/segment/section data locally.
 This fork adds and changes some features in this project.
 - moved the tuning modal around.
 - extra features for the tuning modal.
+- adds a mix songs feature to connect multiple songs together.
 
 ## Structure
 

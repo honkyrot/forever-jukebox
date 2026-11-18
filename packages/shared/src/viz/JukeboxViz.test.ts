@@ -903,4 +903,82 @@ describe("JukeboxViz", () => {
       expect((viz as any).activeViz.anchorEdit).toEqual({ src: 20, dest: 5, active: "dest" });
     });
   });
+
+  describe("multi-track line visualization", () => {
+    it("switches to stacked horizontal lanes for 2+ tracks and reverts for 1 track", () => {
+      const viz = new JukeboxViz(createContainer(), { initialIndex: 1 });
+      const beats = Array.from({ length: 6 }, (_, i) => {
+        const trackIndex = i < 3 ? 0 : 1;
+        return {
+          which: i,
+          trackIndex,
+          localWhich: i % 3,
+          trackBeatCount: 3,
+          start: i,
+          duration: 1,
+          prev: null,
+          next: null,
+          overlappingSegments: [],
+          neighbors: [],
+          allNeighbors: [],
+        };
+      });
+      viz.setData({
+        beats: beats as any,
+        beatVisits: new Array(6).fill(0),
+        beatColors: new Array(6).fill("#fff"),
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+        putBackAnchorEdgeId: null,
+        tracks: [
+          {
+            trackIndex: 0,
+            title: "Song A",
+            duration: 3,
+            tempo: 120,
+            tempoRatio: 1,
+            startTimeOffset: 0,
+            startBeatIndex: 0,
+            beatCount: 3,
+          },
+          {
+            trackIndex: 1,
+            title: "Song B",
+            duration: 3,
+            tempo: 120,
+            tempoRatio: 1,
+            startTimeOffset: 3,
+            startBeatIndex: 3,
+            beatCount: 3,
+          },
+        ],
+      });
+
+      const positions = (viz as any).activeViz.positions as Array<{
+        x: number;
+        y: number;
+      }>;
+      expect((viz as any).multiTrackMode).toBe(true);
+      expect(positions).toHaveLength(6);
+      expect(positions[0].y).toBe(positions[1].y);
+      expect(positions[3].y).toBe(positions[4].y);
+      expect(positions[3].y).toBeGreaterThan(positions[0].y);
+      expect(positions[1].x).toBeGreaterThan(positions[0].x);
+      expect(positions[2].x).toBeGreaterThan(positions[1].x);
+
+      viz.setData({
+        beats: beats.slice(0, 3) as any,
+        beatVisits: [0, 0, 0],
+        beatColors: ["#fff", "#fff", "#fff"],
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+        putBackAnchorEdgeId: null,
+      });
+      expect((viz as any).multiTrackMode).toBe(false);
+    });
+  });
 });

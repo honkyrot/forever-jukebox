@@ -25,12 +25,12 @@ export const DEFAULT_MIN_LONG_BRANCH_PERCENT = 20;
 export const MIN_THRESHOLD = 2;
 export const MAX_THRESHOLD = 80;
 export const MIN_MAX_BRANCHES = 1;
-export const MAX_MAX_BRANCHES = 128;
+export const MAX_MAX_BRANCHES = 512;
 
 // Clamps maxBranches to a valid integer in [MIN_MAX_BRANCHES, MAX_MAX_BRANCHES].
 export function clampMaxBranches(raw: number): number {
   if (!Number.isFinite(raw)) {
-    return 4;
+    return 8;
   }
   return Math.max(MIN_MAX_BRANCHES, Math.min(MAX_MAX_BRANCHES, Math.round(raw)));
 }
@@ -63,6 +63,19 @@ export function calculateMinLongBranch(
   return Math.floor((Math.max(0, totalBeats) * resolvedPercent) / 100);
 }
 
+/**
+ * Converts a maximum jump percentage into a beat-distance cap (0 means unlimited).
+ */
+export function calculateMaxLongBranch(
+  totalBeats: number,
+  percent = 0,
+): number {
+  if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) {
+    return 0;
+  }
+  return Math.max(1, Math.floor((Math.max(0, totalBeats) * percent) / 100));
+}
+
 function euclideanDistance(v1: number[], v2: number[]): number {
   let sum = 0;
   for (let i = 0; i < v1.length; i += 1) {
@@ -72,12 +85,16 @@ function euclideanDistance(v1: number[], v2: number[]): number {
   return Math.sqrt(sum);
 }
 
-function getSegmentDistance(seg1: Segment, seg2: Segment): number {
+function getSegmentDistance(
+  seg1: Segment,
+  seg2: Segment,
+  durationScale = 1,
+): number {
   const timbre = euclideanDistance(seg1.timbre, seg2.timbre);
   const pitch = euclideanDistance(seg1.pitches, seg2.pitches);
   const loudStart = Math.abs(seg1.loudness_start - seg2.loudness_start);
   const loudMax = Math.abs(seg1.loudness_max - seg2.loudness_max);
-  const duration = Math.abs(seg1.duration - seg2.duration);
+  const duration = Math.abs(seg1.duration - seg2.duration * durationScale);
   const confidence = Math.abs(seg1.confidence - seg2.confidence);
   return (
     timbre * TIMBRE_WEIGHT +
@@ -94,6 +111,16 @@ export function beatPairDistance(q1: QuantumBase, q2: QuantumBase): number {
   if (q1.overlappingSegments.length === 0) {
     return Number.POSITIVE_INFINITY;
   }
+  const isCrossTrack =
+    q1.trackIndex !== undefined &&
+    q2.trackIndex !== undefined &&
+    q1.trackIndex !== q2.trackIndex;
+  // Normalize segment durations by beat length ratio when comparing across
+  // tracks so remixes at different BPMs are not penalized for tempo differences.
+  const durationScale =
+    isCrossTrack && q1.duration > 0 && q2.duration > 0
+      ? q1.duration / q2.duration
+      : 1;
   let sum = 0;
   for (let j = 0; j < q1.overlappingSegments.length; j += 1) {
     const seg1 = q1.overlappingSegments[j];
@@ -101,7 +128,7 @@ export function beatPairDistance(q1: QuantumBase, q2: QuantumBase): number {
     if (j < q2.overlappingSegments.length) {
       const seg2 = q2.overlappingSegments[j];
       if (seg1.which !== seg2.which) {
-        distance = getSegmentDistance(seg1, seg2);
+        distance = getSegmentDistance(seg1, seg2, durationScale);
       }
     }
     sum += distance;
@@ -148,6 +175,7 @@ function calculateNearestNeighborsForQuantum(
   maxThreshold: number,
   q1: QuantumBase,
   allEdges: Edge[],
+  crossTrackOnly = false,
 ) {
   const edges: Edge[] = [];
   if (q1.overlappingSegments.length === 0) {
@@ -161,6 +189,14 @@ function calculateNearestNeighborsForQuantum(
     }
 
     const q2 = quanta[i];
+    if (
+      crossTrackOnly &&
+      q1.trackIndex !== undefined &&
+      q2.trackIndex !== undefined &&
+      q1.trackIndex === q2.trackIndex
+    ) {
+      continue;
+    }
     const totalDistance = beatPairDistance(q1, q2);
     if (totalDistance < maxThreshold) {
       edges.push({
@@ -186,7 +222,7 @@ function calculateNearestNeighborsForQuantum(
 
 const cachedNeighborParams = new WeakMap<
   QuantumBase[],
-  { maxNeighbors: number; maxThreshold: number }
+  { maxNeighbors: number; maxThreshold: number; crossTrackOnly: boolean }
 >();
 
 function precalculateNearestNeighbors(
@@ -194,18 +230,20 @@ function precalculateNearestNeighbors(
   maxNeighbors: number,
   maxThreshold: number,
   allEdges: Edge[],
+  crossTrackOnly = false,
 ) {
   if (quanta.length === 0) {
     return;
   }
   const cached = cachedNeighborParams.get(quanta);
   // Reuse precalculated neighbors when they were manually seeded (no cache entry)
-  // or when the neighbor cap and distance ceiling still match.
+  // or when the neighbor cap, distance ceiling, and cross-track mode still match.
   const canReuseCached =
     quanta[0].allNeighbors.length > 0 &&
     (!cached ||
       (cached.maxNeighbors === maxNeighbors &&
-        cached.maxThreshold === maxThreshold));
+        cached.maxThreshold === maxThreshold &&
+        cached.crossTrackOnly === crossTrackOnly));
   if (canReuseCached) {
     allEdges.length = 0;
     for (const q of quanta) {
@@ -223,27 +261,87 @@ function precalculateNearestNeighbors(
       maxThreshold,
       q,
       allEdges,
+      crossTrackOnly,
     );
   }
-  cachedNeighborParams.set(quanta, { maxNeighbors, maxThreshold });
+  cachedNeighborParams.set(quanta, {
+    maxNeighbors,
+    maxThreshold,
+    crossTrackOnly,
+  });
+}
+
+/**
+ * Computes branch beat-distance and forward/backward direction.
+ *
+ * In single-track mode, uses raw beat index delta. In multi-track mode,
+ * normalizes both same-track and cross-track endpoints by their own track's
+ * beat span and scales to `totalBeats` so percentage thresholds apply equally.
+ */
+function resolveEdgeJumpDistanceAndDirection(
+  q: QuantumBase,
+  dest: QuantumBase,
+  totalBeats: number,
+): { distance: number; isForward: boolean } {
+  if (
+    q.trackBeatCount === undefined ||
+    dest.trackBeatCount === undefined ||
+    q.localWhich === undefined ||
+    dest.localWhich === undefined
+  ) {
+    return {
+      distance: Math.abs(dest.which - q.which),
+      isForward: dest.which > q.which,
+    };
+  }
+  // Normalize each endpoint within its own track so a percentage jump threshold
+  // scales uniformly across both same-track and cross-track edges.
+  const srcCount = Math.max(1, q.trackBeatCount - 1);
+  const destCount = Math.max(1, dest.trackBeatCount - 1);
+  const srcFrac = q.localWhich / srcCount;
+  const destFrac = dest.localWhich / destCount;
+  return {
+    distance: Math.abs(destFrac - srcFrac) * Math.max(1, totalBeats),
+    isForward:
+      q.trackIndex === dest.trackIndex
+        ? dest.which > q.which
+        : destFrac > srcFrac,
+  };
 }
 
 function extractNearestNeighbors(
   q: QuantumBase,
   maxThreshold: number,
   config: JukeboxConfig,
+  totalBeats: number,
 ): Edge[] {
   const neighbors: Edge[] = [];
   for (const neighbor of q.allNeighbors) {
     if (neighbor.deleted) {
       continue;
     }
-    if (config.justBackwards && neighbor.dest.which > q.which) {
+    const isCrossTrack =
+      q.trackIndex !== undefined &&
+      neighbor.dest.trackIndex !== undefined &&
+      q.trackIndex !== neighbor.dest.trackIndex;
+    if (config.crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
+      continue;
+    }
+    const { distance, isForward } = resolveEdgeJumpDistanceAndDirection(
+      q,
+      neighbor.dest,
+      totalBeats,
+    );
+    if (config.justBackwards && isForward) {
+      continue;
+    }
+    if (config.justLongBranches && distance < config.minLongBranch) {
       continue;
     }
     if (
-      config.justLongBranches &&
-      Math.abs(neighbor.dest.which - q.which) < config.minLongBranch
+      config.maxLongBranch !== undefined &&
+      config.maxLongBranch > 0 &&
+      distance > config.maxLongBranch
     ) {
       continue;
     }
@@ -260,8 +358,9 @@ function collectNearestNeighbors(
   config: JukeboxConfig,
 ): number {
   let branchingCount = 0;
+  const totalBeats = quanta.length;
   for (const q of quanta) {
-    q.neighbors = extractNearestNeighbors(q, maxThreshold, config);
+    q.neighbors = extractNearestNeighbors(q, maxThreshold, config, totalBeats);
     if (q.neighbors.length > 0) {
       branchingCount += 1;
     }
@@ -975,6 +1074,7 @@ function computeDefaultThreshold(
     ...config,
     justBackwards: false,
     justLongBranches: false,
+    maxLongBranch: 0,
   };
   for (let t = 10; t < config.maxBranchThreshold; t += 5) {
     const count = collectNearestNeighbors(quanta, t, densityConfig);
@@ -1000,6 +1100,11 @@ function addAnchorBranch(
   );
   if (existingAnchorSource !== null && existingAnchorSource >= preferredLateStart) {
     // Existing end-of-track branch already reaches the early target zone.
+    return existingAnchorSource;
+  }
+  // When a maximum jump distance cap is active, avoid forcing a long backward
+  // anchor branch that violates the user's jump cap.
+  if (config.maxLongBranch !== undefined && config.maxLongBranch > 0) {
     return existingAnchorSource;
   }
   // Inserted anchors always jump backward; long-only mode also holds them to the min length.
@@ -1100,6 +1205,7 @@ export function buildJumpGraph(
     clampMaxBranches(config.maxBranches),
     config.maxBranchThreshold,
     allEdges,
+    Boolean(config.crossTrackOnly),
   );
 
   const computedThreshold = computeDefaultThreshold(quanta, config);

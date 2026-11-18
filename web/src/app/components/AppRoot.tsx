@@ -90,11 +90,16 @@ function usePlaylistAddEnabled() {
   const lastJobId = useAppStore((s) => s.lastJobId);
   const audioLoaded = useAppStore((s) => s.audioLoaded);
   const analysisLoaded = useAppStore((s) => s.analysisLoaded);
+  const playlistAddSticky = useAppStore((s) => s.playlistAddSticky);
   const enabled =
     Boolean(lastTrackId ?? lastJobId) && audioLoaded && analysisLoaded;
   useEffect(() => {
     document.body.classList.toggle("playlist-add-enabled", enabled);
-  }, [enabled]);
+    document.body.classList.toggle(
+      "playlist-add-sticky",
+      enabled && playlistAddSticky,
+    );
+  }, [enabled, playlistAddSticky]);
 }
 
 function useThemeEffect() {

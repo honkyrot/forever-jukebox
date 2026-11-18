@@ -505,6 +505,12 @@ const createTuningSlice: Slice<
     | "highlightAnchorBranch"
     | "branchStatsEnabled"
     | "customAnchorEnabled"
+    | "multiTrackEnabled"
+    | "crossTrackOnly"
+    | "tempoSyncEnabled"
+    | "normalizeVolumeEnabled"
+    | "mixTrackGainsPct"
+    | "playlistAddSticky"
   >
 > = () => ({
   tuningParams: null,
@@ -512,6 +518,12 @@ const createTuningSlice: Slice<
   highlightAnchorBranch: false,
   branchStatsEnabled: false,
   customAnchorEnabled: false,
+  multiTrackEnabled: false,
+  crossTrackOnly: true,
+  tempoSyncEnabled: true,
+  normalizeVolumeEnabled: true,
+  mixTrackGainsPct: [],
+  playlistAddSticky: false,
 });
 
 const createLibrarySlice: Slice<

@@ -1,5 +1,5 @@
 import type { JukeboxEngine } from "../engine";
-import type { Edge, QuantumBase } from "../engine/types";
+import type { Edge, QuantumBase, TrackSliceMeta } from "../engine/types";
 import {
   moveCustomAnchorEnd,
   type CustomAnchor,
@@ -34,6 +34,7 @@ interface VisualizationData {
   lastBranchPoint: number;
   anchorEdgeId: number | null;
   userAnchorEdgeId: number | null;
+  tracks?: TrackSliceMeta[];
 }
 
 const BEAT_DOT_RADIUS_PX = 2;
@@ -571,6 +572,11 @@ class CanvasViz {
     this.baseCtx.save();
     this.baseCtx.lineWidth = 1;
 
+    const isMultiTrack = (this.data.tracks?.length ?? 0) >= 2;
+    if (isMultiTrack) {
+      this.drawMultiTrackLanes();
+    }
+
     const edges = this.data.edges;
     const step =
       edges.length > MAX_EDGES_BASE
@@ -694,7 +700,16 @@ class CanvasViz {
     }
 
     if (!this.tileCanvas) {
-      if (visualEffectMode === "0" && !useSquareBeats) {
+      if (isMultiTrack && visualEffectMode === "0" && !useSquareBeats) {
+        for (let i = 0; i < this.positions.length; i += 1) {
+          const p = this.positions[i];
+          this.baseCtx.fillStyle =
+            this.data.beatColors?.[i] || this.theme.beatFill;
+          this.baseCtx.beginPath();
+          this.baseCtx.arc(p.x, p.y, BEAT_DOT_RADIUS_PX, 0, Math.PI * 2);
+          this.baseCtx.fill();
+        }
+      } else if (visualEffectMode === "0" && !useSquareBeats) {
         this.baseCtx.fillStyle = this.theme.beatFill;
         this.baseCtx.beginPath();
         for (const p of this.positions) {
@@ -1489,6 +1504,50 @@ class CanvasViz {
       mid.y + normY * (centerDist * 0.5),
     ];
   }
+
+  /**
+   * Renders horizontal timeline rails and song labels for stacked multi-track playback.
+   */
+  private drawMultiTrackLanes() {
+    const tracks = this.data?.tracks;
+    if (!tracks || tracks.length < 2) {
+      return;
+    }
+    const ctx = this.baseCtx;
+    ctx.save();
+    for (const track of tracks) {
+      if (track.beatCount <= 0) {
+        continue;
+      }
+      const startPos = this.positions[track.startBeatIndex];
+      const endPos =
+        this.positions[track.startBeatIndex + track.beatCount - 1];
+      if (!startPos || !endPos) {
+        continue;
+      }
+      ctx.strokeStyle = this.theme.edgeStroke;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startPos.x, startPos.y);
+      ctx.lineTo(endPos.x, endPos.y);
+      ctx.stroke();
+
+      const labelParts: string[] = [];
+      labelParts.push(
+        track.title?.trim() || `Track ${track.trackIndex + 1}`,
+      );
+      if (typeof track.tempo === "number" && Number.isFinite(track.tempo)) {
+        labelParts.push(`${Math.round(track.tempo)} BPM`);
+      }
+      if (typeof ctx.fillText === "function") {
+        ctx.fillStyle = this.theme.beatHighlight;
+        ctx.font = "600 12px system-ui, sans-serif";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(labelParts.join(" · "), startPos.x, startPos.y - 12);
+      }
+    }
+    ctx.restore();
+  }
 }
 
 // Tiles hold their size as counts rise, halving together when one would pass full height.
@@ -1541,6 +1600,29 @@ function createArcDiagramControlPointResolver(): EdgeControlPointResolver {
     const desiredLift = Math.max(minLift, span * 1.25);
     const lift = Math.min(maxLift, desiredLift);
     return [midX, baseY + direction * lift];
+  };
+}
+
+/**
+ * Computes Bezier control points for stacked multi-track line bridges: cross-song
+ * edges curve gently between lanes, while same-song edges arc above/below their lane.
+ */
+function createMultiTrackLineControlPointResolver(): EdgeControlPointResolver {
+  return ({ edge, from, to, fromIndex, toIndex, data }) => {
+    const srcTrack = edge?.src.trackIndex ?? data.beats[fromIndex]?.trackIndex ?? 0;
+    const destTrack = edge?.dest.trackIndex ?? data.beats[toIndex]?.trackIndex ?? 0;
+    const midX = (from.x + to.x) / 2;
+    const midY = (from.y + to.y) / 2;
+    if (srcTrack !== destTrack) {
+      const goingDown = destTrack > srcTrack;
+      const offsetX = goingDown ? 18 : -18;
+      const offsetY =
+        (goingDown ? -1 : 1) * Math.min(32, Math.abs(to.y - from.y) * 0.2);
+      return [midX + offsetX, midY + offsetY];
+    }
+    const direction = toIndex >= fromIndex ? -1 : 1;
+    const lift = Math.min(44, Math.max(14, Math.abs(to.x - from.x) * 0.35));
+    return [midX, midY + direction * lift];
   };
 }
 
@@ -1792,10 +1874,18 @@ function getDefaultVisualizationDefinitions(): VisualizationDefinition[] {
 export class JukeboxViz {
   private readonly vizLayer: HTMLElement;
   private readonly definitions: VisualizationDefinition[];
+  private readonly multiTrackDefinition: VisualizationDefinition = {
+    positioner: JukeboxViz.createMultiTrackLinePositioner(),
+    options: {
+      forceBendEdges: true,
+      edgeControlPointResolver: createMultiTrackLineControlPointResolver(),
+    },
+  };
   private readonly enableInteraction: boolean;
   private readonly background: CanvasVizOptions["background"];
   private activeViz: CanvasViz | null = null;
   private activeIndex = 0;
+  private multiTrackMode = false;
   private visible = true;
   private data: VizData | null = null;
   private selectedEdge: Edge | null = null;
@@ -1820,6 +1910,50 @@ export class JukeboxViz {
           x: cx + Math.cos(angle) * radius,
           y: cy + Math.sin(angle) * radius,
         };
+      });
+    };
+  }
+
+  /**
+   * Positions each song onto its own horizontal lane stacked vertically across the canvas.
+   */
+  static createMultiTrackLinePositioner(): Positioner {
+    return (data: VisualizationData, width: number, height: number) => {
+      const beats = data.beats;
+      if (beats.length === 0) {
+        return [];
+      }
+      const tracks = data.tracks;
+      const trackCount =
+        tracks && tracks.length > 0
+          ? tracks.length
+          : beats.reduce(
+              (max, beat) => Math.max(max, (beat.trackIndex ?? 0) + 1),
+              1,
+            );
+      const paddingX = 36;
+      const spanX = Math.max(0, width - paddingX * 2);
+      const topY = Math.max(48, height * 0.24);
+      const bottomY = Math.max(topY, height - Math.max(40, height * 0.2));
+      const spanY = Math.max(0, bottomY - topY);
+
+      return beats.map((beat, i) => {
+        const trackIndex = beat.trackIndex ?? 0;
+        const laneY =
+          trackCount <= 1
+            ? height * 0.5
+            : topY + (trackIndex / (trackCount - 1)) * spanY;
+        const trackSlice = tracks?.[trackIndex];
+        const localIdx =
+          beat.localWhich ??
+          (trackSlice ? i - trackSlice.startBeatIndex : i);
+        const trackBeatCount =
+          beat.trackBeatCount ?? trackSlice?.beatCount ?? beats.length;
+        const x =
+          trackBeatCount <= 1
+            ? paddingX + spanX * 0.5
+            : paddingX + (localIdx / (trackBeatCount - 1)) * spanX;
+        return { x, y: laneY };
       });
     };
   }
@@ -1850,7 +1984,9 @@ export class JukeboxViz {
   }
 
   private createVisualization(index: number): CanvasViz | null {
-    const definition = this.definitions[index];
+    const definition = this.multiTrackMode
+      ? this.multiTrackDefinition
+      : this.definitions[index];
     if (!definition) {
       return null;
     }
@@ -1921,7 +2057,13 @@ export class JukeboxViz {
   }
 
   setData(data: VizData) {
+    const nextMultiTrack = (data.tracks?.length ?? 0) >= 2;
     this.data = data;
+    if (nextMultiTrack !== this.multiTrackMode) {
+      this.multiTrackMode = nextMultiTrack;
+      this.mountActiveVisualization(this.activeIndex);
+      return;
+    }
     this.activeViz?.setData(data);
   }
 

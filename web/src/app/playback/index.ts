@@ -68,3 +68,12 @@ export {
   maybePrepareWubMachine,
 } from "./wubmachine";
 export { releaseWakeLock, requestWakeLock } from "./wake-lock";
+export {
+  clearCachedMultiTrackSources,
+  disableMultiTrackMix,
+  loadMultiTrackMix,
+  setCrossTrackOnly,
+  setMixTrackGainPct,
+  setNormalizeVolumeEnabled,
+  setTempoSyncEnabled,
+} from "./multi-track-mix";

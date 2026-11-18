@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeAnalysis } from "./analysis";
 import {
   buildJumpGraph,
+  calculateMaxLongBranch,
   calculateMinLongBranch,
   parsePinnedThreshold,
 } from "./graph";
@@ -1184,5 +1185,28 @@ describe("threshold auto resolution", () => {
     );
     expect(reduced.allEdges.length).toBe(192);
     expect(Math.max(...analysis.beats.map((beat) => beat.allNeighbors.length))).toBe(2);
+  });
+
+  it("caps branch beat distance when maxLongBranch is positive", () => {
+    expect(calculateMaxLongBranch(100, 0)).toBe(0);
+    expect(calculateMaxLongBranch(100, 100)).toBe(0);
+    expect(calculateMaxLongBranch(100, 15)).toBe(15);
+
+    const analysis = normalizeAnalysis(longBranchDensityAnalysis(60));
+    const maxCap = calculateMaxLongBranch(analysis.beats.length, 15);
+    buildJumpGraph(
+      analysis,
+      defaultConfig({
+        currentThreshold: 80,
+        maxLongBranch: maxCap,
+        maxLongBranchPercent: 15,
+      }),
+    );
+
+    const activeDistances = analysis.beats.flatMap((beat) =>
+      beat.neighbors.map((edge) => Math.abs(edge.dest.which - edge.src.which)),
+    );
+    expect(activeDistances.length).toBeGreaterThan(0);
+    expect(Math.max(...activeDistances)).toBeLessThanOrEqual(maxCap);
   });
 });

@@ -1,6 +1,7 @@
 import { normalizeAnalysis } from "./analysis";
 import {
   buildJumpGraph,
+  calculateMaxLongBranch,
   calculateMinLongBranch,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
   selectExistingAnchorSource,
@@ -33,7 +34,7 @@ import {
 import { computeBeatColors } from "./beatColors";
 
 export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
-  maxBranches: 4,
+  maxBranches: 8,
   maxBranchThreshold: 80,
   currentThreshold: 0,
   justBackwards: false,
@@ -44,6 +45,9 @@ export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
   randomBranchChanceDelta: 0.02,
   minLongBranch: 0,
   minLongBranchPercent: DEFAULT_MIN_LONG_BRANCH_PERCENT,
+  maxLongBranch: 0,
+  maxLongBranchPercent: 0,
+  crossTrackOnly: false,
 };
 
 const TICK_INTERVAL_MS = 50;
@@ -177,7 +181,11 @@ export class JukeboxEngine {
     this.insertedUserAnchorEdge = null;
     this.customAnchorEdge = null;
     this.resetPlaybackControls();
-    this.analysis = normalizeAnalysis(data);
+    // Pre-merged multi-track analyses carry per-track offsets and provenance
+    // metadata that single-track normalization would strip.
+    this.analysis = isMergedMultiTrackAnalysis(data)
+      ? data
+      : normalizeAnalysis(data);
     this.resolveMinLongBranch();
     this.graph = buildJumpGraph(this.analysis, this.config);
     this.applyDeletedEdges();
@@ -337,6 +345,7 @@ export class JukeboxEngine {
       userAnchorEdgeId,
       // A pin the tuning filters out is drawn but not counted as a branch.
       putBackAnchorEdgeId: this.insertedUserAnchorEdge?.id ?? null,
+      ...(this.analysis.tracks ? { tracks: this.analysis.tracks } : {}),
     };
   }
 
@@ -643,6 +652,10 @@ export class JukeboxEngine {
       this.analysis.beats.length,
       this.config.minLongBranchPercent,
     );
+    this.config.maxLongBranch = calculateMaxLongBranch(
+      this.analysis.beats.length,
+      this.config.maxLongBranchPercent ?? 0,
+    );
   }
 
   private clearEdgeDeletionFlags() {
@@ -820,8 +833,19 @@ export class JukeboxEngine {
 
     if (currentIndex >= 0) {
       const currentBeat = this.beats[currentIndex];
+      const tracks = this.analysis.tracks;
+      const currentTrack =
+        tracks && tracks.length >= 2
+          ? tracks[currentBeat.trackIndex ?? 0]
+          : undefined;
+      const trackStartIndex = currentTrack ? currentTrack.startBeatIndex : 0;
+      const trackBeatCount =
+        currentTrack && currentTrack.beatCount > 0
+          ? currentTrack.beatCount
+          : beatsCount;
+      const trackLastIndex = trackStartIndex + trackBeatCount - 1;
       const naturalNextIndex =
-        currentIndex + 1 >= beatsCount ? 0 : currentIndex + 1;
+        currentIndex >= trackLastIndex ? trackStartIndex : currentIndex + 1;
       sequentialIndex = naturalNextIndex;
       sourceBoundaryTime = currentBeat.start + currentBeat.duration;
 
@@ -831,7 +855,7 @@ export class JukeboxEngine {
         const rawSeedIndex = currentIndex + this.playVelocity;
         if (
           this.bringItHomeMode &&
-          (rawSeedIndex < 0 || rawSeedIndex >= beatsCount)
+          (rawSeedIndex < trackStartIndex || rawSeedIndex > trackLastIndex)
         ) {
           const stopScheduled =
             scheduleJump &&
@@ -848,7 +872,10 @@ export class JukeboxEngine {
             sourceBoundaryTime,
           };
         }
-        const seedIndex = this.wrapBeatIndex(rawSeedIndex, beatsCount);
+        const seedIndex = currentTrack
+          ? trackStartIndex +
+            this.wrapBeatIndex(rawSeedIndex - trackStartIndex, trackBeatCount)
+          : this.wrapBeatIndex(rawSeedIndex, beatsCount);
         chosenIndex = seedIndex;
         if (!this.bringItHomeMode) {
           const seed = this.beats[seedIndex];
@@ -882,9 +909,11 @@ export class JukeboxEngine {
         }
       }
 
+      // Wrapping at the end of a track slice must jump back to that track's
+      // start rather than bleeding across the concatenated audio buffer.
       const naturalPlaybackContinues =
         chosenIndex === naturalNextIndex &&
-        !(currentIndex === beatsCount - 1 && naturalNextIndex === 0);
+        !(currentIndex === trackLastIndex && naturalNextIndex === trackStartIndex);
       shouldJump = !naturalPlaybackContinues;
       if (shouldJump && jumpFromIndex === null) {
         jumpFromIndex = currentIndex;
@@ -1151,4 +1180,20 @@ export class JukeboxEngine {
 
 function detachFromSource(edge: Edge) {
   edge.src.neighbors = edge.src.neighbors.filter((candidate) => candidate !== edge);
+}
+
+/**
+ * Checks whether an input payload is already a pre-merged multi-track analysis.
+ */
+function isMergedMultiTrackAnalysis(data: unknown): data is TrackAnalysis {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const candidate = data as Partial<TrackAnalysis>;
+  return (
+    Array.isArray(candidate.tracks) &&
+    candidate.tracks.length >= 2 &&
+    Array.isArray(candidate.beats) &&
+    Array.isArray(candidate.segments)
+  );
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ADMIN_KEY_STORAGE_KEY } from "../admin";
 import { dismissTrackReport, fetchReportedTracks } from "../api";
@@ -366,5 +366,23 @@ describe("TopTracksPanel", () => {
       );
       expect(enterModal.classList.contains("open")).toBe(false);
     });
+  });
+
+  it("filters tracks on the search subtab with playlist add buttons", async () => {
+    render(<TopTracksPanel />);
+    await userEvent.click(
+      document.querySelector<HTMLElement>('[data-top-subtab="search"]')!,
+    );
+    const input = document.getElementById("track-search-input") as HTMLInputElement;
+    expect(input).not.toBeNull();
+    const list = document.getElementById("search-tracks-songs")!;
+    await within(list).findByText("Song — Artist");
+    expect(within(list).getByLabelText("Add Song to playlist")).toBeTruthy();
+
+    await userEvent.type(input, "nomatch");
+    expect(within(list).queryByText("Song — Artist")).toBeNull();
+
+    await userEvent.clear(input);
+    await within(list).findByText("Song — Artist");
   });
 });

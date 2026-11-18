@@ -23,6 +23,10 @@ import {
   hasNonDefaultTuning,
   resetExtrasDefaults,
   resetTuningDefaults,
+  setCrossTrackOnly,
+  setMixTrackGainPct,
+  setNormalizeVolumeEnabled,
+  setTempoSyncEnabled,
   type ExtrasFormValues,
   type TuningFormValues,
 } from "../../playback";
@@ -95,6 +99,12 @@ function formatMinJumpDistance(percent: number, t: TFunction) {
     : t("tuning.percentOfTrack", { percent });
 }
 
+function formatMaxJumpDistance(percent: number, t: TFunction) {
+  return percent <= 0 || percent >= 100
+    ? t("tuning.anyDistance")
+    : `<${percent}% of track`;
+}
+
 function RangeRow({
   id,
   label,
@@ -142,6 +152,22 @@ export function TuningModal() {
   const playMode = useAppStore((s) => s.playMode);
   const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
   const visualPreferences = useAppStore((s) => s.visualPreferences);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const crossTrackOnly = useAppStore((s) => s.crossTrackOnly);
+  const tempoSyncEnabled = useAppStore((s) => s.tempoSyncEnabled);
+  const normalizeVolumeEnabled = useAppStore((s) => s.normalizeVolumeEnabled);
+  const mixTrackGainsPct = useAppStore((s) => s.mixTrackGainsPct);
+  const playlistTracks = useAppStore((s) => s.playlist.tracks);
+  const vizTracks = useAppStore((s) => s.vizData?.tracks);
+  const playlistCount = playlistTracks.length;
+  const mixTracks =
+    multiTrackEnabled && vizTracks && vizTracks.length > 0
+      ? vizTracks.map((t, index) => ({
+          title: t.title || `Track ${index + 1}`,
+        }))
+      : playlistTracks.slice(0, 128).map((t, index) => ({
+          title: t.title || `Track ${index + 1}`,
+        }));
   const hasExtrasTab = playMode === "jukebox";
   const [form, setForm] = useState<TuningFormValues | null>(null);
   const [extras, setExtras] = useState<ExtrasFormValues | null>(null);
@@ -370,6 +396,28 @@ export function TuningModal() {
               }
             />
             <RangeRow
+              id="max-jump-distance"
+              label="Maximum Jump Distance:"
+              valueText={formatMaxJumpDistance(
+                form?.maxLongBranchPercent ?? 100,
+                t,
+              )}
+              min={1}
+              max={100}
+              step={1}
+              value={
+                form?.maxLongBranchPercent && form.maxLongBranchPercent > 0
+                  ? form.maxLongBranchPercent
+                  : 100
+              }
+              onChange={(value) => setFormField("maxLongBranchPercent", value)}
+              hint={
+                <div className="hint">
+                  Caps how far a branch can jump across the track.
+                </div>
+              }
+            />
+            <RangeRow
               id="min-prob"
               label={t("tuning.probabilityMin")}
               valueText={`${form?.minProbPct ?? 18}%`}
@@ -399,6 +447,26 @@ export function TuningModal() {
               value={form?.rampPct ?? 10}
               onChange={(value) => setFormField("rampPct", value)}
             />
+            {multiTrackEnabled || playlistCount >= 2
+              ? mixTracks.map((track, index) => {
+                  const gainPct = mixTrackGainsPct[index] ?? 100;
+                  return (
+                    <RangeRow
+                      key={index}
+                      id={`mix-track-gain-${index}`}
+                      label={`Track ${index + 1} Volume (${track.title})`}
+                      valueText={`${gainPct}%`}
+                      min={50}
+                      max={150}
+                      step={1}
+                      value={gainPct}
+                      onChange={(value) =>
+                        setMixTrackGainPct(getAppContext(), index, value)
+                      }
+                    />
+                  );
+                })
+              : null}
             {showReset ? (
               <div className="tuning-reset-row">
                 <button type="button" id="tuning-reset" onClick={handleReset}>
@@ -441,6 +509,46 @@ export function TuningModal() {
               />{" "}
               {t("tuning.highlightAnchor")}
             </label>
+            {multiTrackEnabled || playlistCount >= 2 ? (
+              <>
+                <label>
+                  <input
+                    id="cross-track-only"
+                    type="checkbox"
+                    checked={crossTrackOnly}
+                    onChange={(event) =>
+                      setCrossTrackOnly(getAppContext(), event.target.checked)
+                    }
+                  />{" "}
+                  Cross-song branches only
+                </label>
+                <label>
+                  <input
+                    id="tempo-sync-enabled"
+                    type="checkbox"
+                    checked={tempoSyncEnabled}
+                    onChange={(event) =>
+                      setTempoSyncEnabled(getAppContext(), event.target.checked)
+                    }
+                  />{" "}
+                  Tempo sync (match BPM)
+                </label>
+                <label>
+                  <input
+                    id="normalize-volume-enabled"
+                    type="checkbox"
+                    checked={normalizeVolumeEnabled}
+                    onChange={(event) =>
+                      setNormalizeVolumeEnabled(
+                        getAppContext(),
+                        event.target.checked,
+                      )
+                    }
+                  />{" "}
+                  Volume normalization (premix)
+                </label>
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -602,11 +710,11 @@ export function TuningModal() {
           <RangeRow
             id="max-branches"
             label={t("tuning.maxBranches")}
-            valueText={`${form?.maxBranches ?? 4}`}
+            valueText={`${form?.maxBranches ?? 8}`}
             min={MIN_MAX_BRANCHES}
             max={MAX_MAX_BRANCHES}
             step={1}
-            value={form?.maxBranches ?? 4}
+            value={form?.maxBranches ?? 8}
             onChange={(value) => setFormField("maxBranches", value)}
             hint={
               <div className="hint">{t("tuning.maxBranchesHint")}</div>

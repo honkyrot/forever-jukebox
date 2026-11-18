@@ -69,6 +69,7 @@ import {
 } from "./wubmachine";
 import { stopPlayback } from "./transport";
 import { discardCustomAnchorEdit } from "./custom-anchor";
+import { clearCachedMultiTrackSources } from "./multi-track-mix";
 import {
   applyAnchorBranchFromUrl,
   applyDeletedEdgesFromUrl,
@@ -143,6 +144,7 @@ export function resetForNewTrack(
   options?: { clearTuning?: boolean },
 ) {
   bumpLoadGeneration();
+  clearCachedMultiTrackSources();
   discardCustomAnchorEdit(context);
   const {
     autocanonizer,
@@ -188,6 +190,7 @@ export function resetForNewTrack(
   useAppStore.setState({ audioLoaded: false });
   useAppStore.setState({ analysisLoaded: false });
   useAppStore.setState({ audioLoadInFlight: false });
+  useAppStore.setState({ multiTrackEnabled: false });
   useAppStore.setState({ lastJobId: null });
   useAppStore.setState({ lastTrackId: null });
   useAppStore.setState({ lastSourceId: null });
@@ -214,7 +217,7 @@ export function resetForNewTrack(
     useAppStore.setState({ tuningParams: null });
     clearTuningParamsFromUrl(true);
   }
-  engine.updateConfig({ ...defaultConfig });
+  engine.updateConfig({ ...defaultConfig, crossTrackOnly: false });
   syncVolumeUI(context);
   useAppStore.setState({
     analysisStatusText: () => i18n.t("status.noTrack"),

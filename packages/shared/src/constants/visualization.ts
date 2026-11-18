@@ -1,7 +1,7 @@
 export const BEAT_SELECT_RADIUS_PX = 8;
 export const EDGE_SELECT_RADIUS_PX = 8;
 export const MAX_EDGE_SAMPLES = 300;
-export const MAX_EDGES_BASE = 2500;
+export const MAX_EDGES_BASE = 100000;
 export const BEAT_AVOID_RADIUS_PX = 6;
 export const ANCHOR_HIGHLIGHT_COLOR = "#ff2d2d";
 // Custom anchor match quality; poor keeps the anchor red.

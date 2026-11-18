@@ -283,6 +283,7 @@ export type TuningFormValues = {
   rampPct: number;
   justBackwards: boolean;
   minLongBranchPercent: number;
+  maxLongBranchPercent?: number;
   removeSequentialBranches: boolean;
   highlightAnchorBranch: boolean;
 };
@@ -317,6 +318,10 @@ export function getTuningFormValues(context: AppContext): TuningFormValues {
     minLongBranchPercent: config.justLongBranches
       ? (config.minLongBranchPercent ?? DEFAULT_MIN_LONG_BRANCH_PERCENT)
       : 0,
+    maxLongBranchPercent:
+      config.maxLongBranchPercent && config.maxLongBranchPercent > 0
+        ? config.maxLongBranchPercent
+        : 100,
     removeSequentialBranches: config.removeSequentialBranches,
     highlightAnchorBranch: useAppStore.getState().highlightAnchorBranch,
   };
@@ -344,6 +349,12 @@ export function changedTuningControls(
   }
   if (previous.minLongBranchPercent !== next.minLongBranchPercent) {
     controls.push("min_branch_length");
+  }
+  if (
+    (previous.maxLongBranchPercent ?? 100) !==
+    (next.maxLongBranchPercent ?? 100)
+  ) {
+    controls.push("max_branch_length");
   }
   if (previous.justBackwards !== next.justBackwards) {
     controls.push("just_backwards");
@@ -379,6 +390,12 @@ export function applyTuningChanges(
     [minProb, maxProb] = [maxProb, minProb];
   }
   const maxBranches = clampMaxBranches(form.maxBranches);
+  const rawMaxPct = form.maxLongBranchPercent ?? 100;
+  const sliderMaxPct =
+    rawMaxPct > 0 && rawMaxPct < 100
+      ? Math.max(1, Math.round(rawMaxPct))
+      : 100;
+  const maxLongBranchPercent = sliderMaxPct >= 100 ? 0 : sliderMaxPct;
   engine.updateConfig({
     maxBranches,
     currentThreshold: useAutoThreshold ? 0 : threshold,
@@ -391,6 +408,7 @@ export function applyTuningChanges(
       form.minLongBranchPercent > 0
         ? form.minLongBranchPercent
         : DEFAULT_MIN_LONG_BRANCH_PERCENT,
+    maxLongBranchPercent,
     removeSequentialBranches: form.removeSequentialBranches,
   });
   useAppStore.setState({ highlightAnchorBranch: form.highlightAnchorBranch });
@@ -422,6 +440,7 @@ export function applyTuningChanges(
   return {
     ...form,
     maxBranches,
+    maxLongBranchPercent: sliderMaxPct,
     threshold: nextThreshold,
     computedThreshold: nextComputed,
     minProbPct: Math.round(minProb * 100),

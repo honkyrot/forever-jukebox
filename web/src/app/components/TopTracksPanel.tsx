@@ -45,6 +45,8 @@ import {
 } from "../favorites-actions";
 import { addToPlaylist } from "../playlist-actions";
 import { trackEvent } from "../analytics";
+import { loadMultiTrackMix } from "../playback";
+import { getAppContext } from "../runtime";
 import { selectTrack } from "../track-select";
 import i18n from "../i18n";
 import { useTranslation } from "react-i18next";
@@ -54,6 +56,7 @@ type TopSongsTabId =
   | "trending"
   | "all-time"
   | "recent"
+  | "search"
   | "reported"
   | "favorites";
 
@@ -121,6 +124,8 @@ function topSongsTitle(subtab: TopSongsTabId) {
       return "All Tracks";
     case "recent":
       return i18n.t("topTracks.recent");
+    case "search":
+      return i18n.t("common.search");
     case "reported":
       return i18n.t("topTracks.reported");
     case "favorites":
@@ -408,6 +413,153 @@ function AllTimeList({
         </div>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Renders searchable analyzed tracks from /api/top with inline playlist-add buttons.
+ */
+function TrackSearchList({
+  active,
+  query,
+  reloadToken,
+}: {
+  active: boolean;
+  query: string;
+  reloadToken: number;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<TopSongsItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setErrorText(null);
+    fetchTopSongs(ALL_TIME_PAGE_LIMIT, undefined, 0, query)
+      .then((fetched) => {
+        if (!cancelled) {
+          setItems(fetched);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setErrorText(
+            i18n.t("topTracks.unavailable", {
+              section: i18n.t("common.search"),
+              error: formatErrorForDisplay(err),
+            }),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, query, reloadToken]);
+
+  if (!active) {
+    return null;
+  }
+  if (loading) {
+    return (
+      <ol className="top-list" id="search-tracks-songs">
+        {t("topTracks.loadingTop")}
+      </ol>
+    );
+  }
+  if (errorText) {
+    return (
+      <ol className="top-list" id="search-tracks-songs">
+        {errorText}
+      </ol>
+    );
+  }
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleItems = normalizedQuery
+    ? items.filter((item) => {
+        const titleText = (item.title ?? "").toLowerCase();
+        const artistText = (item.artist ?? "").toLowerCase();
+        return (
+          titleText.includes(normalizedQuery) ||
+          artistText.includes(normalizedQuery)
+        );
+      })
+    : items;
+  if (visibleItems.length === 0) {
+    return (
+      <ol className="top-list" id="search-tracks-songs">
+        {t("topTracks.emptyTop")}
+      </ol>
+    );
+  }
+  return (
+    <ol className="top-list" id="search-tracks-songs">
+      {visibleItems.map((item) => {
+        const title =
+          typeof item.title === "string" ? item.title : t("common.untitled");
+        const artist = typeof item.artist === "string" ? item.artist : "";
+        const jobId = typeof item.id === "string" ? item.id : "";
+        const sourceProvider =
+          typeof item.source_provider === "string" ? item.source_provider : "";
+        const sourceType = normalizePlaylistSourceType(sourceProvider);
+        const listenId = jobId;
+        const label = artist ? `${title} — ${artist}` : title;
+        const key = topSongKey(item, label);
+        const playCount =
+          typeof item.play_count === "number" ? item.play_count : null;
+        if (!listenId) {
+          return <li key={key}>{label}</li>;
+        }
+        const playlistTrack: PlaylistTrack = {
+          id: jobId || listenId,
+          sourceType,
+          title,
+          artist,
+          duration: null,
+        };
+        return (
+          <li key={key} className="top-list-item">
+            <a
+              href={`/listen/${encodeURIComponent(listenId)}`}
+              data-track-id={listenId}
+              data-playlist-id={playlistTrack.id}
+              data-source-type={sourceType}
+              data-track-title={title}
+              data-track-artist={artist}
+              onClick={(event) => {
+                event.preventDefault();
+                trackEvent("select_track", {
+                  ui_source: "search-tracks",
+                  track_id: listenId,
+                  track_title: title,
+                });
+                selectTrack(listenId, playlistTrack);
+              }}
+            >
+              {label}
+            </a>
+            {playCount !== null ? (
+              <span className="all-time-play-count">
+                {playCount} {playCount === 1 ? "play" : "plays"}
+              </span>
+            ) : null}
+            <PlaylistAddButton
+              track={playlistTrack}
+              onAdd={(added) => addToPlaylist(added, "search-tracks")}
+            />
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -1059,7 +1211,12 @@ export function TopTracksPanel() {
   const [query, setQuery] = useState("");
   const [allTimeSort, setAllTimeSort] = useState("");
   const [allTimeReloadToken, setAllTimeReloadToken] = useState(0);
+  const [trackSearchQuery, setTrackSearchQuery] = useState("");
+  const [trackSearchReloadToken, setTrackSearchReloadToken] = useState(0);
   const [reportedReloadToken, setReportedReloadToken] = useState(0);
+  const playlistCount = useAppStore((s) => s.playlist.tracks.length);
+  const playlistAddSticky = useAppStore((s) => s.playlistAddSticky);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const adminMode = isAdminMode();
   const loadList = useCallback(
     async (tabId: TopSongsListTabId, force = false) => {
@@ -1108,7 +1265,8 @@ export function TopTracksPanel() {
     if (
       subtab !== "favorites" &&
       subtab !== "reported" &&
-      subtab !== "all-time"
+      subtab !== "all-time" &&
+      subtab !== "search"
     ) {
       loadList(subtab).catch((err) => {
         console.warn(`Top tracks load failed: ${String(err)}`);
@@ -1148,6 +1306,7 @@ export function TopTracksPanel() {
         {subtabButton("trending", t("topTracks.trending"))}
         {subtabButton("all-time", "All")}
         {subtabButton("recent", t("topTracks.recents"))}
+        {subtabButton("search", t("common.search"))}
         <span className="subtab-spacer" aria-hidden="true"></span>
         {adminMode ? (
           <div className="subtab-stack">
@@ -1185,6 +1344,8 @@ export function TopTracksPanel() {
               setReportedReloadToken((token) => token + 1);
             } else if (subtab === "all-time") {
               setAllTimeReloadToken((token) => token + 1);
+            } else if (subtab === "search") {
+              setTrackSearchReloadToken((token) => token + 1);
             } else if (subtab !== "favorites") {
               loadList(subtab, true).catch((err) => {
                 console.warn(`Top tracks refresh failed: ${String(err)}`);
@@ -1202,6 +1363,34 @@ export function TopTracksPanel() {
         <FavoritesSyncControls
           visible={subtab === "favorites" && allowSync}
         />
+        {playlistAddSticky && playlistCount >= 2 && !multiTrackEnabled ? (
+          <button
+            type="button"
+            id="start-mix-from-tracks"
+            className="custom-anchor-button is-active"
+            onClick={() => {
+              useAppStore.setState({ playlistAddSticky: false });
+              useAppStore.getState().selectTab("play");
+              void loadMultiTrackMix(getAppContext());
+            }}
+          >
+            {`Mix Songs (${playlistCount})`}
+          </button>
+        ) : null}
+        {subtab === "search" ? (
+          <div className="favorites-filter">
+            <input
+              id="track-search-input"
+              className="search-input"
+              type="search"
+              placeholder="Search tracks..."
+              autoComplete="off"
+              aria-label="Search tracks"
+              value={trackSearchQuery}
+              onChange={(event) => setTrackSearchQuery(event.target.value)}
+            />
+          </div>
+        ) : null}
         {subtab === "all-time" ? (
           <select
             id="all-time-sort"
@@ -1251,6 +1440,11 @@ export function TopTracksPanel() {
         tabId="recent"
         state={lists.recent}
         hidden={subtab !== "recent"}
+      />
+      <TrackSearchList
+        active={subtab === "search"}
+        query={trackSearchQuery}
+        reloadToken={trackSearchReloadToken}
       />
       {adminMode ? (
         <ReportedList

@@ -13,6 +13,7 @@ export function hasNonDefaultTuningConfig(
     config.justBackwards !== defaults.justBackwards ||
     config.justLongBranches !== defaults.justLongBranches ||
     config.removeSequentialBranches !== defaults.removeSequentialBranches ||
+    (config.maxLongBranchPercent ?? 0) !== (defaults.maxLongBranchPercent ?? 0) ||
     config.minRandomBranchChance !== defaults.minRandomBranchChance ||
     config.maxRandomBranchChance !== defaults.maxRandomBranchChance ||
     config.randomBranchChanceDelta !== defaults.randomBranchChanceDelta
