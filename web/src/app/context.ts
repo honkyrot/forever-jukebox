@@ -11,6 +11,7 @@ import type { AutocanonizerController } from "@forever-jukebox/shared/autocanoni
 import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import type { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
 import type { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
+import type { MetronomeOverlayService } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 
 export type TabId = "top" | "search" | "play" | "faq";
@@ -59,6 +60,10 @@ export type AppState = {
   branchStatsEnabled: boolean;
   jukeboxAudioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeVolumePct: number;
+  metronomeBeatsPerBar: number | null;
+  metronomeBeatOffset: number;
+  metronomeDetectedBeatsPerBar: number;
   audioModePreparing: boolean;
   audioModeRenderToken: number;
   selectedEdge: Edge | null;
@@ -96,6 +101,7 @@ export type AppContext = {
   wubmachine: WubMachineController | null;
   jukebox: JukeboxController | null;
   cowbellOverlay: CowbellOverlayService;
+  metronomeOverlay: MetronomeOverlayService;
   defaultConfig: ReturnType<JukeboxEngine["getConfig"]>;
 };
 

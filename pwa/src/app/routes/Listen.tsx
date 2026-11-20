@@ -21,6 +21,16 @@ import {
 } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
 import {
+  DEFAULT_BEATS_PER_BAR,
+  DEFAULT_METRONOME_BEAT_OFFSET,
+  DEFAULT_METRONOME_VOLUME_PCT,
+  MetronomeOverlayService,
+  clampMetronomeBeatOffset,
+  clampMetronomeVolumePct,
+  detectTrackBeatsPerBar,
+  resolveMetronomeTimeSignatureOverride,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
+import {
   DEFAULT_AUDIO_MODE_INTENSITY,
   audioModeChangeAffectsPlayback,
   clampAudioModeIntensity,
@@ -189,6 +199,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [audioIntensity, setAudioIntensity] = React.useState(
     initialAudioIntensity,
   );
+  const [metronomeVolumePct, setMetronomeVolumePct] = React.useState(
+    DEFAULT_METRONOME_VOLUME_PCT,
+  );
+  const [metronomeBeatsPerBar, setMetronomeBeatsPerBar] = React.useState<
+    number | null
+  >(null);
+  const [metronomeBeatOffset, setMetronomeBeatOffset] = React.useState(
+    DEFAULT_METRONOME_BEAT_OFFSET,
+  );
+  const [detectedBeatsPerBar, setDetectedBeatsPerBar] = React.useState(
+    DEFAULT_BEATS_PER_BAR,
+  );
   // Swing and Instrumental pre-render their buffers; one render at a time.
   const [preparingMode, setPreparingMode] =
     React.useState<PreparingAudioMode>(null);
@@ -237,6 +259,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
     audioMode: initialAudioMode,
     audioIntensity: initialAudioIntensity,
+    metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
+    metronomeBeatsPerBar: null,
+    metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
   });
 
   const vizPanelRef = React.useRef<HTMLDivElement | null>(null);
@@ -262,6 +287,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   });
   const playerRef = React.useRef<BufferedAudioPlayer | null>(null);
   const cowbellOverlayRef = React.useRef<CowbellOverlayService | null>(null);
+  const metronomeOverlayRef = React.useRef<MetronomeOverlayService | null>(null);
   const isRunningRef = React.useRef(false);
   const isPausedRef = React.useRef(false);
   const playModeRef = React.useRef<PlayMode>("jukebox");
@@ -323,6 +349,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     playMode,
     jukeboxAudioMode,
     audioIntensity,
+    metronomeVolumePct,
+    metronomeBeatsPerBar,
+    metronomeBeatOffset,
     getSourceIdentity: getCurrentSourceIdentity,
     getRenderedTrackId: () => fingerprintRef.current,
     getCanonizerRenderPlan: () => autocanonizerRef.current?.planRender() ?? null,
@@ -369,18 +398,27 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   // at default intensity.
   function resetAudioModeToOff(player: BufferedAudioPlayer) {
     cowbellOverlayRef.current?.disable();
+    metronomeOverlayRef.current?.disable();
+    metronomeOverlayRef.current?.setBeatsPerBarOverride(null);
+    metronomeOverlayRef.current?.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
     stopPreparing();
     jukeboxAudioModeRef.current = "off";
     setJukeboxAudioMode("off");
     setAudioIntensity(DEFAULT_AUDIO_MODE_INTENSITY);
+    setMetronomeBeatsPerBar(null);
+    setMetronomeBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
     setExtrasForm((prev) =>
       prev.audioMode === "off" &&
-      prev.audioIntensity === DEFAULT_AUDIO_MODE_INTENSITY
+      prev.audioIntensity === DEFAULT_AUDIO_MODE_INTENSITY &&
+      prev.metronomeBeatsPerBar === null &&
+      prev.metronomeBeatOffset === DEFAULT_METRONOME_BEAT_OFFSET
         ? prev
         : {
             ...prev,
             audioMode: "off",
             audioIntensity: DEFAULT_AUDIO_MODE_INTENSITY,
+            metronomeBeatsPerBar: null,
+            metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
           },
     );
     player.setJukeboxAudioMode("off", DEFAULT_AUDIO_MODE_INTENSITY);
@@ -431,11 +469,17 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       getPlaybackRate: () => player.getPlaybackRate(),
     });
     cowbellOverlay.setVolume(player.getVolume());
+    const metronomeOverlay = new MetronomeOverlayService(player.getContext());
+    metronomeOverlay.setVolume(player.getVolume());
     playerRef.current = player;
     cowbellOverlayRef.current = cowbellOverlay;
+    metronomeOverlayRef.current = metronomeOverlay;
     if (jukeboxAudioMode === "cowbell") {
       cowbellOverlay.enable();
       player.setJukeboxAudioMode("cowbell", audioIntensity);
+    } else if (jukeboxAudioMode === "metronome") {
+      metronomeOverlay.enable();
+      player.setJukeboxAudioMode("metronome", audioIntensity);
     } else if (
       jukeboxAudioMode !== "swing" &&
       jukeboxAudioMode !== "instrumental"
@@ -445,6 +489,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     return () => {
       cowbellOverlayRef.current?.dispose();
       cowbellOverlayRef.current = null;
+      metronomeOverlayRef.current?.dispose();
+      metronomeOverlayRef.current = null;
       const activePlayer = playerRef.current;
       if (activePlayer) {
         activePlayer.dispose().catch((err) => {
@@ -613,6 +659,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     previousFileKeyRef.current = currentFileKey;
     if (isTrackChange) {
       cowbellOverlayRef.current?.setSectionStartBeatIndices([]);
+      metronomeOverlayRef.current?.setBeatsPerBar(undefined);
+      setDetectedBeatsPerBar(DEFAULT_BEATS_PER_BAR);
       resetAudioModeToOff(playerRef.current);
     }
 
@@ -688,6 +736,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         if (audioMode === "cowbell") {
           cowbellOverlayRef.current?.enable();
         }
+        if (audioMode === "metronome") {
+          metronomeOverlayRef.current?.enable();
+        }
         if (audioMode === "swing") {
           playerRef.current?.setJukeboxAudioMode("swing");
           maybePrepareSwingMode();
@@ -732,6 +783,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   function stopPlayback() {
     cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
     if (playModeRef.current === "autocanonizer") {
       autocanonizerRef.current?.stop();
       playerRef.current?.stop();
@@ -815,10 +867,17 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       seed: createSessionSeed(),
     });
     engine.loadAnalysis(analysisData);
+    const normalizedBeats = engine.getVisualizationData()?.beats;
     engine.setBringItHomeMode(bringItHomeModeRef.current);
     cowbellOverlayRef.current?.setSectionStartBeatIndices(
       engine.getSectionStartBeatIndices(),
     );
+    const detected = detectTrackBeatsPerBar(
+      normalizedBeats,
+      analysisData.track?.time_signature,
+    );
+    setDetectedBeatsPerBar(detected);
+    metronomeOverlayRef.current?.setBeatsPerBar(detected);
     engine.onUpdate((state) => {
       counters.set({ beatsPlayed: state.beatsPlayed });
       if (state.currentBeatIndex >= 0) {
@@ -832,6 +891,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
               analysisData.beats[state.currentBeatIndex + 1],
             );
           }
+          metronomeOverlayRef.current?.handleBeatEnter(
+            state.currentBeatIndex,
+            normalizedBeats?.[state.currentBeatIndex],
+          );
         }
         const highlightJump =
           state.lastJumped && engine.getLastJumpWasBranch();
@@ -972,8 +1035,20 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       customAnchorEnabled,
       audioMode: jukeboxAudioMode,
       audioIntensity,
+      metronomeVolumePct,
+      metronomeBeatsPerBar,
+      metronomeBeatOffset,
     });
-  }, [branchStatsEnabled, bringItHomeMode, customAnchorEnabled, jukeboxAudioMode, audioIntensity]);
+  }, [
+    branchStatsEnabled,
+    bringItHomeMode,
+    customAnchorEnabled,
+    jukeboxAudioMode,
+    audioIntensity,
+    metronomeVolumePct,
+    metronomeBeatsPerBar,
+    metronomeBeatOffset,
+  ]);
 
   function getCurrentSourceIdentity() {
     return file ? `${file.name}:${file.size}:${file.lastModified}` : null;
@@ -1287,6 +1362,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       return;
     }
     cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
     if (playModeRef.current === "autocanonizer") {
       autocanonizerRef.current?.stop();
       player.stop();
@@ -1323,6 +1399,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     if (resetSession) {
       cowbellOverlayRef.current?.cancelScheduledHits();
+      metronomeOverlayRef.current?.cancelScheduledHits();
       engine.stopJukebox();
       engine.resetStats();
       resetPlaybackSessionMetrics();
@@ -1383,6 +1460,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const resetSession = options?.resetSession ?? true;
     player.stop();
     cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
     engineRef.current?.stopJukebox();
     if (resetSession) {
       resetPlaybackSessionMetrics();
@@ -1420,6 +1498,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
 
     cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
     player.seek(beat.start);
     engine.seekToBeat(index);
     lastBeatRef.current = index;
@@ -1454,6 +1533,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const resetSession = options?.resetSession ?? true;
     player.stop();
     cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
     engine.stopJukebox();
     if (resetSession) {
       resetPlaybackSessionMetrics();
@@ -1580,6 +1660,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     autocanonizerRef.current?.setVolume(volume);
     wubmachineRef.current?.setVolume(volume);
     cowbellOverlayRef.current?.setVolume(volume);
+    metronomeOverlayRef.current?.setVolume(volume);
     syncTuneFormFromEngine(tuneForm.highlightAnchorBranch);
     persistCurrentTuning();
     setIsTuningOpen(false);
@@ -1616,6 +1697,16 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const nextAudioIntensity = clampAudioModeIntensity(
       extrasForm.audioIntensity,
     );
+    const nextMetronomeVolumePct = clampMetronomeVolumePct(
+      extrasForm.metronomeVolumePct,
+    );
+    const nextMetronomeBeatsPerBar = resolveMetronomeTimeSignatureOverride(
+      extrasForm.metronomeBeatsPerBar,
+    );
+    const nextMetronomeBeatOffset = clampMetronomeBeatOffset(
+      extrasForm.metronomeBeatOffset,
+      nextMetronomeBeatsPerBar ?? detectedBeatsPerBar,
+    );
     bringItHomeModeRef.current = nextBringItHomeMode;
     setBringItHomeMode(nextBringItHomeMode);
     if (nextBringItHomeMode) {
@@ -1633,10 +1724,21 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     jukeboxAudioModeRef.current = nextAudioMode;
     setJukeboxAudioMode(nextAudioMode);
     setAudioIntensity(nextAudioIntensity);
+    setMetronomeVolumePct(nextMetronomeVolumePct);
+    setMetronomeBeatsPerBar(nextMetronomeBeatsPerBar);
+    setMetronomeBeatOffset(nextMetronomeBeatOffset);
+    metronomeOverlayRef.current?.setMetronomeVolumePct(nextMetronomeVolumePct);
+    metronomeOverlayRef.current?.setBeatsPerBarOverride(nextMetronomeBeatsPerBar);
+    metronomeOverlayRef.current?.setBeatOffset(nextMetronomeBeatOffset);
     if (nextAudioMode === "cowbell") {
       cowbellOverlayRef.current?.enable();
     } else {
       cowbellOverlayRef.current?.disable();
+    }
+    if (nextAudioMode === "metronome") {
+      metronomeOverlayRef.current?.enable();
+    } else {
+      metronomeOverlayRef.current?.disable();
     }
     if (nextAudioMode !== "instrumental") {
       cancelInstrumentalRender();
@@ -1686,7 +1788,17 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     bringItHomeModeRef.current = false;
     setBringItHomeMode(false);
     engineRef.current?.setBringItHomeMode(false);
-    setExtrasForm((prev) => ({ ...prev, bringItHomeMode: false }));
+    setMetronomeVolumePct(DEFAULT_METRONOME_VOLUME_PCT);
+    metronomeOverlayRef.current?.setMetronomeVolumePct(
+      DEFAULT_METRONOME_VOLUME_PCT,
+    );
+    setExtrasForm((prev) => ({
+      ...prev,
+      bringItHomeMode: false,
+      metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
+      metronomeBeatsPerBar: null,
+      metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
+    }));
     resetAudioModeToOff(player);
     if (
       previousAudioMode !== "off" &&
@@ -1729,6 +1841,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     autocanonizerRef.current?.setVolume(volume);
     wubmachineRef.current?.setVolume(volume);
     cowbellOverlayRef.current?.setVolume(volume);
+    metronomeOverlayRef.current?.setVolume(volume);
   };
 
   const onAutocanonizerStreamPanChange = (
@@ -2065,6 +2178,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           setTuneForm={setTuneForm}
           extrasForm={extrasForm}
           setExtrasForm={setExtrasForm}
+          detectedBeatsPerBar={detectedBeatsPerBar}
           onClose={() => setIsTuningOpen(false)}
           showReset={showTuningReset}
           onReset={onResetTuningModal}

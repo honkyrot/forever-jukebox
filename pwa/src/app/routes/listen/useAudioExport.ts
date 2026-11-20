@@ -54,6 +54,9 @@ export function useAudioExport({
   playMode,
   jukeboxAudioMode,
   audioIntensity,
+  metronomeVolumePct,
+  metronomeBeatsPerBar,
+  metronomeBeatOffset,
   getSourceIdentity,
   getRenderedTrackId,
   getCanonizerRenderPlan,
@@ -69,6 +72,9 @@ export function useAudioExport({
   playMode: PlayMode;
   jukeboxAudioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeVolumePct?: number;
+  metronomeBeatsPerBar?: number | null;
+  metronomeBeatOffset?: number;
   getSourceIdentity: () => string | null;
   // Rendered copies are stored by analysis fingerprint, like cached analysis.
   getRenderedTrackId: () => string | null;
@@ -333,6 +339,9 @@ export function useAudioExport({
         gain: player.getVolume(),
         audioMode: jukeboxAudioMode,
         audioIntensityPct: audioIntensity,
+        metronomeVolumePct,
+        metronomeBeatsPerBar,
+        metronomeBeatOffset,
         sectionStartBeatIndices: engine.getSectionStartBeatIndices(),
         renderedBuffer,
         randomMode: "seeded",

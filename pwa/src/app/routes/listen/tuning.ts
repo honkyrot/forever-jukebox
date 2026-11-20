@@ -11,6 +11,9 @@ export type ExtrasFormState = {
   customAnchorEnabled: boolean;
   audioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeVolumePct: number;
+  metronomeBeatsPerBar: number | null;
+  metronomeBeatOffset: number;
 };
 
 export type TuneFormState = {

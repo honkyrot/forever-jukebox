@@ -10,6 +10,7 @@ function createContext(overrides: Partial<AppContext> = {}): AppContext {
     player: { setVolume: vi.fn() },
     autocanonizer: { setVolume: vi.fn(), setStreamPans: vi.fn() },
     cowbellOverlay: { setVolume: vi.fn() },
+    metronomeOverlay: { setVolume: vi.fn() },
     ...overrides,
   } as unknown as AppContext;
 }
@@ -24,6 +25,7 @@ describe("setMasterVolume", () => {
     expect(context.player.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
     expect(context.autocanonizer?.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
     expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
+    expect(context.metronomeOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.5, 1.5));
   });
 
   it("passes 0 and 100 through cleanly", () => {
@@ -44,6 +46,7 @@ describe("setMasterVolume", () => {
     expect(() => setMasterVolume(context, 70)).not.toThrow();
     expect(context.player.setVolume).toHaveBeenCalledWith(Math.pow(0.7, 1.5));
     expect(context.cowbellOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.7, 1.5));
+    expect(context.metronomeOverlay.setVolume).toHaveBeenCalledWith(Math.pow(0.7, 1.5));
   });
 });
 

@@ -264,6 +264,43 @@ vi.mock("@forever-jukebox/shared/audio/CowbellOverlayService", () => ({
   },
 }));
 
+const metronomeOverlayInstances: Array<{
+  enable: ReturnType<typeof vi.fn>;
+  disable: ReturnType<typeof vi.fn>;
+  setVolume: ReturnType<typeof vi.fn>;
+  setBeatsPerBar: ReturnType<typeof vi.fn>;
+  setBeatsPerBarOverride: ReturnType<typeof vi.fn>;
+  setBeatOffset: ReturnType<typeof vi.fn>;
+  setMetronomeVolumePct: ReturnType<typeof vi.fn>;
+  cancelScheduledHits: ReturnType<typeof vi.fn>;
+  handleBeatEnter: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+}> = [];
+
+vi.mock("@forever-jukebox/shared/audio/MetronomeOverlayService", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@forever-jukebox/shared/audio/MetronomeOverlayService")
+  >();
+  return {
+    ...actual,
+    MetronomeOverlayService: class MetronomeOverlayService {
+      enable = vi.fn();
+      disable = vi.fn();
+      setVolume = vi.fn();
+      setBeatsPerBar = vi.fn();
+      setBeatsPerBarOverride = vi.fn();
+      setBeatOffset = vi.fn();
+      setMetronomeVolumePct = vi.fn();
+      cancelScheduledHits = vi.fn();
+      handleBeatEnter = vi.fn();
+      dispose = vi.fn();
+      constructor() {
+        metronomeOverlayInstances.push(this);
+      }
+    },
+  };
+});
+
 vi.mock("@forever-jukebox/shared/audio/swingBufferCache", () => ({
   getOrCreateSwingBuffer: vi.fn(
     (
@@ -3091,6 +3128,49 @@ describe("Listen route behavior", () => {
       "#audio-mode-cathedral"
     );
     expect(cathedralInput.checked).toBe(true);
+    rendered.unmount();
+  });
+
+  it("arms metronome mode under Playback Styles when selected", async () => {
+    metronomeOverlayInstances.length = 0;
+    const rendered = renderListen();
+    await settleEffects();
+
+    await openTuningModal(rendered.container);
+    await switchToExtrasTab(rendered.container);
+    const metronomeInput = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#audio-mode-metronome"
+    );
+    expect(metronomeInput.closest(".audio-mode-section")?.textContent).toContain(
+      "Playback Styles"
+    );
+    await click(metronomeInput);
+    const volSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#metronome-volume"
+    );
+    const tsSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#metronome-time-signature"
+    );
+    const offsetSlider = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#metronome-beat-offset"
+    );
+    await changeRange(volSlider, "160");
+    await changeRange(tsSlider, "2");
+    await changeRange(offsetSlider, "2");
+    await click(
+      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
+    );
+
+    const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
+    expect(playTitle.textContent).toContain("(metronome)");
+    expect(metronomeOverlayInstances[0]?.enable).toHaveBeenCalledTimes(1);
+    expect(metronomeOverlayInstances[0]?.setMetronomeVolumePct).toHaveBeenCalledWith(160);
+    expect(metronomeOverlayInstances[0]?.setBeatsPerBarOverride).toHaveBeenCalledWith(3);
+    expect(metronomeOverlayInstances[0]?.setBeatOffset).toHaveBeenCalledWith(2);
     rendered.unmount();
   });
 

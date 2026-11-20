@@ -1,6 +1,7 @@
 import { JukeboxEngine } from "@forever-jukebox/shared";
 import { BufferedAudioPlayer } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
+import { MetronomeOverlayService } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
@@ -87,6 +88,8 @@ export function initRuntime(): void {
     getPlaybackRate: () => player.getPlaybackRate(),
   });
   cowbellOverlay.setVolume(player.getVolume());
+  const metronomeOverlay = new MetronomeOverlayService(player.getContext());
+  metronomeOverlay.setVolume(player.getVolume());
   const engine = new JukeboxEngine(player, { randomMode: "random" });
   const highlightAnchorBranch = resolveStoredAnchorHighlight();
   const branchStatsEnabled = resolveStoredBranchStatsEnabled();
@@ -118,6 +121,7 @@ export function initRuntime(): void {
     wubmachine: null,
     jukebox: null,
     cowbellOverlay,
+    metronomeOverlay,
     defaultConfig,
   };
   // Expose the runtime singletons via the module-singleton keystone so flows

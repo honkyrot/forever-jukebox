@@ -35,6 +35,9 @@ describe("TuningModal", () => {
             customAnchorEnabled: false,
             audioMode: "off",
             audioIntensity: 50,
+            metronomeVolumePct: 100,
+            metronomeBeatsPerBar: null,
+            metronomeBeatOffset: 0,
           }}
           setExtrasForm={() => {}}
           onClose={() => {}}

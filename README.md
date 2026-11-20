@@ -16,6 +16,8 @@ This fork adds and changes some features in this project.
 - extra features for the tuning modal.
 - adds a mix songs feature to connect multiple songs together.
 
+- Gemini was used to assist in the development of this fork.
+
 ## Structure
 
 - `engine/` — the Forever Jukebox audio analysis engine.

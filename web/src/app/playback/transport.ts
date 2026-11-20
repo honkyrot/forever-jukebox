@@ -66,10 +66,12 @@ export function stopPlayback(context: AppContext) {
     cowbellOverlay,
     engine,
     jukebox,
+    metronomeOverlay,
     player,
     wubmachine,
   } = context;
   cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
   if (useAppStore.getState().playMode === "autocanonizer") {
     autocanonizer?.stop();
     player.stop();
@@ -102,11 +104,19 @@ export function stopPlayback(context: AppContext) {
 }
 
 export function pausePlayback(context: AppContext) {
-  const { autocanonizer, cowbellOverlay, engine, player, wubmachine } = context;
+  const {
+    autocanonizer,
+    cowbellOverlay,
+    engine,
+    metronomeOverlay,
+    player,
+    wubmachine,
+  } = context;
   if (!useAppStore.getState().isRunning) {
     return;
   }
   cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
   if (useAppStore.getState().playMode === "autocanonizer") {
     autocanonizer?.stop();
     player.stop();
@@ -133,7 +143,7 @@ export function pausePlayback(context: AppContext) {
 }
 
 export function startJukeboxPlayback(context: AppContext, resetSession: boolean) {
-  const { cowbellOverlay, engine, jukebox, player } = context;
+  const { cowbellOverlay, engine, jukebox, metronomeOverlay, player } = context;
   if (!jukebox) {
     return;
   }
@@ -150,6 +160,7 @@ export function startJukeboxPlayback(context: AppContext, resetSession: boolean)
   }
   if (resetSession) {
     cowbellOverlay.cancelScheduledHits();
+    metronomeOverlay.cancelScheduledHits();
     engine.stopJukebox();
     engine.resetStats();
     useAppStore.setState({ playTimerMs: 0 });
@@ -209,7 +220,7 @@ export function togglePlayback(context: AppContext) {
 }
 
 export function startJukeboxFromBeat(context: AppContext, index: number) {
-  const { cowbellOverlay, engine, player } = context;
+  const { cowbellOverlay, engine, metronomeOverlay, player } = context;
   if (useAppStore.getState().playMode !== "jukebox") {
     return;
   }
@@ -227,6 +238,7 @@ export function startJukeboxFromBeat(context: AppContext, index: number) {
   }
 
   cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
   player.seek(beat.start);
   engine.seekToBeat(index);
   useAppStore.setState({ lastBeatIndex: index });
@@ -253,7 +265,7 @@ export function startAutocanonizerPlayback(
   index: number,
   options?: { resetSession?: boolean },
 ) {
-  const { autocanonizer, cowbellOverlay, engine, player } = context;
+  const { autocanonizer, cowbellOverlay, engine, metronomeOverlay, player } = context;
   if (!autocanonizer) {
     return false;
   }
@@ -264,6 +276,7 @@ export function startAutocanonizerPlayback(
   const resetSession = options?.resetSession ?? true;
   player.stop();
   cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
   engine.stopJukebox();
   if (resetSession) {
     useAppStore.setState({ playTimerMs: 0 });
@@ -296,7 +309,7 @@ export function startWubMachinePlayback(
   seconds: number | null,
   options?: { resetSession?: boolean },
 ) {
-  const { cowbellOverlay, engine, player, wubmachine } = context;
+  const { cowbellOverlay, engine, metronomeOverlay, player, wubmachine } = context;
   if (!wubmachine) {
     return false;
   }
@@ -311,6 +324,7 @@ export function startWubMachinePlayback(
   const resetSession = options?.resetSession ?? true;
   player.stop();
   cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
   engine.stopJukebox();
   if (resetSession) {
     useAppStore.setState({ playTimerMs: 0 });

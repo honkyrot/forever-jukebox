@@ -8,6 +8,7 @@ export type JukeboxAudioMode =
   | "lofi"
   | "underwater"
   | "cathedral"
+  | "metronome"
   | "cowbell"
   | "swing"
   | "instrumental";
@@ -102,6 +103,14 @@ export const AUDIO_MODE_SETTINGS: Record<JukeboxAudioMode, AudioModeSettings> = 
     reverbMix: 0.9,
     reverbSeconds: 4.75,
     reverbDecay: 2.5,
+    pan: false,
+  },
+  metronome: {
+    rate: 1,
+    highPassFrequency: null,
+    lowPassFrequency: null,
+    useBandPass: false,
+    reverbMix: 0,
     pan: false,
   },
   cowbell: {

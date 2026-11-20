@@ -27,6 +27,7 @@ export const AUDIO_MODE_SECTIONS: AudioModeSection[] = [
       "eight_bit",
       "underwater",
       "cathedral",
+      "metronome",
     ],
   },
   {
@@ -47,6 +48,7 @@ export function audioModeLabel(audioMode: JukeboxAudioMode, t: TFunction) {
     | "audioModes.eightBit"
     | "audioModes.underwater"
     | "audioModes.cathedral"
+    | "audioModes.metronome"
     | "audioModes.cowbell"
     | "audioModes.swing"
     | "audioModes.instrumental"
@@ -60,6 +62,7 @@ export function audioModeLabel(audioMode: JukeboxAudioMode, t: TFunction) {
     eight_bit: "audioModes.eightBit",
     underwater: "audioModes.underwater",
     cathedral: "audioModes.cathedral",
+    metronome: "audioModes.metronome",
     cowbell: "audioModes.cowbell",
     swing: "audioModes.swing",
     instrumental: "audioModes.instrumental",
@@ -94,6 +97,7 @@ export function parseAudioMode(value: string | null): JukeboxAudioMode | null {
     value === "lofi" ||
     value === "underwater" ||
     value === "cathedral" ||
+    value === "metronome" ||
     value === "cowbell" ||
     value === "swing"
   ) {

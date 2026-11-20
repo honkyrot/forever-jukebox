@@ -62,6 +62,10 @@ function createContext(
       enable: vi.fn(),
       disable: vi.fn(),
     } as unknown as AppContext["cowbellOverlay"],
+    metronomeOverlay: {
+      enable: vi.fn(),
+      disable: vi.fn(),
+    } as unknown as AppContext["metronomeOverlay"],
   };
 }
 
@@ -214,8 +218,23 @@ describe("tuning params", () => {
     expect(applied).toBe(true);
     expect(useAppStore.getState().jukeboxAudioMode).toBe("cowbell");
     expect(context.cowbellOverlay.enable).toHaveBeenCalledTimes(1);
+    expect(context.metronomeOverlay.disable).toHaveBeenCalledTimes(1);
     expect(context.player.setJukeboxAudioMode).toHaveBeenCalledWith(
       "cowbell",
+      100,
+    );
+  });
+
+  it("applies metronome audio mode from params", () => {
+    const context = createContext();
+    const params = new URLSearchParams("am=metronome");
+    const applied = applyTuningParamsToEngine(context, params);
+    expect(applied).toBe(true);
+    expect(useAppStore.getState().jukeboxAudioMode).toBe("metronome");
+    expect(context.metronomeOverlay.enable).toHaveBeenCalledTimes(1);
+    expect(context.cowbellOverlay.disable).toHaveBeenCalledTimes(1);
+    expect(context.player.setJukeboxAudioMode).toHaveBeenCalledWith(
+      "metronome",
       100,
     );
   });
@@ -231,17 +250,27 @@ describe("tuning params", () => {
     expect(context.player.setJukeboxAudioMode).not.toHaveBeenCalled();
   });
 
-  it("does not enable the cowbell overlay outside jukebox mode", () => {
+  it("does not enable overlays outside jukebox mode", () => {
     useAppStore.setState({ playMode: "autocanonizer" });
-    const context = createContext();
+    const cowbellContext = createContext();
     const applied = applyTuningParamsToEngine(
-      context,
+      cowbellContext,
       new URLSearchParams("am=cowbell"),
     );
     expect(applied).toBe(true);
-    expect(context.cowbellOverlay.enable).not.toHaveBeenCalled();
-    expect(context.cowbellOverlay.disable).toHaveBeenCalledTimes(1);
-    expect(context.player.setJukeboxAudioMode).not.toHaveBeenCalled();
+    expect(cowbellContext.cowbellOverlay.enable).not.toHaveBeenCalled();
+    expect(cowbellContext.cowbellOverlay.disable).toHaveBeenCalledTimes(1);
+    expect(cowbellContext.player.setJukeboxAudioMode).not.toHaveBeenCalled();
+
+    const metronomeContext = createContext();
+    const appliedMetronome = applyTuningParamsToEngine(
+      metronomeContext,
+      new URLSearchParams("am=metronome"),
+    );
+    expect(appliedMetronome).toBe(true);
+    expect(metronomeContext.metronomeOverlay.enable).not.toHaveBeenCalled();
+    expect(metronomeContext.metronomeOverlay.disable).toHaveBeenCalledTimes(1);
+    expect(metronomeContext.player.setJukeboxAudioMode).not.toHaveBeenCalled();
   });
 
   it("applies audio intensity with a supported mode", () => {
@@ -320,8 +349,10 @@ describe("tuning params", () => {
   it("serializes audio mode when enabled", () => {
     const context = createContext();
     useAppStore.setState({ jukeboxAudioMode: "cowbell" });
-    const params = getTuningParamsFromEngine(context);
-    expect(params.get("am")).toBe("cowbell");
+    expect(getTuningParamsFromEngine(context).get("am")).toBe("cowbell");
+
+    useAppStore.setState({ jukeboxAudioMode: "metronome" });
+    expect(getTuningParamsFromEngine(context).get("am")).toBe("metronome");
   });
 
   it("serializes deleted edge ids when present", () => {

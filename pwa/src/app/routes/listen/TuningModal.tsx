@@ -10,6 +10,10 @@ import {
   type TuneFormState,
 } from "./tuning";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
+import {
+  DEFAULT_BEATS_PER_BAR,
+  clampMetronomeBeatOffset,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import type { TuningModalTab } from "./types";
 
 export function TuningModal({
@@ -20,6 +24,7 @@ export function TuningModal({
   setTuneForm,
   extrasForm,
   setExtrasForm,
+  detectedBeatsPerBar = DEFAULT_BEATS_PER_BAR,
   onClose,
   showReset,
   onReset,
@@ -32,6 +37,7 @@ export function TuningModal({
   setTuneForm: React.Dispatch<React.SetStateAction<TuneFormState>>;
   extrasForm: ExtrasFormState;
   setExtrasForm: React.Dispatch<React.SetStateAction<ExtrasFormState>>;
+  detectedBeatsPerBar?: number;
   onClose: () => void;
   showReset: boolean;
   onReset: () => void;
@@ -302,6 +308,26 @@ export function TuningModal({
                 intensityPct={extrasForm.audioIntensity}
                 onIntensityChange={(audioIntensity) =>
                   setExtrasForm((prev) => ({ ...prev, audioIntensity }))
+                }
+                metronomeVolumePct={extrasForm.metronomeVolumePct}
+                onMetronomeVolumeChange={(metronomeVolumePct) =>
+                  setExtrasForm((prev) => ({ ...prev, metronomeVolumePct }))
+                }
+                metronomeBeatsPerBar={extrasForm.metronomeBeatsPerBar}
+                detectedBeatsPerBar={detectedBeatsPerBar}
+                onMetronomeBeatsPerBarChange={(metronomeBeatsPerBar) =>
+                  setExtrasForm((prev) => ({
+                    ...prev,
+                    metronomeBeatsPerBar,
+                    metronomeBeatOffset: clampMetronomeBeatOffset(
+                      prev.metronomeBeatOffset,
+                      metronomeBeatsPerBar ?? detectedBeatsPerBar,
+                    ),
+                  }))
+                }
+                metronomeBeatOffset={extrasForm.metronomeBeatOffset}
+                onMetronomeBeatOffsetChange={(metronomeBeatOffset) =>
+                  setExtrasForm((prev) => ({ ...prev, metronomeBeatOffset }))
                 }
               />
             </div>

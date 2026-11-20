@@ -69,6 +69,9 @@ export {
 } from "./wubmachine";
 export { releaseWakeLock, requestWakeLock } from "./wake-lock";
 export {
+  DEFAULT_MIX_TRACK_GAIN_PCT,
+  MAX_MIX_TRACK_GAIN_PCT,
+  MIN_MIX_TRACK_GAIN_PCT,
   clearCachedMultiTrackSources,
   disableMultiTrackMix,
   loadMultiTrackMix,

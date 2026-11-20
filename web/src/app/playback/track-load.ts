@@ -60,6 +60,11 @@ import {
   updateVizVisibility,
 } from "./status-ui";
 import { maybePrepareInstrumentalMode } from "./instrumental";
+import {
+  DEFAULT_BEATS_PER_BAR,
+  DEFAULT_METRONOME_BEAT_OFFSET,
+  detectTrackBeatsPerBar,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { cancelInstrumentalRender } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import { maybePrepareSwingMode } from "./swing";
 import {
@@ -151,6 +156,7 @@ export function resetForNewTrack(
     cowbellOverlay,
     engine,
     jukebox,
+    metronomeOverlay,
     player,
     defaultConfig,
   } = context;
@@ -170,6 +176,15 @@ export function resetForNewTrack(
   }
   cowbellOverlay.disable();
   cowbellOverlay.setSectionStartBeatIndices([]);
+  metronomeOverlay.disable();
+  metronomeOverlay.setBeatsPerBar(undefined);
+  metronomeOverlay.setBeatsPerBarOverride(null);
+  metronomeOverlay.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
+  useAppStore.setState({
+    metronomeBeatsPerBar: null,
+    metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
+    metronomeDetectedBeatsPerBar: DEFAULT_BEATS_PER_BAR,
+  });
   cancelInstrumentalRender();
   useAppStore.setState({
     audioModeRenderToken: useAppStore.getState().audioModeRenderToken + (1),
@@ -191,6 +206,7 @@ export function resetForNewTrack(
   useAppStore.setState({ analysisLoaded: false });
   useAppStore.setState({ audioLoadInFlight: false });
   useAppStore.setState({ multiTrackEnabled: false });
+  player.clearPostMixTrackGains?.();
   player.setPostMixNormalization?.(false);
   useAppStore.setState({ lastJobId: null });
   useAppStore.setState({ lastTrackId: null });
@@ -310,13 +326,20 @@ export function applyAnalysisResult(
     return false;
   }
   maybeUpdateDeleteEligibility(response, response.id);
-  const { autocanonizer, cowbellOverlay, engine, jukebox } = context;
+  const { autocanonizer, cowbellOverlay, engine, jukebox, metronomeOverlay } =
+    context;
   if (!autocanonizer || !jukebox) {
     return false;
   }
   applyTuningParamsFromUrl(context);
   engine.loadAnalysis(response.result);
   cowbellOverlay.setSectionStartBeatIndices(engine.getSectionStartBeatIndices());
+  const detectedBeatsPerBar = detectTrackBeatsPerBar(
+    engine.getVisualizationData()?.beats,
+    response.result.track?.time_signature,
+  );
+  metronomeOverlay.setBeatsPerBar(detectedBeatsPerBar);
+  useAppStore.setState({ metronomeDetectedBeatsPerBar: detectedBeatsPerBar });
   applyDeletedEdgesFromUrl(context);
   applyAnchorBranchFromUrl(context);
   autocanonizer.setAnalysis(response.result, response.result.track?.duration);

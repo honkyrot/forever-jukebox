@@ -122,6 +122,7 @@ export function FaqPanel() {
             <li><Trans i18nKey="faq.modesLofi" /></li>
             <li><Trans i18nKey="faq.modesUnderwater" /></li>
             <li><Trans i18nKey="faq.modesCathedral" /></li>
+            <li><Trans i18nKey="faq.modesMetronome" /></li>
             <li>
               <Trans
                 i18nKey="faq.modesRemix"

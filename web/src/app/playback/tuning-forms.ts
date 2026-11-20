@@ -23,6 +23,13 @@ import {
   audioModeSupportsIntensity,
   clampAudioModeIntensity,
 } from "@forever-jukebox/shared/audio/audioModes";
+import {
+  DEFAULT_METRONOME_BEAT_OFFSET,
+  DEFAULT_METRONOME_VOLUME_PCT,
+  clampMetronomeBeatOffset,
+  clampMetronomeVolumePct,
+  resolveMetronomeTimeSignatureOverride,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { trackEvent, trackModeEnabled } from "../analytics";
 import {
   updatePlayButton,
@@ -116,6 +123,9 @@ export type ExtrasFormValues = {
   customAnchorEnabled: boolean;
   audioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeVolumePct: number;
+  metronomeBeatsPerBar: number | null;
+  metronomeBeatOffset: number;
 };
 
 export function getExtrasFormValues(): ExtrasFormValues {
@@ -125,6 +135,9 @@ export function getExtrasFormValues(): ExtrasFormValues {
     branchStatsEnabled,
     jukeboxAudioMode,
     audioIntensity,
+    metronomeVolumePct,
+    metronomeBeatsPerBar,
+    metronomeBeatOffset,
     customAnchorEnabled,
   } = useAppStore.getState();
   const inJukeboxMode = playMode === "jukebox";
@@ -134,6 +147,9 @@ export function getExtrasFormValues(): ExtrasFormValues {
     customAnchorEnabled,
     audioMode: jukeboxAudioMode,
     audioIntensity,
+    metronomeVolumePct,
+    metronomeBeatsPerBar,
+    metronomeBeatOffset,
   };
 }
 
@@ -141,7 +157,7 @@ export function applyExtrasChanges(
   context: AppContext,
   values: ExtrasFormValues,
 ): ExtrasApplyResult {
-  const { cowbellOverlay, engine, player } = context;
+  const { cowbellOverlay, engine, metronomeOverlay, player } = context;
   const previousBranchStatsEnabled = useAppStore.getState().branchStatsEnabled;
   const previousAudioMode = useAppStore.getState().jukeboxAudioMode;
   const previousAudioIntensity = useAppStore.getState().audioIntensity;
@@ -180,14 +196,36 @@ export function applyExtrasChanges(
   storeBranchStatsEnabled(useAppStore.getState().branchStatsEnabled);
   const nextAudioMode = values.audioMode;
   const nextAudioIntensity = clampAudioModeIntensity(values.audioIntensity);
+  const nextMetronomeVolumePct = clampMetronomeVolumePct(values.metronomeVolumePct);
+  const nextMetronomeBeatsPerBar = resolveMetronomeTimeSignatureOverride(
+    values.metronomeBeatsPerBar,
+  );
+  const effectiveBeatsPerBar =
+    nextMetronomeBeatsPerBar ??
+    useAppStore.getState().metronomeDetectedBeatsPerBar;
+  const nextMetronomeBeatOffset = clampMetronomeBeatOffset(
+    values.metronomeBeatOffset,
+    effectiveBeatsPerBar,
+  );
   useAppStore.setState({
     jukeboxAudioMode: nextAudioMode,
     audioIntensity: nextAudioIntensity,
+    metronomeVolumePct: nextMetronomeVolumePct,
+    metronomeBeatsPerBar: nextMetronomeBeatsPerBar,
+    metronomeBeatOffset: nextMetronomeBeatOffset,
   });
+  metronomeOverlay.setMetronomeVolumePct(nextMetronomeVolumePct);
+  metronomeOverlay.setBeatsPerBarOverride(nextMetronomeBeatsPerBar);
+  metronomeOverlay.setBeatOffset(nextMetronomeBeatOffset);
   if (nextAudioMode === "cowbell") {
     cowbellOverlay.enable();
   } else {
     cowbellOverlay.disable();
+  }
+  if (nextAudioMode === "metronome") {
+    metronomeOverlay.enable();
+  } else {
+    metronomeOverlay.disable();
   }
   if (nextAudioMode !== "instrumental") {
     cancelInstrumentalRender();
@@ -247,11 +285,20 @@ export function applyExtrasChanges(
 }
 
 export function resetExtrasDefaults(context: AppContext) {
-  const { cowbellOverlay, engine, player } = context;
+  const { cowbellOverlay, engine, metronomeOverlay, player } = context;
   const previousAudioMode = useAppStore.getState().jukeboxAudioMode;
   useAppStore.setState({ bringItHomeMode: false });
   engine.setBringItHomeMode(false);
   cowbellOverlay.disable();
+  metronomeOverlay.disable();
+  metronomeOverlay.setMetronomeVolumePct(DEFAULT_METRONOME_VOLUME_PCT);
+  metronomeOverlay.setBeatsPerBarOverride(null);
+  metronomeOverlay.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
+  useAppStore.setState({
+    metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
+    metronomeBeatsPerBar: null,
+    metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
+  });
   cancelInstrumentalRender();
   useAppStore.setState({
     audioModeRenderToken: useAppStore.getState().audioModeRenderToken + (1),

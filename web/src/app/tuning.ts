@@ -43,6 +43,7 @@ function parseAudioMode(raw: string | null) {
     raw === "lofi" ||
     raw === "underwater" ||
     raw === "cathedral" ||
+    raw === "metronome" ||
     raw === "cowbell" ||
     raw === "swing"
   ) {
@@ -216,6 +217,11 @@ export function applyTuningParamsToEngine(
       context.cowbellOverlay.enable();
     } else {
       context.cowbellOverlay.disable();
+    }
+    if (audioMode === "metronome" && inJukeboxMode) {
+      context.metronomeOverlay.enable();
+    } else {
+      context.metronomeOverlay.disable();
     }
     if (
       audioMode !== "swing" &&

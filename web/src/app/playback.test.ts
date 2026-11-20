@@ -18,6 +18,7 @@ import {
   openExtras,
   pollAnalysis,
   resetForNewTrack,
+  setMixTrackGainPct,
   setPostMixNormalizeVolumeEnabled,
   setSleepTimer,
   startJukeboxFromBeat,
@@ -264,9 +265,13 @@ function createContext(overrides?: Partial<AppContext>): TestAppContext {
     pause: vi.fn(),
     stop: vi.fn(),
     seek: vi.fn(),
+    loadBuffer: vi.fn(),
     setJukeboxAudioMode: vi.fn(),
     setJukeboxAudioModeIntensity: vi.fn(),
     setPostMixNormalization: vi.fn(),
+    setPostMixTrackSlices: vi.fn(),
+    setPostMixTrackGains: vi.fn(),
+    clearPostMixTrackGains: vi.fn(),
     getSourceBuffer: vi.fn(() => null),
     setRenderedJukeboxAudioBuffer: vi.fn(),
   };
@@ -321,6 +326,19 @@ function createContext(overrides?: Partial<AppContext>): TestAppContext {
     setVolume: vi.fn(),
     dispose: vi.fn(),
   };
+  const metronomeOverlay = {
+    enable: vi.fn(),
+    disable: vi.fn(),
+    isEnabled: vi.fn(() => false),
+    handleBeatEnter: vi.fn(),
+    cancelScheduledHits: vi.fn(),
+    setBeatsPerBar: vi.fn(),
+    setBeatsPerBarOverride: vi.fn(),
+    setBeatOffset: vi.fn(),
+    setMetronomeVolumePct: vi.fn(),
+    setVolume: vi.fn(),
+    dispose: vi.fn(),
+  };
   const context = {
     engine: engine as unknown as AppContext["engine"],
     player: player as unknown as AppContext["player"],
@@ -328,6 +346,8 @@ function createContext(overrides?: Partial<AppContext>): TestAppContext {
     wubmachine: wubmachine as unknown as AppContext["wubmachine"],
     jukebox: jukebox as unknown as AppContext["jukebox"],
     cowbellOverlay: cowbellOverlay as unknown as AppContext["cowbellOverlay"],
+    metronomeOverlay:
+      metronomeOverlay as unknown as AppContext["metronomeOverlay"],
     defaultConfig: engineConfig as unknown as AppContext["defaultConfig"],
     ...overrides,
   } as TestAppContext;
@@ -641,6 +661,61 @@ describe("playback tuning", () => {
     expect(context.player.setPostMixNormalization).toHaveBeenLastCalledWith(false);
   });
 
+  it("updates post-mix per-track volume sliders live (0-200%) without stopping playback or recomputing branches, and clears on reset", () => {
+    const context = createContext();
+    useAppStore.setState({
+      multiTrackEnabled: true,
+      mixTrackGainsPct: [100, 100],
+      vizData: {
+        beats: [],
+        beatVisits: [],
+        beatColors: [],
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+        putBackAnchorEdgeId: null,
+        tracks: [
+          {
+            trackIndex: 0,
+            title: "Song A",
+            duration: 10,
+            tempoRatio: 1,
+            startTimeOffset: 0,
+            startBeatIndex: 0,
+            beatCount: 0,
+          },
+          {
+            trackIndex: 1,
+            title: "Song B",
+            duration: 10,
+            tempoRatio: 1,
+            startTimeOffset: 10,
+            startBeatIndex: 0,
+            beatCount: 0,
+          },
+        ],
+      },
+    });
+
+    setMixTrackGainPct(context, 1, 200);
+    expect(useAppStore.getState().mixTrackGainsPct).toEqual([100, 200]);
+    expect(context.player.setPostMixTrackGains).toHaveBeenLastCalledWith([1, 2]);
+
+    // Clamps outside [0, 200] without touching playback, buffers, or jump graph.
+    setMixTrackGainPct(context, 0, -25);
+    setMixTrackGainPct(context, 1, 250);
+    expect(useAppStore.getState().mixTrackGainsPct).toEqual([0, 200]);
+    expect(context.player.setPostMixTrackGains).toHaveBeenLastCalledWith([0, 2]);
+    expect(context.player.stop).not.toHaveBeenCalled();
+    expect(context.player.loadBuffer).not.toHaveBeenCalled();
+    expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
+    expect(context.engine.rebuildGraph).not.toHaveBeenCalled();
+
+    resetForNewTrack(context);
+    expect(context.player.clearPostMixTrackGains).toHaveBeenCalledTimes(1);
+  });
+
   it("applies branch stats toggle and audio mode from extras controls", () => {
     const context = createContext();
     useAppStore.setState({ isRunning: true });
@@ -860,6 +935,57 @@ describe("playback tuning", () => {
     expect(window.location.search).toContain("am=cathedral");
   });
 
+  it("applies metronome as an audio mode from extras controls", () => {
+    const context = createContext();
+    useAppStore.setState({ playMode: "jukebox" });
+
+    const result = applyExtrasChanges(context, {
+      ...getExtrasFormValues(),
+      audioMode: "metronome",
+    });
+
+    expect(result).toEqual({ branchStatsChanged: false, audioModeChanged: true });
+    expect(useAppStore.getState().jukeboxAudioMode).toBe("metronome");
+    expect(context.metronomeOverlay.enable).toHaveBeenCalledTimes(1);
+    expect(context.player.setJukeboxAudioMode).toHaveBeenCalledWith(
+      "metronome",
+      100,
+    );
+    expect(window.location.search).toContain("am=metronome");
+  });
+
+  it("updates and resets metronome volume, time signature, and beat offset", () => {
+    const context = createContext();
+    useAppStore.setState({
+      playMode: "jukebox",
+      metronomeDetectedBeatsPerBar: 4,
+    });
+
+    applyExtrasChanges(context, {
+      ...getExtrasFormValues(),
+      audioMode: "metronome",
+      metronomeVolumePct: 160,
+      metronomeBeatsPerBar: 3,
+      metronomeBeatOffset: 5,
+    });
+
+    expect(useAppStore.getState().metronomeVolumePct).toBe(160);
+    expect(useAppStore.getState().metronomeBeatsPerBar).toBe(3);
+    // Offset clamps to [0, beatsPerBar - 1] = 2 for 3/4.
+    expect(useAppStore.getState().metronomeBeatOffset).toBe(2);
+    expect(context.metronomeOverlay.setMetronomeVolumePct).toHaveBeenCalledWith(160);
+    expect(context.metronomeOverlay.setBeatsPerBarOverride).toHaveBeenCalledWith(3);
+    expect(context.metronomeOverlay.setBeatOffset).toHaveBeenCalledWith(2);
+
+    resetExtrasDefaults(context);
+    expect(useAppStore.getState().metronomeVolumePct).toBe(100);
+    expect(useAppStore.getState().metronomeBeatsPerBar).toBeNull();
+    expect(useAppStore.getState().metronomeBeatOffset).toBe(0);
+    expect(context.metronomeOverlay.setMetronomeVolumePct).toHaveBeenLastCalledWith(100);
+    expect(context.metronomeOverlay.setBeatsPerBarOverride).toHaveBeenLastCalledWith(null);
+    expect(context.metronomeOverlay.setBeatOffset).toHaveBeenLastCalledWith(0);
+  });
+
   it("resumes jukebox playback after preparing swing while already running", async () => {
     (globalThis.window as unknown as { setInterval: typeof setInterval }).setInterval =
       setInterval;
@@ -995,6 +1121,7 @@ describe("playback tuning", () => {
     expect(context.engine.setBringItHomeMode).toHaveBeenCalledWith(false);
     expect(useAppStore.getState().jukeboxAudioMode).toBe("off");
     expect(context.cowbellOverlay.disable).toHaveBeenCalledTimes(1);
+    expect(context.metronomeOverlay.disable).toHaveBeenCalledTimes(1);
   });
 
   it("reports non-default tuning against the context defaults", () => {
@@ -1317,6 +1444,76 @@ describe("playback tuning", () => {
       12,
     ]);
     expect(useAppStore.getState().tuningParams).toContain("am=daycore");
+  });
+
+  it("sets metronome beats per bar from track time_signature on analysis load", () => {
+    const context = createContext();
+    useAppStore.setState({ playMode: "jukebox" });
+    const response: AnalysisComplete = {
+      status: "complete",
+      id: "job-ts",
+      result: {
+        beats: [],
+        track: { title: "Waltz", artist: "Artist", time_signature: 3 },
+      },
+    };
+
+    applyAnalysisResult(context, response);
+
+    expect(context.metronomeOverlay.setBeatsPerBar).toHaveBeenCalledWith(3);
+    expect(useAppStore.getState().metronomeDetectedBeatsPerBar).toBe(3);
+  });
+
+  it("detects 3/4 from analyzed bar structure even when track.time_signature is 4", () => {
+    const barChildren = new Array(3);
+    const barParent = { children: barChildren };
+    const normalizedBeats = [
+      { parent: barParent },
+      { parent: barParent },
+      { parent: barParent },
+    ];
+    const context = createContext({
+      engine: {
+        getConfig: vi.fn(() => ({
+          currentThreshold: 0,
+          minRandomBranchChance: 0.18,
+          maxRandomBranchChance: 0.5,
+          randomBranchChanceDelta: 0.02,
+          justBackwards: false,
+          justLongBranches: false,
+          removeSequentialBranches: false,
+        })),
+        updateConfig: vi.fn(),
+        loadAnalysis: vi.fn(),
+        getSectionStartBeatIndices: vi.fn(() => []),
+        getGraphState: vi.fn(() => ({
+          currentThreshold: 45,
+          computedThreshold: 30,
+          allEdges: [],
+          totalBeats: 3,
+        })),
+        getVisualizationData: vi.fn(() => ({
+          beats: normalizedBeats,
+          edges: [],
+        })),
+        deleteEdge: vi.fn(),
+        rebuildGraph: vi.fn(),
+      } as unknown as AppContext["engine"],
+    });
+    useAppStore.setState({ playMode: "jukebox" });
+    const response: AnalysisComplete = {
+      status: "complete",
+      id: "job-bar-3-4",
+      result: {
+        beats: [],
+        track: { title: "Waltz", artist: "Artist", time_signature: 4 },
+      },
+    };
+
+    applyAnalysisResult(context, response);
+
+    expect(context.metronomeOverlay.setBeatsPerBar).toHaveBeenCalledWith(3);
+    expect(useAppStore.getState().metronomeDetectedBeatsPerBar).toBe(3);
   });
 
   it("opens tuning modal on extras tab", () => {

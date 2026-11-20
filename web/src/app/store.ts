@@ -15,6 +15,11 @@ import type { MaterialSymbolIconName } from "./material-icons";
 import { DEFAULT_VISUALIZATION_INDEX } from "./constants";
 import { emptyPlaylist } from "./playlist";
 import { buildSearchParams, pathForTab, pathForTrack } from "./tabs";
+import {
+  DEFAULT_BEATS_PER_BAR,
+  DEFAULT_METRONOME_BEAT_OFFSET,
+  DEFAULT_METRONOME_VOLUME_PCT,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { getTuningParamsStringFromUrl } from "./tuning";
 
 type FooterCredit = {
@@ -434,6 +439,10 @@ const createPlaybackSlice: Slice<
     | "bringItHomeMode"
     | "jukeboxAudioMode"
     | "audioIntensity"
+    | "metronomeVolumePct"
+    | "metronomeBeatsPerBar"
+    | "metronomeBeatOffset"
+    | "metronomeDetectedBeatsPerBar"
     | "audioModePreparing"
     | "audioModeRenderToken"
     | "sleepTimer"
@@ -457,6 +466,10 @@ const createPlaybackSlice: Slice<
   bringItHomeMode: false,
   jukeboxAudioMode: "off",
   audioIntensity: 100,
+  metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
+  metronomeBeatsPerBar: null,
+  metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
+  metronomeDetectedBeatsPerBar: DEFAULT_BEATS_PER_BAR,
   audioModePreparing: false,
   audioModeRenderToken: 0,
   sleepTimer: defaultSleepTimer,

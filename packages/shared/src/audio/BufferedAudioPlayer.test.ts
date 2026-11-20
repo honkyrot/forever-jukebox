@@ -6,6 +6,7 @@ class MockGainNode {
     value: 1,
     setValueAtTime: vi.fn(),
     linearRampToValueAtTime: vi.fn(),
+    cancelScheduledValues: vi.fn(),
   };
   connect = vi.fn();
   disconnect = vi.fn();
@@ -655,6 +656,22 @@ describe("BufferedAudioPlayer", () => {
     expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
   });
 
+  it("keeps metronome mode at rate 1 and off the limiter", () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+
+    const limiter = context.createdCompressors[0];
+    const masterGain = context.createdGains[0];
+    player.setJukeboxAudioMode("vaporwave");
+    expect(masterGain?.connect).toHaveBeenCalledWith(limiter);
+
+    masterGain?.connect.mockClear();
+    player.setJukeboxAudioMode("metronome");
+    expect(player.getPlaybackRate()).toBe(1);
+    expect(masterGain?.connect).toHaveBeenCalledWith(context.destination);
+    expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
+  });
+
   it("keeps flat-Q filter modes off the limiter", () => {
     const context = new MockAudioContext();
     const player = new BufferedAudioPlayer(context as unknown as AudioContext);
@@ -1266,5 +1283,133 @@ describe("BufferedAudioPlayer", () => {
     expect(panner?.connect).toHaveBeenCalledWith(masterGain);
     expect(masterGain?.disconnect).not.toHaveBeenCalled();
     expect(masterGain?.connect).not.toHaveBeenCalled();
+  });
+
+  it("splices post-mix per-track gain after post-mix normalization without stopping playback", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+    player.play();
+
+    const masterGain = context.createdGains[0];
+    const panner = context.createdPanners[0];
+    const source = context.createdSources[0];
+
+    panner?.connect.mockClear();
+    player.setPostMixTrackSlices([10, 10], [0.8, 1.5]);
+
+    const trackGain = context.createdGains[context.createdGains.length - 1];
+    expect(panner?.connect).toHaveBeenCalledWith(trackGain);
+    expect(trackGain?.connect).toHaveBeenCalledWith(masterGain);
+    expect(source?.stop).not.toHaveBeenCalled();
+    expect(player.isPlaying()).toBe(true);
+
+    // Enabling post-mix normalization places compressor + makeup gain ahead of trackGain
+    // so leveling does not undo the user's manual per-track volume sliders.
+    trackGain?.connect.mockClear();
+    player.setPostMixNormalization(true);
+    const postMixCompressor = context.createdCompressors[1];
+    const makeupGain = context.createdGains.find(
+      (g) => g !== masterGain && g !== trackGain && g.gain.value !== 1,
+    );
+    expect(panner?.connect).toHaveBeenCalledWith(postMixCompressor);
+    expect(makeupGain?.connect).toHaveBeenCalledWith(trackGain);
+    expect(trackGain?.connect).toHaveBeenCalledWith(masterGain);
+  });
+
+  it("applies active track gain and schedules pending jump and anchor swap transitions", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+    player.setPostMixTrackSlices([10, 10], [0.5, 1.75]);
+
+    const trackGain = context.createdGains[context.createdGains.length - 1]!;
+    player.play();
+    expect(trackGain.gain.value).toBeCloseTo(0.5, 5);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenLastCalledWith(0.5, 0);
+
+    // Schedule jump into Track 1 (offset 12 >= slice 0 end 10) at sourceStartTime = 2.
+    context.currentTime = 1;
+    trackGain.gain.setValueAtTime.mockClear();
+    trackGain.gain.cancelScheduledValues.mockClear();
+    expect(player.scheduleJump(12, 2)).toBe(true);
+    expect(trackGain.gain.cancelScheduledValues).toHaveBeenCalledWith(1);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(0.5, 1);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(1.75, 2);
+
+    // Cancelling the scheduled jump cancels the queued step back to Track 0's gain.
+    trackGain.gain.setValueAtTime.mockClear();
+    player.cancelScheduledJump();
+    expect(trackGain.gain.value).toBeCloseTo(0.5, 5);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(0.5, 1);
+
+    // Anchor jump into Track 1 schedules its transition at anchorPendingSwapAt.
+    trackGain.gain.setValueAtTime.mockClear();
+    expect(player.setAnchorJump(14, 4)).toBe(true);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(1.75, 4);
+  });
+
+  it("updates active and pending track gains live without stopping playback, including elapsed jump promotion", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+    player.setPostMixTrackSlices([10, 10], [0.6, 1.2]);
+    const trackGain = context.createdGains[context.createdGains.length - 1]!;
+
+    player.play();
+    const initialSource = context.createdSources[0];
+    context.currentTime = 1;
+    expect(player.scheduleJump(11, 2)).toBe(true);
+
+    // While still on Track 0 before swapAt=2, updating gains refreshes both current & pending.
+    trackGain.gain.setValueAtTime.mockClear();
+    player.setPostMixTrackGains([0.25, 1.8]);
+    expect(trackGain.gain.value).toBeCloseTo(0.25, 5);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(0.25, 1);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(1.8, 2);
+    expect(initialSource?.stop).toHaveBeenCalledTimes(1); // Only the jump's scheduled stop(2)
+
+    // Once audio clock crosses swapAt=2, setPostMixTrackGains promotes to Track 1 before applying.
+    context.currentTime = 2.5;
+    trackGain.gain.setValueAtTime.mockClear();
+    player.setPostMixTrackGains([0.25, 1.9]);
+    expect(trackGain.gain.value).toBeCloseTo(1.9, 5);
+    expect(trackGain.gain.setValueAtTime).toHaveBeenCalledWith(1.9, 2.5);
+  });
+
+  it("routes through the safety limiter when any track gain exceeds 100%, clamps to [0, 2], and clears cleanly", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 20 } as AudioBuffer);
+
+    const limiter = context.createdCompressors[0];
+    const masterGain = context.createdGains[0];
+
+    masterGain?.connect.mockClear();
+    player.setPostMixTrackSlices([10, 10], [-0.5, 3.0]);
+    expect(player.getPostMixTrackGains()).toEqual([0, 2]);
+    expect(masterGain?.connect).toHaveBeenCalledWith(limiter);
+
+    // Dropping gains back <= 1 disconnects the limiter when not otherwise required.
+    masterGain?.connect.mockClear();
+    player.setPostMixTrackGains([0.8, 1.0]);
+    expect(player.getPostMixTrackGains()).toEqual([0.8, 1.0]);
+    expect(masterGain?.connect).toHaveBeenCalledWith(context.destination);
+    expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
+
+    // Clearing post-mix track gains resets routing to panner -> masterGain.
+    const panner = context.createdPanners[0];
+    panner?.connect.mockClear();
+    player.clearPostMixTrackGains();
+    expect(player.getPostMixTrackGains()).toEqual([]);
+    expect(panner?.connect).toHaveBeenCalledWith(masterGain);
+
+    // Loading a fresh single-track buffer clears any remaining slice routing.
+    player.setPostMixTrackSlices([10, 10], [0.5, 2.0]);
+    expect(player.getPostMixTrackGains()).toEqual([0.5, 2]);
+    panner?.connect.mockClear();
+    player.loadBuffer({ duration: 10 } as AudioBuffer);
+    expect(player.getPostMixTrackGains()).toEqual([]);
+    expect(panner?.connect).toHaveBeenCalledWith(masterGain);
   });
 });

@@ -16,6 +16,15 @@ import {
   audioModeSupportsIntensity,
 } from "@forever-jukebox/shared/audio/audioModes";
 import {
+  MAX_METRONOME_VOLUME_PCT,
+  METRONOME_TIME_SIGNATURE_OPTIONS,
+  MIN_METRONOME_VOLUME_PCT,
+  clampMetronomeBeatOffset,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
+import {
+  DEFAULT_MIX_TRACK_GAIN_PCT,
+  MAX_MIX_TRACK_GAIN_PCT,
+  MIN_MIX_TRACK_GAIN_PCT,
   applyTuningChanges,
   changedTuningControls,
   getExtrasFormValues,
@@ -53,6 +62,7 @@ const AUDIO_MODE_OPTIONS: Array<{
     | "audioModes.eightBit"
     | "audioModes.underwater"
     | "audioModes.cathedral"
+    | "audioModes.metronome"
     | "audioModes.cowbell"
     | "audioModes.swing"
     | "audioModes.instrumental";
@@ -67,6 +77,7 @@ const AUDIO_MODE_OPTIONS: Array<{
   { id: "audio-mode-eight-bit", value: "eight_bit", labelKey: "audioModes.eightBit", section: "styles" },
   { id: "audio-mode-underwater", value: "underwater", labelKey: "audioModes.underwater", section: "styles" },
   { id: "audio-mode-cathedral", value: "cathedral", labelKey: "audioModes.cathedral", section: "styles" },
+  { id: "audio-mode-metronome", value: "metronome", labelKey: "audioModes.metronome", section: "styles" },
   { id: "audio-mode-cowbell", value: "cowbell", labelKey: "audioModes.cowbell", section: "toys" },
   {
     id: "audio-mode-swing",
@@ -156,6 +167,9 @@ export function TuningModal() {
   const open = useAppStore((s) => s.tuningModalOpen);
   const playMode = useAppStore((s) => s.playMode);
   const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
+  const metronomeDetectedBeatsPerBar = useAppStore(
+    (s) => s.metronomeDetectedBeatsPerBar,
+  );
   const visualPreferences = useAppStore((s) => s.visualPreferences);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const crossTrackOnly = useAppStore((s) => s.crossTrackOnly);
@@ -299,6 +313,29 @@ export function TuningModal() {
           extrasSnapshot && mode === extrasSnapshot.audioMode
             ? extrasSnapshot.audioIntensity
             : DEFAULT_AUDIO_MODE_INTENSITY,
+      };
+      applyExtrasAndSync(getAppContext(), next);
+      return next;
+    });
+  };
+
+  /**
+   * Updates the metronome time-signature override and clamps the beat offset
+   * in the same state transition so the offset stays valid for the new meter.
+   */
+  const selectMetronomeBeatsPerBar = (nextBeatsPerBar: number | null) => {
+    setExtras((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const effectiveBeats = nextBeatsPerBar ?? metronomeDetectedBeatsPerBar;
+      const next: ExtrasFormValues = {
+        ...prev,
+        metronomeBeatsPerBar: nextBeatsPerBar,
+        metronomeBeatOffset: clampMetronomeBeatOffset(
+          prev.metronomeBeatOffset,
+          effectiveBeats,
+        ),
       };
       applyExtrasAndSync(getAppContext(), next);
       return next;
@@ -627,20 +664,20 @@ export function TuningModal() {
                   }
                 />
                 {mixTracks.map((track, index) => {
-                  const gainPct = mixTrackGainsPct[index] ?? 100;
+                  const gainPct =
+                    mixTrackGainsPct[index] ?? DEFAULT_MIX_TRACK_GAIN_PCT;
                   return (
                     <RangeRow
                       key={index}
                       id={`mix-track-gain-${index}`}
                       label={`Track ${index + 1} Volume (${track.title})`}
                       valueText={`${gainPct}%`}
-                      min={50}
-                      max={150}
+                      min={MIN_MIX_TRACK_GAIN_PCT}
+                      max={MAX_MIX_TRACK_GAIN_PCT}
                       step={1}
                       value={gainPct}
                       onChange={(value) => {
                         setMixTrackGainPct(getAppContext(), index, value);
-                        refreshTuningForm();
                       }}
                     />
                   );
@@ -787,6 +824,74 @@ export function TuningModal() {
                     onChange={(value) => setExtrasField("audioIntensity", value)}
                   />
                 ) : null}
+                {extras && extras.audioMode === "metronome"
+                  ? (() => {
+                      const effectiveBeats =
+                        extras.metronomeBeatsPerBar ??
+                        metronomeDetectedBeatsPerBar;
+                      const clampedOffset = clampMetronomeBeatOffset(
+                        extras.metronomeBeatOffset,
+                        effectiveBeats,
+                      );
+                      const timeSignatureIndex = Math.max(
+                        0,
+                        METRONOME_TIME_SIGNATURE_OPTIONS.indexOf(
+                          extras.metronomeBeatsPerBar,
+                        ),
+                      );
+                      const timeSignatureText =
+                        extras.metronomeBeatsPerBar === null
+                          ? t("audioModes.metronomeTimeSignatureAuto", {
+                              beats: metronomeDetectedBeatsPerBar,
+                            })
+                          : `${extras.metronomeBeatsPerBar}/4`;
+                      return (
+                        <>
+                          <RangeRow
+                            id="metronome-volume"
+                            label={t("audioModes.metronomeVolume")}
+                            valueText={`${extras.metronomeVolumePct}%`}
+                            min={MIN_METRONOME_VOLUME_PCT}
+                            max={MAX_METRONOME_VOLUME_PCT}
+                            step={5}
+                            value={extras.metronomeVolumePct}
+                            onChange={(value) =>
+                              setExtrasField("metronomeVolumePct", value)
+                            }
+                          />
+                          <RangeRow
+                            id="metronome-time-signature"
+                            label={t("audioModes.metronomeTimeSignature")}
+                            valueText={timeSignatureText}
+                            min={0}
+                            max={METRONOME_TIME_SIGNATURE_OPTIONS.length - 1}
+                            step={1}
+                            value={timeSignatureIndex}
+                            onChange={(index) =>
+                              selectMetronomeBeatsPerBar(
+                                METRONOME_TIME_SIGNATURE_OPTIONS[index] ?? null,
+                              )
+                            }
+                          />
+                          <RangeRow
+                            id="metronome-beat-offset"
+                            label={t("audioModes.metronomeBeatOffset")}
+                            valueText={t("audioModes.metronomeBeatOffsetValue", {
+                              offset: clampedOffset,
+                              beat: clampedOffset + 1,
+                            })}
+                            min={0}
+                            max={Math.max(0, effectiveBeats - 1)}
+                            step={1}
+                            value={clampedOffset}
+                            onChange={(value) =>
+                              setExtrasField("metronomeBeatOffset", value)
+                            }
+                          />
+                        </>
+                      );
+                    })()
+                  : null}
               </div>
               <div className="audio-mode-section">
                 <div className="audio-mode-section-title">{t("tuning.remixToys")}</div>

@@ -4,6 +4,7 @@ import {
   type TrackAnalysis,
 } from "@forever-jukebox/shared";
 import { combineAudioBuffers } from "@forever-jukebox/shared/audio/multiTrackBuffer";
+import { detectTrackBeatsPerBar } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import {
   isAnalysisComplete,
   isAnalysisFailed,
@@ -38,6 +39,24 @@ import { delay, loadTrackById, loadTrackByJobId } from "./track-load";
 import { stopPlayback } from "./transport";
 
 const MAX_MIX_TRACKS = 128;
+
+export const MIN_MIX_TRACK_GAIN_PCT = 0;
+export const MAX_MIX_TRACK_GAIN_PCT = 200;
+export const DEFAULT_MIX_TRACK_GAIN_PCT = 100;
+
+/**
+ * Clamps a per-track volume percentage to [0, 200], defaulting non-finite
+ * values to 100%.
+ */
+function clampMixTrackGainPct(gainPct: number): number {
+  if (!Number.isFinite(gainPct)) {
+    return DEFAULT_MIX_TRACK_GAIN_PCT;
+  }
+  return Math.max(
+    MIN_MIX_TRACK_GAIN_PCT,
+    Math.min(MAX_MIX_TRACK_GAIN_PCT, Math.round(gainPct)),
+  );
+}
 
 type LoadedMixTrackSource = {
   track: PlaylistTrack;
@@ -146,7 +165,7 @@ function applyLoadedMixSources(
       : computeTempoSyncRatio(masterTempo, source.tempo, tempoSyncEnabled),
   );
   const resolvedGainsPct = sources.map((_, index) =>
-    Math.max(50, Math.min(150, mixTrackGainsPct[index] ?? 100)),
+    clampMixTrackGainPct(mixTrackGainsPct[index] ?? DEFAULT_MIX_TRACK_GAIN_PCT),
   );
 
   const combined = combineAudioBuffers(
@@ -154,7 +173,6 @@ function applyLoadedMixSources(
     sources.map((source, index) => ({
       buffer: source.buffer,
       tempoRatio: tempoRatios[index],
-      gain: resolvedGainsPct[index] / 100,
     })),
     { normalizeVolume: normalizeVolumeEnabled },
   );
@@ -166,7 +184,6 @@ function applyLoadedMixSources(
       title: source.track.title,
       artist: source.track.artist,
       tempoRatio: tempoRatios[index],
-      gain: resolvedGainsPct[index] / 100,
     })),
     {
       tempoSync: tempoSyncEnabled,
@@ -175,6 +192,10 @@ function applyLoadedMixSources(
   );
 
   context.player.loadBuffer(combined.buffer);
+  context.player.setPostMixTrackSlices?.(
+    combined.sliceDurations,
+    resolvedGainsPct.map((pct) => pct / 100),
+  );
   context.player.setPostMixNormalization?.(postMixNormalizeVolumeEnabled);
   context.engine.updateConfig({
     crossTrackOnly,
@@ -183,12 +204,18 @@ function applyLoadedMixSources(
   context.engine.loadAnalysis(mergedAnalysis);
 
   const vizData = context.engine.getVisualizationData();
+  const detectedBeatsPerBar = detectTrackBeatsPerBar(
+    vizData?.beats,
+    mergedAnalysis.track?.time_signature,
+  );
+  context.metronomeOverlay.setBeatsPerBar(detectedBeatsPerBar);
   useAppStore.setState({
     vizData,
     selectedEdge: null,
     branchStats: null,
     multiTrackEnabled: true,
     mixTrackGainsPct: resolvedGainsPct,
+    metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
     audioLoaded: true,
     analysisLoaded: true,
     audioLoadInFlight: false,
@@ -307,6 +334,7 @@ export async function disableMultiTrackMix(
   cachedMixSources = null;
   stopPlayback(context);
   useAppStore.setState({ multiTrackEnabled: false });
+  context.player.clearPostMixTrackGains?.();
   context.player.setPostMixNormalization?.(false);
   context.engine.updateConfig({
     crossTrackOnly: false,
@@ -436,8 +464,8 @@ export function setPostMixNormalizeVolumeEnabled(
 }
 
 /**
- * Sets an individual track's premix volume trim percentage (50–150%) and
- * re-renders an active multi-track mix immediately.
+ * Sets an individual track's live post-mix volume trim percentage (0–200%)
+ * without stopping playback, re-rendering audio buffers, or recomputing branches.
  */
 export function setMixTrackGainPct(
   context: AppContext,
@@ -447,13 +475,22 @@ export function setMixTrackGainPct(
   if (!Number.isInteger(trackIndex) || trackIndex < 0) {
     return;
   }
-  const clamped = Math.max(50, Math.min(150, Math.round(gainPct)));
-  const current = useAppStore.getState().mixTrackGainsPct;
+  const clamped = clampMixTrackGainPct(gainPct);
+  const state = useAppStore.getState();
+  const current = state.mixTrackGainsPct;
+  const targetLength = Math.max(
+    trackIndex + 1,
+    current.length,
+    state.vizData?.tracks?.length ?? 0,
+  );
   const next = current.slice();
-  while (next.length <= trackIndex) {
-    next.push(100);
+  while (next.length < targetLength) {
+    next.push(DEFAULT_MIX_TRACK_GAIN_PCT);
   }
   next[trackIndex] = clamped;
   useAppStore.setState({ mixTrackGainsPct: next });
-  reapplyMixFromCacheOrReload(context);
+  if (!state.multiTrackEnabled) {
+    return;
+  }
+  context.player?.setPostMixTrackGains?.(next.map((pct) => pct / 100));
 }

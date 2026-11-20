@@ -344,6 +344,10 @@ export function initializePlayback(): void {
               beat,
               useAppStore.getState().vizData?.beats[engineState.currentBeatIndex + 1],
             );
+            context.metronomeOverlay.handleBeatEnter(
+              engineState.currentBeatIndex,
+              beat,
+            );
           }
         }
         const lastBeatIndex = useAppStore.getState().lastBeatIndex;
@@ -782,6 +786,7 @@ export function setPlayMode(mode: PlayMode): void {
       stopPlayback(context);
     }
     context.cowbellOverlay.cancelScheduledHits();
+    context.metronomeOverlay.cancelScheduledHits();
     cancelWubMachineRender();
     useAppStore.setState({
       playMode: mode,

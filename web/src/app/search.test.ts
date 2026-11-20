@@ -39,6 +39,7 @@ function createContext(): AppContext {
     wubmachine: {} as unknown as AppContext["wubmachine"],
     jukebox: { refresh: vi.fn() } as unknown as AppContext["jukebox"],
     cowbellOverlay: {} as unknown as AppContext["cowbellOverlay"],
+    metronomeOverlay: {} as unknown as AppContext["metronomeOverlay"],
     defaultConfig: {} as unknown as AppContext["defaultConfig"],
   };
 }

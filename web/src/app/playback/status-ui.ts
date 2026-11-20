@@ -87,6 +87,7 @@ export function setMasterVolume(context: AppContext, volumePct: number) {
   context.autocanonizer?.setVolume(volume);
   context.wubmachine?.setVolume(volume);
   context.cowbellOverlay.setVolume(volume);
+  context.metronomeOverlay.setVolume(volume);
 }
 
 export function setAutocanonizerStreamPans(

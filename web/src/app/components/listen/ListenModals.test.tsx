@@ -64,6 +64,9 @@ const EXTRAS_FORM: ExtrasFormValues = {
   customAnchorEnabled: false,
   audioMode: "off",
   audioIntensity: 100,
+  metronomeVolumePct: 100,
+  metronomeBeatsPerBar: null,
+  metronomeBeatOffset: 0,
 };
 
 beforeEach(() => {
@@ -95,6 +98,7 @@ beforeEach(() => {
       mixTrackGainsPct: [],
       playlist: { tracks: [], currentIndex: -1 },
       vizData: null,
+      metronomeDetectedBeatsPerBar: 4,
       sleepTimer: { configuredDurationMs: null, endTimeMs: null, remainingMs: 0 },
       trackInfo: {
         durationText: "00:03:21",
@@ -169,7 +173,7 @@ describe("TuningModal", () => {
     const slider = document.getElementById("max-branches") as HTMLInputElement;
     expect(slider).not.toBeNull();
     expect(slider.min).toBe("1");
-    expect(slider.max).toBe("32");
+    expect(slider.max).toBe("512");
     expect(document.getElementById("max-branches-val")?.textContent).toBe("4");
 
     fireEvent.change(slider, { target: { value: "16" } });
@@ -238,6 +242,90 @@ describe("TuningModal", () => {
 
     await userEvent.click(screen.getByLabelText("LoFi"));
     expect(document.getElementById("audio-intensity")).toBeNull();
+  });
+
+  it("renders Metronome under Playback Styles without an intensity slider", async () => {
+    render(<TuningModal />);
+    act(() => {
+      useAppStore.setState({ tuningModalOpen: true, tuningModalTab: "extras" });
+    });
+
+    const metronomeInput = document.getElementById(
+      "audio-mode-metronome",
+    ) as HTMLInputElement | null;
+    expect(metronomeInput).not.toBeNull();
+    const stylesSection = metronomeInput?.closest(".audio-mode-section");
+    expect(stylesSection?.querySelector(".audio-mode-section-title")?.textContent).toBe(
+      "Playback Styles",
+    );
+
+    await userEvent.click(screen.getByLabelText("Metronome"));
+    expect(applyExtrasChanges).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ audioMode: "metronome" }),
+    );
+    expect(document.getElementById("audio-intensity")).toBeNull();
+    expect(document.getElementById("metronome-volume")).not.toBeNull();
+    expect(document.getElementById("metronome-time-signature")).not.toBeNull();
+    expect(document.getElementById("metronome-beat-offset")).not.toBeNull();
+  });
+
+  it("hides metronome controls outside metronome mode and applies volume, time signature, and clamped offset", async () => {
+    act(() => {
+      useAppStore.setState({ metronomeDetectedBeatsPerBar: 3 });
+    });
+    render(<TuningModal />);
+    act(() => {
+      useAppStore.setState({ tuningModalOpen: true, tuningModalTab: "extras" });
+    });
+    expect(document.getElementById("metronome-volume")).toBeNull();
+    expect(document.getElementById("metronome-time-signature")).toBeNull();
+    expect(document.getElementById("metronome-beat-offset")).toBeNull();
+
+    await userEvent.click(screen.getByLabelText("Metronome"));
+    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
+      "Auto (3/4)",
+    );
+
+    fireEvent.change(document.getElementById("metronome-volume")!, {
+      target: { value: "145" },
+    });
+    expect(applyExtrasChanges).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ metronomeVolumePct: 145 }),
+    );
+
+    // Switch to 4/4 (index 3 in [null, 2, 3, 4, 5, 6, 7, 8]) and set offset to 3 (Beat 4).
+    fireEvent.change(document.getElementById("metronome-time-signature")!, {
+      target: { value: "3" },
+    });
+    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
+      "4/4",
+    );
+    fireEvent.change(document.getElementById("metronome-beat-offset")!, {
+      target: { value: "3" },
+    });
+    expect(document.getElementById("metronome-beat-offset-val")?.textContent).toBe(
+      "+3 (Beat 4)",
+    );
+
+    // Switching down to 3/4 (index 2) clamps beat offset from 3 to 2.
+    fireEvent.change(document.getElementById("metronome-time-signature")!, {
+      target: { value: "2" },
+    });
+    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
+      "3/4",
+    );
+    expect(document.getElementById("metronome-beat-offset-val")?.textContent).toBe(
+      "+2 (Beat 3)",
+    );
+    expect(applyExtrasChanges).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metronomeBeatsPerBar: 3,
+        metronomeBeatOffset: 2,
+      }),
+    );
   });
 
   it("resets intensity for a new mode and restores it when reselecting the opened mode", async () => {
@@ -409,11 +497,25 @@ describe("TuningModal", () => {
     expect(document.getElementById("tempo-sync-enabled")).not.toBeNull();
     expect(document.getElementById("normalize-volume-enabled")).not.toBeNull();
     expect(document.getElementById("post-mix-normalize-volume-enabled")).not.toBeNull();
-    expect(document.getElementById("mix-track-gain-0")).not.toBeNull();
-    expect(document.getElementById("mix-track-gain-1")).not.toBeNull();
+    const gain0 = document.getElementById("mix-track-gain-0") as HTMLInputElement;
+    const gain1 = document.getElementById("mix-track-gain-1") as HTMLInputElement;
+    expect(gain0).not.toBeNull();
+    expect(gain1).not.toBeNull();
+    expect(gain0.min).toBe("0");
+    expect(gain0.max).toBe("200");
+    expect(gain1.min).toBe("0");
+    expect(gain1.max).toBe("200");
     expect(document.getElementById("cross-threshold-val")?.textContent).toBe("35");
     expect(document.getElementById("computed-cross-threshold")?.textContent).toBe("35");
     expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(true);
+
+    const getTuningCallsBeforeVolume = (getTuningFormValues as Mock).mock.calls.length;
+    fireEvent.change(gain1, { target: { value: "200" } });
+    expect(document.getElementById("mix-track-gain-1-val")?.textContent).toBe("200%");
+    expect(useAppStore.getState().mixTrackGainsPct).toEqual([100, 200]);
+    expect((getTuningFormValues as Mock).mock.calls.length).toBe(
+      getTuningCallsBeforeVolume,
+    );
 
     const crossSlider = document.getElementById("cross-threshold") as HTMLInputElement;
     fireEvent.change(crossSlider, { target: { value: "42" } });

@@ -22,6 +22,7 @@ import {
   planCowbellExportEvents,
   projectCowbellEventsIntoWindow,
 } from "./cowbellExport";
+import { planMetronomeExportEvents } from "./metronomeExport";
 import { clampGain, createOutputBuffer, renderJukeboxAudio } from "./render";
 
 export interface JukeboxExportProgress {
@@ -53,6 +54,9 @@ export interface ExportJukeboxAudioOptions {
   gain?: number;
   audioMode: JukeboxAudioMode;
   audioIntensityPct?: number;
+  metronomeVolumePct?: number;
+  metronomeBeatsPerBar?: number | null;
+  metronomeBeatOffset?: number;
   sectionStartBeatIndices?: number[];
   // Pre-rendered source for modes that play a rendered copy of the track.
   renderedBuffer?: AudioBuffer;
@@ -125,7 +129,17 @@ export async function exportJukeboxAudio(
           volume: options.gain ?? 1,
           seed: options.seed,
         })
-      : [];
+      : options.audioMode === "metronome"
+        ? planMetronomeExportEvents({
+            analysis: options.analysis,
+            segments: plan.segments,
+            sampleRate: sourceBuffer.sampleRate,
+            volume: options.gain ?? 1,
+            metronomeVolumePct: options.metronomeVolumePct,
+            metronomeBeatsPerBar: options.metronomeBeatsPerBar,
+            metronomeBeatOffset: options.metronomeBeatOffset,
+          })
+        : [];
 
   let encoded;
 

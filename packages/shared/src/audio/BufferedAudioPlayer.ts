@@ -21,6 +21,22 @@ import { clampVolume } from "./volume";
 export type { JukeboxAudioMode } from "./audioModes";
 
 const MAX_LATE_JUMP_FRAMES = 8;
+const MIN_POST_MIX_TRACK_GAIN = 0;
+const MAX_POST_MIX_TRACK_GAIN = 2;
+
+/**
+ * Clamps a linear post-mix per-track gain multiplier to [0, 2], defaulting
+ * undefined or non-finite values to unity gain (1).
+ */
+function clampPostMixTrackGain(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(
+    MIN_POST_MIX_TRACK_GAIN,
+    Math.min(MAX_POST_MIX_TRACK_GAIN, value),
+  );
+}
 
 type AnchorJump = {
   targetTime: number;
@@ -59,6 +75,12 @@ export class BufferedAudioPlayer {
   private postMixCompressor: DynamicsCompressorNode | null = null;
   private postMixMakeupGain: GainNode | null = null;
   private postMixNormalizationEnabled = false;
+  private postMixTrackGain: GainNode | null = null;
+  private trackSliceEndTimes: number[] = [];
+  private trackGains: number[] = [];
+  private activeTrackIndex = 0;
+  private pendingTrackIndex: number | null = null;
+  private anchorPendingTrackIndex: number | null = null;
   private stereoPanner: StereoPannerNode | null = null;
   private chainNodes: AudioNode[] = [];
   private chainHighPass: BiquadFilterNode | null = null;
@@ -123,6 +145,9 @@ export class BufferedAudioPlayer {
   private applyLoadedBuffer(buffer: AudioBuffer) {
     this.stop();
     this.clearAnchorJump();
+    if (this.trackSliceEndTimes.length > 0 || this.trackGains.length > 0) {
+      this.clearPostMixTrackGains();
+    }
     this.originalBuffer = buffer;
     this.renderedModeBuffers = {};
     this.reverbImpulseBuffers.clear();
@@ -189,8 +214,10 @@ export class BufferedAudioPlayer {
     this.stopSource();
     this.playing = false;
     this.offset = 0;
+    this.activeTrackIndex = 0;
     this.clearAnchorJump();
     this.stopPanMotion();
+    this.syncTrackGainSchedule();
   }
 
   seek(time: number) {
@@ -204,6 +231,9 @@ export class BufferedAudioPlayer {
       const now = this.context.currentTime;
       this.stopSource();
       this.startSourceAt(this.offset, now);
+    } else {
+      this.activeTrackIndex = this.resolveTrackIndex(this.offset);
+      this.syncTrackGainSchedule();
     }
   }
 
@@ -261,6 +291,92 @@ export class BufferedAudioPlayer {
    */
   getPostMixNormalization(): boolean {
     return this.postMixNormalizationEnabled;
+  }
+
+  /**
+   * Configures contiguous multi-track slice durations and optional linear
+   * per-track post-mix gain multipliers (0–2) without rebuilding buffers.
+   */
+  setPostMixTrackSlices(
+    sliceDurations: readonly number[],
+    gains?: readonly number[],
+  ): void {
+    if (sliceDurations.length < 2) {
+      this.clearPostMixTrackGains();
+      return;
+    }
+    const endTimes: number[] = [];
+    let cumulative = 0;
+    for (const duration of sliceDurations) {
+      cumulative += Math.max(0, Number.isFinite(duration) ? duration : 0);
+      endTimes.push(cumulative);
+    }
+    this.trackSliceEndTimes = endTimes;
+    this.trackGains = sliceDurations.map((_, index) =>
+      clampPostMixTrackGain(gains ? gains[index] : this.trackGains[index]),
+    );
+    if (this.playing) {
+      this.maybePromotePending();
+    }
+    const currentOffset = this.playing
+      ? this.getCurrentTimeFromClock()
+      : this.offset;
+    this.activeTrackIndex = this.resolveTrackIndex(currentOffset);
+    this.syncPreMasterRouting();
+    this.syncMasterOutputRouting(this.getActiveModeSettings());
+    this.syncTrackGainSchedule();
+  }
+
+  /**
+   * Updates per-track post-mix linear gain multipliers (0–2) live without
+   * stopping playback, reloading buffers, or recomputing branches.
+   */
+  setPostMixTrackGains(gains: readonly number[]): void {
+    if (this.playing) {
+      this.maybePromotePending();
+    }
+    const targetCount = Math.max(this.trackSliceEndTimes.length, gains.length);
+    const nextGains: number[] = [];
+    for (let i = 0; i < targetCount; i += 1) {
+      nextGains.push(clampPostMixTrackGain(gains[i]));
+    }
+    this.trackGains = nextGains;
+    this.syncMasterOutputRouting(this.getActiveModeSettings());
+    this.syncTrackGainSchedule();
+  }
+
+  /**
+   * Returns a shallow copy of the current post-mix per-track linear gains.
+   */
+  getPostMixTrackGains(): number[] {
+    return this.trackGains.slice();
+  }
+
+  /**
+   * Clears multi-track slice boundaries and removes the per-track post-mix
+   * gain stage from the audio routing graph.
+   */
+  clearPostMixTrackGains(): void {
+    const hadPostMixSlices =
+      this.trackSliceEndTimes.length > 0 ||
+      this.trackGains.length > 0 ||
+      this.postMixTrackGain !== null;
+    this.trackSliceEndTimes = [];
+    this.trackGains = [];
+    this.activeTrackIndex = 0;
+    this.pendingTrackIndex = null;
+    this.anchorPendingTrackIndex = null;
+    if (this.postMixTrackGain) {
+      if (typeof this.postMixTrackGain.gain.cancelScheduledValues === "function") {
+        this.postMixTrackGain.gain.cancelScheduledValues(0);
+      }
+      this.postMixTrackGain.gain.value = 1;
+    }
+    if (!hadPostMixSlices) {
+      return;
+    }
+    this.syncPreMasterRouting();
+    this.syncMasterOutputRouting(this.getActiveModeSettings());
   }
 
   // Pass `intensityPct` when changing both mode and intensity so the combined
@@ -464,11 +580,13 @@ export class BufferedAudioPlayer {
     this.pendingSource = source;
     this.pendingStartAt = startTime - targetTime / this.playbackRate;
     this.pendingSwapAt = startTime;
+    this.pendingTrackIndex = this.resolveTrackIndex(targetTime);
     this.pendingJumpEvent =
       reportedJumpEvent === undefined
         ? { targetTime, sourceStartTime }
         : reportedJumpEvent;
     this.armAnchorPendingSwap(targetTime, startTime, source);
+    this.syncTrackGainSchedule(now);
     return true;
   }
 
@@ -580,6 +698,7 @@ export class BufferedAudioPlayer {
       : null;
     this.pendingSwapAt = null;
     this.pendingJumpEvent = null;
+    this.pendingTrackIndex = null;
     if (!this.pendingSource) {
       return;
     }
@@ -593,6 +712,8 @@ export class BufferedAudioPlayer {
     this.pendingSource = null;
     if (restartOffset !== null) {
       this.replaceCurrentSourceAt(restartOffset, now);
+    } else {
+      this.syncTrackGainSchedule(now);
     }
   }
 
@@ -611,9 +732,11 @@ export class BufferedAudioPlayer {
     this.source = source;
     this.startAt = this.pendingStartAt;
     this.promotedJumpEvent = this.pendingJumpEvent;
+    this.activeTrackIndex = this.pendingTrackIndex ?? this.activeTrackIndex;
     this.pendingSource = null;
     this.pendingSwapAt = null;
     this.pendingJumpEvent = null;
+    this.pendingTrackIndex = null;
     this.maybePromoteAnchorPending();
   }
 
@@ -631,9 +754,12 @@ export class BufferedAudioPlayer {
     this.source = source;
     this.startAt = this.anchorPendingStartAt;
     this.promotedJumpEvent = this.anchorPendingJumpEvent;
+    this.activeTrackIndex =
+      this.anchorPendingTrackIndex ?? this.activeTrackIndex;
     this.anchorPendingSource = null;
     this.anchorPendingSwapAt = null;
     this.anchorPendingJumpEvent = null;
+    this.anchorPendingTrackIndex = null;
     this.anchorStopSource = null;
     if (options.syncAnchor !== false) {
       this.syncAnchorPendingSwap();
@@ -655,6 +781,8 @@ export class BufferedAudioPlayer {
     this.source = source;
     this.startAt = startTime - offset / this.playbackRate;
     this.playing = true;
+    this.activeTrackIndex = this.resolveTrackIndex(offset);
+    this.syncTrackGainSchedule(startTime);
     this.syncPanMotion();
     this.attachSourceEndedHandler(source);
     const duration = this.buffer.duration - offset;
@@ -728,6 +856,7 @@ export class BufferedAudioPlayer {
       now,
       this.source,
     );
+    this.syncTrackGainSchedule(now);
   }
 
   private armAnchorPendingSwap(
@@ -763,6 +892,7 @@ export class BufferedAudioPlayer {
     this.anchorPendingStartAt = startTime - targetTime / this.playbackRate;
     this.anchorPendingSwapAt = startTime;
     this.anchorPendingJumpEvent = { targetTime, sourceStartTime };
+    this.anchorPendingTrackIndex = this.resolveTrackIndex(targetTime);
     this.anchorStopSource = sourceToStop;
     return true;
   }
@@ -786,6 +916,7 @@ export class BufferedAudioPlayer {
       now >= this.anchorPendingSwapAt
     ) {
       this.maybePromoteAnchorPending({ syncAnchor: false });
+      this.syncTrackGainSchedule(now);
       return;
     }
     const shouldRestartCurrentSource =
@@ -801,6 +932,7 @@ export class BufferedAudioPlayer {
       : null;
     this.anchorPendingSwapAt = null;
     this.anchorPendingJumpEvent = null;
+    this.anchorPendingTrackIndex = null;
     this.anchorStopSource = null;
     if (!this.anchorPendingSource) {
       if (restartOffset !== null) {
@@ -818,11 +950,89 @@ export class BufferedAudioPlayer {
     this.anchorPendingSource = null;
     if (restartOffset !== null) {
       this.replaceCurrentSourceAt(restartOffset, now, { syncAnchor: false });
+    } else {
+      this.syncTrackGainSchedule(now);
     }
   }
 
-  // Splices the post-mix dynamics compressor + makeup gain before masterGain
-  // so leveling reacts to full-scale audio regardless of listening volume.
+  /**
+   * Maps a playback offset in seconds within the concatenated multi-track
+   * buffer to the 0-based track slice index that owns it.
+   */
+  private resolveTrackIndex(offsetSec: number): number {
+    const count = this.trackSliceEndTimes.length;
+    if (count < 2) {
+      return 0;
+    }
+    const clampedOffset = Number.isFinite(offsetSec)
+      ? Math.max(0, offsetSec)
+      : 0;
+    for (let i = 0; i < count - 1; i += 1) {
+      if (clampedOffset < this.trackSliceEndTimes[i]) {
+        return i;
+      }
+    }
+    return count - 1;
+  }
+
+  private getTrackGain(trackIndex: number): number {
+    return this.trackGains[trackIndex] ?? 1;
+  }
+
+  /**
+   * Applies the active track's post-mix gain immediately and schedules any
+   * queued branch or anchor jump gain transitions on the audio clock.
+   */
+  private syncTrackGainSchedule(referenceTime?: number): void {
+    // Return immediately in single-track mode so no extra clock reads happen.
+    if (!this.postMixTrackGain || this.trackSliceEndTimes.length < 2) {
+      return;
+    }
+    const now = referenceTime ?? this.context.currentTime;
+    const currentGain = this.getTrackGain(this.activeTrackIndex);
+    const param = this.postMixTrackGain.gain;
+    if (typeof param.cancelScheduledValues === "function") {
+      param.cancelScheduledValues(now);
+    }
+    param.value = currentGain;
+    if (typeof param.setValueAtTime === "function") {
+      param.setValueAtTime(currentGain, now);
+    }
+
+    const events: Array<{ time: number; gain: number }> = [];
+    if (
+      this.pendingSource &&
+      this.pendingSwapAt !== null &&
+      this.pendingTrackIndex !== null &&
+      this.pendingSwapAt >= now
+    ) {
+      events.push({
+        time: this.pendingSwapAt,
+        gain: this.getTrackGain(this.pendingTrackIndex),
+      });
+    }
+    if (
+      this.anchorPendingSource &&
+      this.anchorPendingSwapAt !== null &&
+      this.anchorPendingTrackIndex !== null &&
+      this.anchorPendingSwapAt >= now
+    ) {
+      events.push({
+        time: this.anchorPendingSwapAt,
+        gain: this.getTrackGain(this.anchorPendingTrackIndex),
+      });
+    }
+    events.sort((a, b) => a.time - b.time);
+    if (typeof param.setValueAtTime === "function") {
+      for (const event of events) {
+        param.setValueAtTime(event.gain, event.time);
+      }
+    }
+  }
+
+  // Splices optional post-mix dynamics normalization and per-track gain nodes
+  // ahead of masterGain so leveling reacts to unscaled audio and manual track
+  // trims scale the leveled mix cleanly.
   private syncPreMasterRouting() {
     const preMasterNode: AudioNode = this.stereoPanner ?? this.sourceChainOutput;
     try {
@@ -844,6 +1054,15 @@ export class BufferedAudioPlayer {
         // no-op
       }
     }
+    if (this.postMixTrackGain) {
+      try {
+        this.postMixTrackGain.disconnect();
+      } catch {
+        // no-op
+      }
+    }
+
+    let tail: AudioNode = preMasterNode;
 
     if (this.postMixNormalizationEnabled) {
       this.postMixCompressor ??= createPostMixNormalizer(this.context);
@@ -852,22 +1071,36 @@ export class BufferedAudioPlayer {
         this.postMixMakeupGain.gain.value = POST_MIX_MAKEUP_GAIN;
       }
       if (this.postMixCompressor && this.postMixMakeupGain) {
-        preMasterNode.connect(this.postMixCompressor);
+        tail.connect(this.postMixCompressor);
         this.postMixCompressor.connect(this.postMixMakeupGain);
-        this.postMixMakeupGain.connect(this.masterGain);
-        return;
+        tail = this.postMixMakeupGain;
       }
     }
 
-    preMasterNode.connect(this.masterGain);
+    if (this.trackSliceEndTimes.length >= 2) {
+      if (!this.postMixTrackGain) {
+        this.postMixTrackGain = this.context.createGain();
+        this.postMixTrackGain.gain.value = 1;
+      }
+      tail.connect(this.postMixTrackGain);
+      tail = this.postMixTrackGain;
+    }
+
+    tail.connect(this.masterGain);
   }
 
-  // Routes masterGain through the limiter only for modes or post-mix leveling
-  // that can push peaks past 0dBFS; others connect straight to destination.
+  // Routes masterGain through the limiter for modes, post-mix leveling, or
+  // per-track gains > 100% that can push peaks past 0dBFS; others connect
+  // straight to destination.
   private syncMasterOutputRouting(settings: AudioModeSettings) {
+    const hasBoostedTrackGain =
+      this.trackSliceEndTimes.length >= 2 &&
+      this.trackGains.some((gain) => gain > 1);
     const useLimiter =
       this.limiter !== null &&
-      (audioModeNeedsLimiter(settings) || this.postMixNormalizationEnabled);
+      (audioModeNeedsLimiter(settings) ||
+        this.postMixNormalizationEnabled ||
+        hasBoostedTrackGain);
     if (useLimiter === this.masterRoutedThroughLimiter) {
       return;
     }
@@ -1035,6 +1268,11 @@ export class BufferedAudioPlayer {
     this.buffer = null;
     this.renderedModeBuffers = {};
     this.reverbImpulseBuffers.clear();
+    this.trackSliceEndTimes = [];
+    this.trackGains = [];
+    this.activeTrackIndex = 0;
+    this.pendingTrackIndex = null;
+    this.anchorPendingTrackIndex = null;
     this.onEnded = null;
     this.stopPanMotion();
     this.clearSourceChain();
@@ -1071,6 +1309,14 @@ export class BufferedAudioPlayer {
         // no-op
       }
       this.postMixMakeupGain = null;
+    }
+    if (this.postMixTrackGain) {
+      try {
+        this.postMixTrackGain.disconnect();
+      } catch {
+        // no-op
+      }
+      this.postMixTrackGain = null;
     }
     if (this.limiter) {
       try {
