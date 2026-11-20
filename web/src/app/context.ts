@@ -75,8 +75,10 @@ export type AppState = {
   customAnchorEnabled: boolean;
   multiTrackEnabled: boolean;
   crossTrackOnly: boolean;
+  coverSyncEnabled: boolean;
   tempoSyncEnabled: boolean;
   normalizeVolumeEnabled: boolean;
+  postMixNormalizeVolumeEnabled: boolean;
   mixTrackGainsPct: number[];
   playlistAddSticky: boolean;
 };

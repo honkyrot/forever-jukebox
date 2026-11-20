@@ -1204,4 +1204,67 @@ describe("BufferedAudioPlayer", () => {
     expect(player.getCurrentTime()).toBeCloseTo(2.01, 5);
     expect(player.isPlaying()).toBe(true);
   });
+
+  it("lazily splices live post-mix normalization before masterGain and routes through limiter without stopping playback", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    await player.loadBuffer({ duration: 10 } as AudioBuffer);
+    player.play();
+
+    // Constructor only creates the safety limiter + masterGain.
+    expect(context.createdCompressors).toHaveLength(1);
+    const limiter = context.createdCompressors[0];
+    const masterGain = context.createdGains[0];
+    const panner = context.createdPanners[0];
+    const source = context.createdSources[0];
+
+    masterGain?.connect.mockClear();
+    panner?.connect.mockClear();
+
+    player.setPostMixNormalization(true);
+    expect(player.getPostMixNormalization()).toBe(true);
+
+    expect(context.createdCompressors).toHaveLength(2);
+    const postMixCompressor = context.createdCompressors[1];
+    const makeupGain = context.createdGains[context.createdGains.length - 1];
+    expect(postMixCompressor?.threshold.value).toBe(-20);
+    expect(postMixCompressor?.knee.value).toBe(18);
+    expect(postMixCompressor?.ratio.value).toBe(4);
+    expect(makeupGain?.gain.value).toBeCloseTo(1.6, 5);
+
+    expect(panner?.connect).toHaveBeenCalledWith(postMixCompressor);
+    expect(postMixCompressor?.connect).toHaveBeenCalledWith(makeupGain);
+    expect(makeupGain?.connect).toHaveBeenCalledWith(masterGain);
+    expect(masterGain?.connect).toHaveBeenCalledWith(limiter);
+    expect(source?.stop).not.toHaveBeenCalled();
+    expect(player.isPlaying()).toBe(true);
+
+    // Disabling reconnects panner directly to masterGain and restores off-mode routing.
+    panner?.connect.mockClear();
+    masterGain?.connect.mockClear();
+    player.setPostMixNormalization(false);
+    expect(player.getPostMixNormalization()).toBe(false);
+    expect(panner?.connect).toHaveBeenCalledWith(masterGain);
+    expect(masterGain?.connect).toHaveBeenCalledWith(context.destination);
+    expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
+  });
+
+  it("handles post-mix normalization gracefully without dynamics compressor support", () => {
+    const context = new MockAudioContext();
+    (context as { createDynamicsCompressor?: unknown }).createDynamicsCompressor =
+      undefined;
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    const masterGain = context.createdGains[0];
+    const panner = context.createdPanners[0];
+
+    panner?.connect.mockClear();
+    masterGain?.connect.mockClear();
+    masterGain?.disconnect.mockClear();
+    player.setPostMixNormalization(true);
+
+    expect(player.getPostMixNormalization()).toBe(true);
+    expect(panner?.connect).toHaveBeenCalledWith(masterGain);
+    expect(masterGain?.disconnect).not.toHaveBeenCalled();
+    expect(masterGain?.connect).not.toHaveBeenCalled();
+  });
 });

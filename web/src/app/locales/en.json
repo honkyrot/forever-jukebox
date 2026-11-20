@@ -318,6 +318,8 @@
     "remixToys": "Remix Toys",
     "customAnchor": "Custom anchor editor",
     "multiTuning": "Multi Tuning",
+    "coverSync": "Cover sync (align sections)",
+    "normalizeVolumePostmix": "Volume normalization (postmix)",
     "crossSimilarityThreshold": "Cross Branch Similarity Threshold:",
     "sameSongThresholdDisabledHint": "Only applies when same-song branches are enabled.",
     "advanced": "Advanced",

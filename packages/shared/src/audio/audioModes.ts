@@ -249,6 +249,25 @@ export function audioModeNeedsLimiter(settings: AudioModeSettings): boolean {
   return settings.reverbMix > 0 || settings.pan;
 }
 
+export const POST_MIX_MAKEUP_GAIN = 1.6;
+
+// Smooth broadcast-style dynamics leveler for post-mix multi-track output.
+// Evens out loudness jumps across tracks without altering branch analysis.
+export function createPostMixNormalizer(
+  context: BaseAudioContext,
+): DynamicsCompressorNode | null {
+  if (typeof context.createDynamicsCompressor !== "function") {
+    return null;
+  }
+  const compressor = context.createDynamicsCompressor();
+  compressor.threshold.value = -20;
+  compressor.knee.value = 18;
+  compressor.ratio.value = 4;
+  compressor.attack.value = 0.005;
+  compressor.release.value = 0.18;
+  return compressor;
+}
+
 // Brick-wall limiter for modes where audioModeNeedsLimiter() holds. At
 // threshold 0 with knee 0, signal at or below 0dBFS passes unchanged (makeup
 // gain is exactly 1). Returns null when the context lacks compressor support.

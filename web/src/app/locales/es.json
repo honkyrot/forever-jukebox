@@ -318,6 +318,8 @@
     "remixToys": "Herramientas de remix",
     "customAnchor": "Editor de ancla personalizada",
     "multiTuning": "Ajustes múltiples",
+    "coverSync": "Sincronización de covers (alinear secciones)",
+    "normalizeVolumePostmix": "Normalización de volumen (postmix)",
     "crossSimilarityThreshold": "Umbral de similitud entre canciones:",
     "sameSongThresholdDisabledHint": "Solo se aplica cuando las ramas dentro de la misma canción están activadas.",
     "advanced": "Avanzado",

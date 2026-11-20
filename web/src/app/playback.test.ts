@@ -18,6 +18,7 @@ import {
   openExtras,
   pollAnalysis,
   resetForNewTrack,
+  setPostMixNormalizeVolumeEnabled,
   setSleepTimer,
   startJukeboxFromBeat,
   stopPlayback,
@@ -265,6 +266,7 @@ function createContext(overrides?: Partial<AppContext>): TestAppContext {
     seek: vi.fn(),
     setJukeboxAudioMode: vi.fn(),
     setJukeboxAudioModeIntensity: vi.fn(),
+    setPostMixNormalization: vi.fn(),
     getSourceBuffer: vi.fn(() => null),
     setRenderedJukeboxAudioBuffer: vi.fn(),
   };
@@ -605,9 +607,13 @@ describe("playback tuning", () => {
     );
   });
 
-  it("resets crossTrackThreshold while preserving active crossTrackOnly on tuning reset", () => {
+  it("resets crossTrackThreshold while preserving active crossTrackOnly and coverSync on tuning reset", () => {
     const context = createContext();
-    useAppStore.setState({ multiTrackEnabled: true, crossTrackOnly: true });
+    useAppStore.setState({
+      multiTrackEnabled: true,
+      crossTrackOnly: true,
+      coverSyncEnabled: true,
+    });
 
     resetTuningDefaults(context);
 
@@ -615,8 +621,24 @@ describe("playback tuning", () => {
       expect.objectContaining({
         crossTrackOnly: true,
         crossTrackThreshold: 0,
+        coverSync: true,
       }),
     );
+  });
+
+  it("toggles live post-mix volume normalization without stopping playback or rebuilding the graph, and clears on track reset", () => {
+    const context = createContext();
+    useAppStore.setState({ multiTrackEnabled: true, postMixNormalizeVolumeEnabled: false });
+
+    setPostMixNormalizeVolumeEnabled(context, true);
+
+    expect(useAppStore.getState().postMixNormalizeVolumeEnabled).toBe(true);
+    expect(context.player.setPostMixNormalization).toHaveBeenCalledWith(true);
+    expect(context.player.stop).not.toHaveBeenCalled();
+    expect(context.engine.rebuildGraph).not.toHaveBeenCalled();
+
+    resetForNewTrack(context);
+    expect(context.player.setPostMixNormalization).toHaveBeenLastCalledWith(false);
   });
 
   it("applies branch stats toggle and audio mode from extras controls", () => {

@@ -72,8 +72,10 @@ export {
   clearCachedMultiTrackSources,
   disableMultiTrackMix,
   loadMultiTrackMix,
+  setCoverSyncEnabled,
   setCrossTrackOnly,
   setMixTrackGainPct,
   setNormalizeVolumeEnabled,
+  setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
 } from "./multi-track-mix";

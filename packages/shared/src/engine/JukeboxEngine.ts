@@ -49,6 +49,7 @@ export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
   maxLongBranch: 0,
   maxLongBranchPercent: 0,
   crossTrackOnly: false,
+  coverSync: false,
 };
 
 const TICK_INTERVAL_MS = 50;

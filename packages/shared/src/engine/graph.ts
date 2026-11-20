@@ -1,3 +1,4 @@
+import { buildCoverSyncCrossEdges } from "./coverSync";
 import {
   Edge,
   JukeboxConfig,
@@ -213,13 +214,14 @@ function calculateNearestNeighborsForQuantum(
   allEdges: Edge[],
   crossTrackOnly = false,
   isMultiTrack = false,
+  sameTrackOnly = false,
 ) {
   if (q1.overlappingSegments.length === 0) {
     q1.allNeighbors = [];
     return;
   }
 
-  const separatePools = isMultiTrack && !crossTrackOnly;
+  const separatePools = isMultiTrack && !crossTrackOnly && !sameTrackOnly;
   const edges: Edge[] = [];
   const crossEdges: Edge[] = [];
 
@@ -236,6 +238,9 @@ function calculateNearestNeighborsForQuantum(
       q2.trackIndex !== undefined &&
       !isCrossTrack
     ) {
+      continue;
+    }
+    if (sameTrackOnly && isCrossTrack) {
       continue;
     }
     const totalDistance = beatPairDistance(q1, q2);
@@ -283,6 +288,7 @@ const cachedNeighborParams = new WeakMap<
     maxThreshold: number;
     crossTrackOnly: boolean;
     isMultiTrack: boolean;
+    coverSync: boolean;
   }
 >();
 
@@ -293,20 +299,22 @@ function precalculateNearestNeighbors(
   allEdges: Edge[],
   crossTrackOnly = false,
   isMultiTrack = false,
+  coverSync = false,
 ) {
   if (quanta.length === 0) {
     return;
   }
   const cached = cachedNeighborParams.get(quanta);
   // Reuse precalculated neighbors when they were manually seeded (no cache entry)
-  // or when the neighbor cap, distance ceiling, and multi-track mode still match.
+  // or when the neighbor cap, distance ceiling, and multi-track/cover-sync modes match.
   const canReuseCached =
     quanta[0].allNeighbors.length > 0 &&
     (!cached ||
       (cached.maxNeighbors === maxNeighbors &&
         cached.maxThreshold === maxThreshold &&
         cached.crossTrackOnly === crossTrackOnly &&
-        cached.isMultiTrack === isMultiTrack));
+        cached.isMultiTrack === isMultiTrack &&
+        cached.coverSync === coverSync));
   if (canReuseCached) {
     allEdges.length = 0;
     for (const q of quanta) {
@@ -317,22 +325,49 @@ function precalculateNearestNeighbors(
     return;
   }
   allEdges.length = 0;
-  for (const q of quanta) {
-    calculateNearestNeighborsForQuantum(
-      quanta,
-      maxNeighbors,
-      maxThreshold,
-      q,
-      allEdges,
-      crossTrackOnly,
-      isMultiTrack,
-    );
+  if (isMultiTrack && coverSync) {
+    const coverEdgesByBeat = buildCoverSyncCrossEdges(quanta, maxThreshold);
+    for (const q of quanta) {
+      if (crossTrackOnly) {
+        q.allNeighbors = [];
+      } else {
+        calculateNearestNeighborsForQuantum(
+          quanta,
+          maxNeighbors,
+          maxThreshold,
+          q,
+          allEdges,
+          false,
+          true,
+          true,
+        );
+      }
+      const coverEdges = coverEdgesByBeat.get(q.which) ?? [];
+      for (const edge of coverEdges) {
+        edge.id = allEdges.length;
+        allEdges.push(edge);
+        q.allNeighbors.push(edge);
+      }
+    }
+  } else {
+    for (const q of quanta) {
+      calculateNearestNeighborsForQuantum(
+        quanta,
+        maxNeighbors,
+        maxThreshold,
+        q,
+        allEdges,
+        crossTrackOnly,
+        isMultiTrack,
+      );
+    }
   }
   cachedNeighborParams.set(quanta, {
     maxNeighbors,
     maxThreshold,
     crossTrackOnly,
     isMultiTrack,
+    coverSync,
   });
 }
 
@@ -401,23 +436,27 @@ function extractNearestNeighbors(
     if (config.crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
       continue;
     }
-    const { distance, isForward } = resolveEdgeJumpDistanceAndDirection(
-      q,
-      neighbor.dest,
-      totalBeats,
-    );
-    if (config.justBackwards && isForward) {
-      continue;
-    }
-    if (config.justLongBranches && distance < config.minLongBranch) {
-      continue;
-    }
-    if (
-      config.maxLongBranch !== undefined &&
-      config.maxLongBranch > 0 &&
-      distance > config.maxLongBranch
-    ) {
-      continue;
+    // Cover-sync jumps connect parallel moments across covers, so direction and
+    // timeline-span filters only apply to standard non-cover-sync edges.
+    if (!(config.coverSync && isCrossTrack)) {
+      const { distance, isForward } = resolveEdgeJumpDistanceAndDirection(
+        q,
+        neighbor.dest,
+        totalBeats,
+      );
+      if (config.justBackwards && isForward) {
+        continue;
+      }
+      if (config.justLongBranches && distance < config.minLongBranch) {
+        continue;
+      }
+      if (
+        config.maxLongBranch !== undefined &&
+        config.maxLongBranch > 0 &&
+        distance > config.maxLongBranch
+      ) {
+        continue;
+      }
     }
     const edgeThreshold =
       isCrossTrack && crossTrackThreshold !== undefined
@@ -1157,11 +1196,14 @@ function hasSequentialBranch(
 function filterOutSequentialBranches(
   quanta: QuantumBase[],
   lastBranchPoint: number,
+  skipCrossTrack = false,
 ) {
   for (let i = quanta.length - 1; i >= 1; i -= 1) {
     const q = quanta[i];
     q.neighbors = q.neighbors.filter(
-      (neighbor) => !hasSequentialBranch(q, neighbor, lastBranchPoint),
+      (neighbor) =>
+        (skipCrossTrack && isCrossTrackPair(q, neighbor.dest)) ||
+        !hasSequentialBranch(q, neighbor, lastBranchPoint),
     );
   }
 }
@@ -1322,6 +1364,7 @@ export function buildJumpGraph(
   const quanta = analysis.beats;
   const allEdges: Edge[] = [];
   const isMultiTrack = isMultiTrackAnalysis(analysis);
+  const useCoverSync = isMultiTrack && Boolean(config.coverSync);
   precalculateNearestNeighbors(
     quanta,
     clampMaxBranches(config.maxBranches),
@@ -1329,6 +1372,7 @@ export function buildJumpGraph(
     allEdges,
     Boolean(config.crossTrackOnly),
     isMultiTrack,
+    useCoverSync,
   );
 
   if (!isMultiTrack) {
@@ -1374,6 +1418,25 @@ export function buildJumpGraph(
       ? config.crossTrackThreshold
       : computedCrossThreshold;
   collectNearestNeighbors(quanta, threshold, config, crossThreshold);
+
+  if (useCoverSync) {
+    // Cover-sync tracks wrap natively per song, so skip single-track anchor
+    // pruning that would drop aligned branches near the tail of the mix.
+    if (config.removeSequentialBranches && !config.crossTrackOnly) {
+      filterOutSequentialBranches(quanta, -1, true);
+    }
+    return {
+      computedThreshold,
+      currentThreshold: threshold,
+      computedCrossThreshold,
+      currentCrossThreshold: crossThreshold,
+      lastBranchPoint: -1,
+      totalBeats: quanta.length,
+      longestReach: 0,
+      allEdges,
+    };
+  }
+
   const preferredLastBranchPoint = addAnchorBranch(
     quanta,
     threshold,

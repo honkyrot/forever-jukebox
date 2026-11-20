@@ -23,9 +23,11 @@ import {
   hasNonDefaultTuning,
   resetExtrasDefaults,
   resetTuningDefaults,
+  setCoverSyncEnabled,
   setCrossTrackOnly,
   setMixTrackGainPct,
   setNormalizeVolumeEnabled,
+  setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
   type ExtrasFormValues,
   type TuningFormValues,
@@ -157,8 +159,12 @@ export function TuningModal() {
   const visualPreferences = useAppStore((s) => s.visualPreferences);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const crossTrackOnly = useAppStore((s) => s.crossTrackOnly);
+  const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
   const tempoSyncEnabled = useAppStore((s) => s.tempoSyncEnabled);
   const normalizeVolumeEnabled = useAppStore((s) => s.normalizeVolumeEnabled);
+  const postMixNormalizeVolumeEnabled = useAppStore(
+    (s) => s.postMixNormalizeVolumeEnabled,
+  );
   const mixTrackGainsPct = useAppStore((s) => s.mixTrackGainsPct);
   const playlistTracks = useAppStore((s) => s.playlist.tracks);
   const vizTracks = useAppStore((s) => s.vizData?.tracks);
@@ -541,6 +547,21 @@ export function TuningModal() {
                   </label>
                   <label>
                     <input
+                      id="cover-sync-enabled"
+                      type="checkbox"
+                      checked={coverSyncEnabled}
+                      onChange={(event) => {
+                        setCoverSyncEnabled(
+                          getAppContext(),
+                          event.target.checked,
+                        );
+                        refreshTuningForm();
+                      }}
+                    />{" "}
+                    {t("tuning.coverSync")}
+                  </label>
+                  <label>
+                    <input
                       id="tempo-sync-enabled"
                       type="checkbox"
                       checked={tempoSyncEnabled}
@@ -568,6 +589,20 @@ export function TuningModal() {
                       }}
                     />{" "}
                     Volume normalization (premix)
+                  </label>
+                  <label>
+                    <input
+                      id="post-mix-normalize-volume-enabled"
+                      type="checkbox"
+                      checked={postMixNormalizeVolumeEnabled}
+                      onChange={(event) =>
+                        setPostMixNormalizeVolumeEnabled(
+                          getAppContext(),
+                          event.target.checked,
+                        )
+                      }
+                    />{" "}
+                    {t("tuning.normalizeVolumePostmix")}
                   </label>
                 </div>
                 <RangeRow

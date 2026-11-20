@@ -504,11 +504,13 @@ export function resetTuningDefaults(context: AppContext) {
   const { engine, jukebox } = context;
   discardCustomAnchorEdit(context);
   engine.clearDeletedEdges();
-  const { multiTrackEnabled, crossTrackOnly } = useAppStore.getState();
+  const { multiTrackEnabled, crossTrackOnly, coverSyncEnabled } =
+    useAppStore.getState();
   engine.updateConfig({
     ...context.defaultConfig,
     crossTrackOnly: multiTrackEnabled ? crossTrackOnly : false,
     crossTrackThreshold: 0,
+    coverSync: multiTrackEnabled ? coverSyncEnabled : false,
   });
   engine.rebuildGraph();
   useAppStore.setState({ vizData: engine.getVisualizationData() });

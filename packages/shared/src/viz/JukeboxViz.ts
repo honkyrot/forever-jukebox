@@ -510,42 +510,29 @@ class CanvasViz {
     return null;
   }
 
-  private clamp(value: number, min: number, max: number) {
-    return Math.min(Math.max(value, min), max);
-  }
-
-  private resolveVEMThreeColor(
-    beat: QuantumBase | null | undefined,
+  /**
+   * Resolves a beat's upstream timbre-based color from `beatColors`,
+   * applying optional alpha transparency and falling back when unavailable.
+   */
+  private resolveEngineBeatColor(
+    beatIndex: number,
     alpha: number,
     fallback: string
-  ) {
-    const hueShift = 200;
-    const timbre = beat?.oseg?.timbre;
-    if (!timbre || timbre.length === 0) {
+  ): string {
+    const color = this.data?.beatColors?.[beatIndex];
+    if (!color) {
       return fallback;
     }
-    const loudness = beat?.oseg?.loudness_max ?? 0;
-    const decibel = 70 + loudness;
-    let vectorX = 0;
-    let vectorY = 0;
-    let energy = 0;
-    const scale = 24;
-    for (let i = 0; i < timbre.length; i += 1) {
-      const normalized = Math.tanh(timbre[i] / scale);
-      const angle = (i / timbre.length) * Math.PI * 2;
-      vectorX += normalized * Math.cos(angle);
-      vectorY += normalized * Math.sin(angle);
-      energy += normalized * normalized;
+    const normalizedAlpha = Math.min(Math.max(alpha, 0), 1);
+    // Return the raw beat color when fully opaque to preserve exact hex values.
+    if (normalizedAlpha >= 1) {
+      return color;
     }
-    let hue = (Math.atan2(vectorY, vectorX) * 180) / Math.PI;
-    if (hue < 0) {
-      hue += 360;
+    const rgb = this.parseThemeColor(color);
+    if (!rgb) {
+      return color;
     }
-    hue = (hue + hueShift) % 360;
-    const rms = Math.sqrt(energy / timbre.length);
-    const saturation = this.clamp(42 + rms * 68, 38, 96);
-    const normalizedAlpha = this.clamp(alpha, 0, 1);
-    return `hsla(${hue.toFixed(1)}, ${saturation.toFixed(1)}%, ${decibel.toFixed(1)}%, ${normalizedAlpha.toFixed(3)})`;
+    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${normalizedAlpha})`;
   }
 
   setVisualPreferences(prefs: VisualPreferences) {
@@ -663,8 +650,8 @@ class CanvasViz {
           const hue = similarity * 140;
           this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
         } else {
-          this.baseCtx.strokeStyle = this.resolveVEMThreeColor(
-            edge.src,
+          this.baseCtx.strokeStyle = this.resolveEngineBeatColor(
+            edge.src.which,
             0.6,
             this.theme.edgeStroke
           );
@@ -734,10 +721,9 @@ class CanvasViz {
             const hue = similarity * 140;
             this.baseCtx.fillStyle = `hsla(${hue}, 100%, 65%, 0.8)`;
           } else if (visualEffectMode === "3") {
-            const beat = this.data.beats[i];
-            this.baseCtx.fillStyle = this.resolveVEMThreeColor(
-              beat,
-              0.8,
+            this.baseCtx.fillStyle = this.resolveEngineBeatColor(
+              i,
+              1,
               this.theme.beatFill
             );
           }
@@ -980,10 +966,14 @@ class CanvasViz {
         const progress =
           this.currentIndex / Math.max(1, this.positions.length);
         cursorColor = `hsl(${progress * 360}, 100%, 70%)`;
-      } else if (this.visualPreferences.visualEffectMode === "3") {
-        const beat = this.data.beats[this.currentIndex];
-        cursorColor = this.resolveVEMThreeColor(
-          beat,
+      } else if (
+        this.visualPreferences.visualEffectMode === "3" &&
+        !this.tileCanvas
+      ) {
+        // Keep Classic's tile marker in the theme highlight so it stays visible
+        // over full-height tiles already painted with the same beat color.
+        cursorColor = this.resolveEngineBeatColor(
+          this.currentIndex,
           1,
           this.theme.beatHighlight
         );

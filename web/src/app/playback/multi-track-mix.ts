@@ -132,8 +132,10 @@ function applyLoadedMixSources(
 ): void {
   const {
     crossTrackOnly,
+    coverSyncEnabled,
     tempoSyncEnabled,
     normalizeVolumeEnabled,
+    postMixNormalizeVolumeEnabled,
     mixTrackGainsPct,
   } = useAppStore.getState();
   const masterTempo = sources[0]?.tempo;
@@ -173,7 +175,11 @@ function applyLoadedMixSources(
   );
 
   context.player.loadBuffer(combined.buffer);
-  context.engine.updateConfig({ crossTrackOnly });
+  context.player.setPostMixNormalization?.(postMixNormalizeVolumeEnabled);
+  context.engine.updateConfig({
+    crossTrackOnly,
+    coverSync: coverSyncEnabled,
+  });
   context.engine.loadAnalysis(mergedAnalysis);
 
   const vizData = context.engine.getVisualizationData();
@@ -301,7 +307,12 @@ export async function disableMultiTrackMix(
   cachedMixSources = null;
   stopPlayback(context);
   useAppStore.setState({ multiTrackEnabled: false });
-  context.engine.updateConfig({ crossTrackOnly: false, crossTrackThreshold: 0 });
+  context.player.setPostMixNormalization?.(false);
+  context.engine.updateConfig({
+    crossTrackOnly: false,
+    crossTrackThreshold: 0,
+    coverSync: false,
+  });
 
   const { playlist } = useAppStore.getState();
   const activeTrack =
@@ -328,6 +339,21 @@ export async function disableMultiTrackMix(
 }
 
 /**
+ * Rebuilds the active multi-track jump graph and pushes updated visualization
+ * and track-info state without reloading audio buffers.
+ */
+function rebuildMixGraphAndSyncViz(context: AppContext): void {
+  context.engine.rebuildGraph();
+  const vizData = context.engine.getVisualizationData();
+  useAppStore.setState({ vizData, selectedEdge: null, branchStats: null });
+  if (vizData) {
+    context.jukebox?.setData(vizData);
+  }
+  context.jukebox?.setSelectedEdge(null);
+  updateTrackInfo(context);
+}
+
+/**
  * Updates whether branches are restricted to cross-song jumps in multi-track mode.
  */
 export function setCrossTrackOnly(
@@ -339,14 +365,23 @@ export function setCrossTrackOnly(
     return;
   }
   context.engine.updateConfig({ crossTrackOnly: enabled });
-  context.engine.rebuildGraph();
-  const vizData = context.engine.getVisualizationData();
-  useAppStore.setState({ vizData, selectedEdge: null, branchStats: null });
-  if (vizData) {
-    context.jukebox?.setData(vizData);
+  rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates whether cross-song branches in multi-track mixes align parallel song
+ * sections via chroma/dynamics DTW instead of unconstrained beat similarity.
+ */
+export function setCoverSyncEnabled(
+  context: AppContext,
+  enabled: boolean,
+): void {
+  useAppStore.setState({ coverSyncEnabled: enabled });
+  if (!useAppStore.getState().multiTrackEnabled) {
+    return;
   }
-  context.jukebox?.setSelectedEdge(null);
-  updateTrackInfo(context);
+  context.engine.updateConfig({ coverSync: enabled });
+  rebuildMixGraphAndSyncViz(context);
 }
 
 function reapplyMixFromCacheOrReload(context: AppContext): void {
@@ -383,6 +418,21 @@ export function setNormalizeVolumeEnabled(
 ): void {
   useAppStore.setState({ normalizeVolumeEnabled: enabled });
   reapplyMixFromCacheOrReload(context);
+}
+
+/**
+ * Toggles live post-mix output leveling on the audio player without stopping
+ * playback, reloading buffers, or modifying branch analysis.
+ */
+export function setPostMixNormalizeVolumeEnabled(
+  context: AppContext,
+  enabled: boolean,
+): void {
+  useAppStore.setState({ postMixNormalizeVolumeEnabled: enabled });
+  if (!useAppStore.getState().multiTrackEnabled) {
+    return;
+  }
+  context.player.setPostMixNormalization?.(enabled);
 }
 
 /**

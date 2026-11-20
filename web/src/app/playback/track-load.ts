@@ -191,6 +191,7 @@ export function resetForNewTrack(
   useAppStore.setState({ analysisLoaded: false });
   useAppStore.setState({ audioLoadInFlight: false });
   useAppStore.setState({ multiTrackEnabled: false });
+  player.setPostMixNormalization?.(false);
   useAppStore.setState({ lastJobId: null });
   useAppStore.setState({ lastTrackId: null });
   useAppStore.setState({ lastSourceId: null });
@@ -221,6 +222,7 @@ export function resetForNewTrack(
     ...defaultConfig,
     crossTrackOnly: false,
     crossTrackThreshold: 0,
+    coverSync: false,
   });
   syncVolumeUI(context);
   useAppStore.setState({

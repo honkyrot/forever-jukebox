@@ -8,8 +8,10 @@ import {
   audioModeSupportsIntensity,
   clampAudioModeIntensity,
   createBitcrusherCurve,
+  createPostMixNormalizer,
   createSafetyLimiter,
   getAudioModeSettings,
+  POST_MIX_MAKEUP_GAIN,
   renderBitcrushedBuffer,
   type AudioModeSettings,
   type JukeboxAudioMode,
@@ -54,6 +56,9 @@ export class BufferedAudioPlayer {
   private readonly sourceChainOutput: GainNode;
   private limiter: DynamicsCompressorNode | null = null;
   private masterRoutedThroughLimiter: boolean | null = null;
+  private postMixCompressor: DynamicsCompressorNode | null = null;
+  private postMixMakeupGain: GainNode | null = null;
+  private postMixNormalizationEnabled = false;
   private stereoPanner: StereoPannerNode | null = null;
   private chainNodes: AudioNode[] = [];
   private chainHighPass: BiquadFilterNode | null = null;
@@ -236,6 +241,26 @@ export class BufferedAudioPlayer {
 
   getVolume(): number {
     return this.volume;
+  }
+
+  /**
+   * Toggles live post-mix dynamics compression ahead of masterGain without
+   * interrupting active playback sources.
+   */
+  setPostMixNormalization(enabled: boolean): void {
+    if (enabled === this.postMixNormalizationEnabled) {
+      return;
+    }
+    this.postMixNormalizationEnabled = enabled;
+    this.syncPreMasterRouting();
+    this.syncMasterOutputRouting(this.getActiveModeSettings());
+  }
+
+  /**
+   * Returns whether live post-mix output volume normalization is active.
+   */
+  getPostMixNormalization(): boolean {
+    return this.postMixNormalizationEnabled;
   }
 
   // Pass `intensityPct` when changing both mode and intensity so the combined
@@ -796,10 +821,53 @@ export class BufferedAudioPlayer {
     }
   }
 
-  // Routes masterGain through the limiter only for modes that can produce
-  // overs; other modes connect straight to the destination.
+  // Splices the post-mix dynamics compressor + makeup gain before masterGain
+  // so leveling reacts to full-scale audio regardless of listening volume.
+  private syncPreMasterRouting() {
+    const preMasterNode: AudioNode = this.stereoPanner ?? this.sourceChainOutput;
+    try {
+      preMasterNode.disconnect();
+    } catch {
+      // no-op
+    }
+    if (this.postMixCompressor) {
+      try {
+        this.postMixCompressor.disconnect();
+      } catch {
+        // no-op
+      }
+    }
+    if (this.postMixMakeupGain) {
+      try {
+        this.postMixMakeupGain.disconnect();
+      } catch {
+        // no-op
+      }
+    }
+
+    if (this.postMixNormalizationEnabled) {
+      this.postMixCompressor ??= createPostMixNormalizer(this.context);
+      if (this.postMixCompressor && !this.postMixMakeupGain) {
+        this.postMixMakeupGain = this.context.createGain();
+        this.postMixMakeupGain.gain.value = POST_MIX_MAKEUP_GAIN;
+      }
+      if (this.postMixCompressor && this.postMixMakeupGain) {
+        preMasterNode.connect(this.postMixCompressor);
+        this.postMixCompressor.connect(this.postMixMakeupGain);
+        this.postMixMakeupGain.connect(this.masterGain);
+        return;
+      }
+    }
+
+    preMasterNode.connect(this.masterGain);
+  }
+
+  // Routes masterGain through the limiter only for modes or post-mix leveling
+  // that can push peaks past 0dBFS; others connect straight to destination.
   private syncMasterOutputRouting(settings: AudioModeSettings) {
-    const useLimiter = this.limiter !== null && audioModeNeedsLimiter(settings);
+    const useLimiter =
+      this.limiter !== null &&
+      (audioModeNeedsLimiter(settings) || this.postMixNormalizationEnabled);
     if (useLimiter === this.masterRoutedThroughLimiter) {
       return;
     }
@@ -987,6 +1055,22 @@ export class BufferedAudioPlayer {
         // no-op
       }
       this.stereoPanner = null;
+    }
+    if (this.postMixCompressor) {
+      try {
+        this.postMixCompressor.disconnect();
+      } catch {
+        // no-op
+      }
+      this.postMixCompressor = null;
+    }
+    if (this.postMixMakeupGain) {
+      try {
+        this.postMixMakeupGain.disconnect();
+      } catch {
+        // no-op
+      }
+      this.postMixMakeupGain = null;
     }
     if (this.limiter) {
       try {

@@ -85,6 +85,8 @@ export interface JukeboxConfig {
   maxLongBranch?: number;
   maxLongBranchPercent?: number;
   crossTrackOnly?: boolean;
+  // Aligns cross-song branches across covers using chroma/dynamics DTW.
+  coverSync?: boolean;
 }
 
 export interface JukeboxGraphState {

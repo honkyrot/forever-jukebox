@@ -318,6 +318,8 @@
     "remixToys": "Remix-Spielzeuge",
     "customAnchor": "Editor für eigenen Anker",
     "multiTuning": "Multi-Tuning",
+    "coverSync": "Cover-Sync (Abschnitte ausrichten)",
+    "normalizeVolumePostmix": "Lautstärkenormalisierung (Postmix)",
     "crossSimilarityThreshold": "Songübergreifende Ähnlichkeitsschwelle:",
     "sameSongThresholdDisabledHint": "Gilt nur, wenn Sprünge innerhalb desselben Songs aktiviert sind.",
     "advanced": "Erweitert",

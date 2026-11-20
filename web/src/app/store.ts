@@ -507,8 +507,10 @@ const createTuningSlice: Slice<
     | "customAnchorEnabled"
     | "multiTrackEnabled"
     | "crossTrackOnly"
+    | "coverSyncEnabled"
     | "tempoSyncEnabled"
     | "normalizeVolumeEnabled"
+    | "postMixNormalizeVolumeEnabled"
     | "mixTrackGainsPct"
     | "playlistAddSticky"
   >
@@ -520,8 +522,10 @@ const createTuningSlice: Slice<
   customAnchorEnabled: false,
   multiTrackEnabled: false,
   crossTrackOnly: true,
+  coverSyncEnabled: false,
   tempoSyncEnabled: true,
   normalizeVolumeEnabled: true,
+  postMixNormalizeVolumeEnabled: false,
   mixTrackGainsPct: [],
   playlistAddSticky: false,
 });

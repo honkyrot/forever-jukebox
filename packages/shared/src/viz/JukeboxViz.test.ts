@@ -981,4 +981,130 @@ describe("JukeboxViz", () => {
       expect((viz as any).multiTrackMode).toBe(false);
     });
   });
+
+  describe("engine-based coloring", () => {
+    const ENGINE_MODE_PREFS = {
+      visualEffectMode: "3" as const,
+      useSquareBeats: false,
+      useAltSeekShape: false,
+    };
+
+    function createColorMockCtx() {
+      const ctx = canvases[0].getContext("2d") as unknown as {
+        stroke: ReturnType<typeof vi.fn>;
+        fill: ReturnType<typeof vi.fn>;
+        strokeStyle: string;
+        fillStyle: string;
+      };
+      const strokes: string[] = [];
+      const fills: string[] = [];
+      ctx.stroke.mockImplementation(() => {
+        strokes.push(ctx.strokeStyle);
+      });
+      ctx.fill.mockImplementation(() => {
+        fills.push(ctx.fillStyle);
+      });
+      return { strokes, fills };
+    }
+
+    it("uses beatColors on edges, beat dots, and cursor in non-Classic layouts", () => {
+      const viz = new JukeboxViz(createContainer());
+      viz.setVisualPreferences(ENGINE_MODE_PREFS);
+      const { strokes, fills } = createColorMockCtx();
+
+      const beats = [0, 1].map((which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [],
+      }));
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [0, 0],
+        beatColors: ["#112233", "#445566"],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      expect(strokes).toEqual(["rgba(17, 34, 51, 0.6)"]);
+      expect(fills).toEqual(["#112233", "#445566"]);
+
+      fills.length = 0;
+      viz.update(1, false, null);
+      expect(fills).toEqual(["#445566"]);
+    });
+
+    it("uses beatColors for edges and tiles in Classic layout while keeping tile markers in theme highlight", () => {
+      const viz = new JukeboxViz(createContainer(), { initialIndex: 1 });
+      viz.setVisualPreferences(ENGINE_MODE_PREFS);
+      const { strokes } = createColorMockCtx();
+
+      const beats = [0, 1].map((which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [],
+      }));
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [1, 0],
+        beatColors: ["#112233", "#445566"],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      // Base edge stroke followed by the two Classic beat tiles.
+      expect(strokes).toEqual(["rgba(17, 34, 51, 0.6)", "#112233", "#445566"]);
+
+      strokes.length = 0;
+      viz.update(0, true, null);
+      expect(strokes).toEqual(["#ffd46a"]);
+    });
+
+    it("falls back to theme colors when beatColors is empty even if oseg timbre is present", () => {
+      const viz = new JukeboxViz(createContainer());
+      viz.setVisualPreferences(ENGINE_MODE_PREFS);
+      const { strokes, fills } = createColorMockCtx();
+
+      const beats = [0, 1].map((which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [],
+        oseg: {
+          timbre: [10, 20, 30, 40, 0, 0, 0, 0, 0, 0, 0, 0],
+          loudness_max: -5,
+        },
+      }));
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [0, 0],
+        beatColors: [],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      expect(strokes).toEqual(["rgba(74, 199, 255, 0.12)"]);
+      expect(fills).toEqual([
+        "rgba(255, 215, 130, 0.55)",
+        "rgba(255, 215, 130, 0.55)",
+      ]);
+
+      fills.length = 0;
+      viz.update(0, false, null);
+      expect(fills).toEqual(["#ffd46a"]);
+    });
+  });
 });

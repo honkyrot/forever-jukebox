@@ -88,8 +88,10 @@ beforeEach(() => {
       playMode: "jukebox",
       multiTrackEnabled: false,
       crossTrackOnly: true,
+      coverSyncEnabled: false,
       tempoSyncEnabled: true,
       normalizeVolumeEnabled: true,
+      postMixNormalizeVolumeEnabled: false,
       mixTrackGainsPct: [],
       playlist: { tracks: [], currentIndex: -1 },
       vizData: null,
@@ -370,8 +372,10 @@ describe("TuningModal", () => {
     render(<TuningModal />);
     expect(document.getElementById("tuning-panel-multi")).toBeNull();
     expect(document.getElementById("cross-track-only")).toBeNull();
+    expect(document.getElementById("cover-sync-enabled")).toBeNull();
     expect(document.getElementById("tempo-sync-enabled")).toBeNull();
     expect(document.getElementById("normalize-volume-enabled")).toBeNull();
+    expect(document.getElementById("post-mix-normalize-volume-enabled")).toBeNull();
     expect(document.getElementById("cross-threshold")).toBeNull();
     expect(document.getElementById("mix-track-gain-0")).toBeNull();
     expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(false);
@@ -401,8 +405,10 @@ describe("TuningModal", () => {
 
     expect(document.getElementById("tuning-panel-multi")).not.toBeNull();
     expect(document.getElementById("cross-track-only")).not.toBeNull();
+    expect(document.getElementById("cover-sync-enabled")).not.toBeNull();
     expect(document.getElementById("tempo-sync-enabled")).not.toBeNull();
     expect(document.getElementById("normalize-volume-enabled")).not.toBeNull();
+    expect(document.getElementById("post-mix-normalize-volume-enabled")).not.toBeNull();
     expect(document.getElementById("mix-track-gain-0")).not.toBeNull();
     expect(document.getElementById("mix-track-gain-1")).not.toBeNull();
     expect(document.getElementById("cross-threshold-val")?.textContent).toBe("35");
