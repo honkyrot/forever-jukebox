@@ -86,6 +86,13 @@ beforeEach(() => {
       settingsModalOpen: false,
       playlistModalOpen: false,
       playMode: "jukebox",
+      multiTrackEnabled: false,
+      crossTrackOnly: true,
+      tempoSyncEnabled: true,
+      normalizeVolumeEnabled: true,
+      mixTrackGainsPct: [],
+      playlist: { tracks: [], currentIndex: -1 },
+      vizData: null,
       sleepTimer: { configuredDurationMs: null, endTimeMs: null, remainingMs: 0 },
       trackInfo: {
         durationText: "00:03:21",
@@ -149,7 +156,7 @@ describe("TuningModal", () => {
     );
   });
 
-  it("renders the Advanced max-branches slider (1-32) and applies changes", () => {
+  it("renders the Advanced max-branches slider (1-512) and applies changes", () => {
     render(<TuningModal />);
     act(() => {
       useAppStore.setState({ tuningModalOpen: true });
@@ -344,6 +351,75 @@ describe("TuningModal", () => {
       useAppStore.setState({ tuningModalOpen: true });
     });
     expect(document.getElementById("sleep-timer-open")).toBeNull();
+  });
+
+  it("hides Multi Tuning when not actively in a multi-song mix, even with 2+ playlist tracks", () => {
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        multiTrackEnabled: false,
+        playlist: {
+          tracks: [
+            { id: "a", sourceType: "youtube", title: "Song A", artist: "A", duration: null },
+            { id: "b", sourceType: "youtube", title: "Song B", artist: "B", duration: null },
+          ],
+          currentIndex: 0,
+        },
+      });
+    });
+    render(<TuningModal />);
+    expect(document.getElementById("tuning-panel-multi")).toBeNull();
+    expect(document.getElementById("cross-track-only")).toBeNull();
+    expect(document.getElementById("tempo-sync-enabled")).toBeNull();
+    expect(document.getElementById("normalize-volume-enabled")).toBeNull();
+    expect(document.getElementById("cross-threshold")).toBeNull();
+    expect(document.getElementById("mix-track-gain-0")).toBeNull();
+    expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("renders Multi Tuning with all multi-track controls and cross-branch similarity slider when in a mix", () => {
+    (getTuningFormValues as Mock).mockReturnValue({
+      ...TUNING_FORM,
+      crossThreshold: 35,
+      computedCrossThreshold: 35,
+    });
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        multiTrackEnabled: true,
+        crossTrackOnly: true,
+        playlist: {
+          tracks: [
+            { id: "a", sourceType: "youtube", title: "Song A", artist: "A", duration: null },
+            { id: "b", sourceType: "youtube", title: "Song B", artist: "B", duration: null },
+          ],
+          currentIndex: 0,
+        },
+      });
+    });
+    render(<TuningModal />);
+
+    expect(document.getElementById("tuning-panel-multi")).not.toBeNull();
+    expect(document.getElementById("cross-track-only")).not.toBeNull();
+    expect(document.getElementById("tempo-sync-enabled")).not.toBeNull();
+    expect(document.getElementById("normalize-volume-enabled")).not.toBeNull();
+    expect(document.getElementById("mix-track-gain-0")).not.toBeNull();
+    expect(document.getElementById("mix-track-gain-1")).not.toBeNull();
+    expect(document.getElementById("cross-threshold-val")?.textContent).toBe("35");
+    expect(document.getElementById("computed-cross-threshold")?.textContent).toBe("35");
+    expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(true);
+
+    const crossSlider = document.getElementById("cross-threshold") as HTMLInputElement;
+    fireEvent.change(crossSlider, { target: { value: "42" } });
+    expect(applyTuningChanges).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ crossThreshold: 42, threshold: 45 }),
+    );
+
+    act(() => {
+      useAppStore.setState({ crossTrackOnly: false });
+    });
+    expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(false);
   });
 });
 

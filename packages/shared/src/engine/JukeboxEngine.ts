@@ -37,6 +37,7 @@ export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
   maxBranches: 8,
   maxBranchThreshold: 80,
   currentThreshold: 0,
+  crossTrackThreshold: 0,
   justBackwards: false,
   justLongBranches: false,
   removeSequentialBranches: false,

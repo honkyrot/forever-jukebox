@@ -39,6 +39,7 @@ describe("hasNonDefaultTuningConfig", () => {
   it("flags each resettable field", () => {
     for (const change of [
       { currentThreshold: 40 },
+      { crossTrackThreshold: 40 },
       { justBackwards: true },
       { justLongBranches: true },
       { removeSequentialBranches: true },

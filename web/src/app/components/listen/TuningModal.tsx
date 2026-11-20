@@ -115,6 +115,7 @@ function RangeRow({
   value,
   onChange,
   hint,
+  disabled = false,
 }: {
   id: string;
   label: string;
@@ -125,9 +126,10 @@ function RangeRow({
   value: number;
   onChange: (value: number) => void;
   hint?: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
-    <label>
+    <label className={disabled ? "is-disabled" : undefined}>
       <div className="label-line">
         {label} <span id={`${id}-val`}>{valueText}</span>
       </div>
@@ -140,6 +142,7 @@ function RangeRow({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
@@ -159,7 +162,6 @@ export function TuningModal() {
   const mixTrackGainsPct = useAppStore((s) => s.mixTrackGainsPct);
   const playlistTracks = useAppStore((s) => s.playlist.tracks);
   const vizTracks = useAppStore((s) => s.vizData?.tracks);
-  const playlistCount = playlistTracks.length;
   const mixTracks =
     multiTrackEnabled && vizTracks && vizTracks.length > 0
       ? vizTracks.map((t, index) => ({
@@ -179,7 +181,7 @@ export function TuningModal() {
   );
   const [tuningNonDefault, setTuningNonDefault] = useState(false);
 
-  // Snapshot engine config + extras state when the panel opens.
+  // Snapshot engine config + extras state when the panel opens or mix mode changes.
   useLayoutEffect(() => {
     if (open) {
       const context = getAppContext();
@@ -191,7 +193,33 @@ export function TuningModal() {
       setExtras(extrasValues);
       setExtrasSnapshot(extrasValues);
     }
-  }, [open]);
+  }, [open, multiTrackEnabled]);
+
+  // Refreshes tuning state after multi-track mix actions rebuild the graph so
+  // computed threshold defaults update immediately while preserving pinned edits.
+  const refreshTuningForm = () => {
+    const context = getAppContext();
+    const tuningValues = getTuningFormValues(context);
+    setForm(tuningValues);
+    setTuningSnapshot((prev) =>
+      prev
+        ? {
+            ...prev,
+            threshold:
+              prev.threshold === prev.computedThreshold
+                ? tuningValues.threshold
+                : prev.threshold,
+            computedThreshold: tuningValues.computedThreshold,
+            crossThreshold:
+              prev.crossThreshold === prev.computedCrossThreshold
+                ? tuningValues.crossThreshold
+                : prev.crossThreshold,
+            computedCrossThreshold: tuningValues.computedCrossThreshold,
+          }
+        : tuningValues,
+    );
+    setTuningNonDefault(hasNonDefaultTuning(context));
+  };
 
   const close = () => useAppStore.setState({ tuningModalOpen: false });
 
@@ -353,6 +381,7 @@ export function TuningModal() {
               max={100}
               step={1}
               value={form?.threshold ?? 2}
+              disabled={multiTrackEnabled && crossTrackOnly}
               onChange={(value) => setFormField("threshold", value)}
               hint={
                 <div className="hint">
@@ -363,6 +392,9 @@ export function TuningModal() {
                       ? "-"
                       : `${form.computedThreshold}`}
                   </span>
+                  {multiTrackEnabled && crossTrackOnly ? (
+                    <div>{t("tuning.sameSongThresholdDisabledHint")}</div>
+                  ) : null}
                 </div>
               }
             />
@@ -447,8 +479,119 @@ export function TuningModal() {
               value={form?.rampPct ?? 10}
               onChange={(value) => setFormField("rampPct", value)}
             />
-            {multiTrackEnabled || playlistCount >= 2
-              ? mixTracks.map((track, index) => {
+            {showReset ? (
+              <div className="tuning-reset-row">
+                <button type="button" id="tuning-reset" onClick={handleReset}>
+                  {t("common.reset")}
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="tuning-right-col">
+            <div className="checkbox-row tuning-checkboxes-col">
+              <label>
+                <input
+                  id="just-backwards"
+                  type="checkbox"
+                  checked={form?.justBackwards ?? false}
+                  onChange={(event) =>
+                    setFormField("justBackwards", event.target.checked)
+                  }
+                />{" "}
+                {t("tuning.onlyReverse")}
+              </label>
+              <label>
+                <input
+                  id="remove-seq"
+                  type="checkbox"
+                  checked={form?.removeSequentialBranches ?? false}
+                  onChange={(event) =>
+                    setFormField("removeSequentialBranches", event.target.checked)
+                  }
+                />{" "}
+                {t("tuning.removeSequential")}
+              </label>
+              <label>
+                <input
+                  id="highlight-anchor-branch"
+                  type="checkbox"
+                  checked={form?.highlightAnchorBranch ?? false}
+                  onChange={(event) =>
+                    setFormField("highlightAnchorBranch", event.target.checked)
+                  }
+                />{" "}
+                {t("tuning.highlightAnchor")}
+              </label>
+            </div>
+            {multiTrackEnabled ? (
+              <div id="tuning-panel-multi" className="tuning-multi-section">
+                <h3>{t("tuning.multiTuning")}</h3>
+                <div className="checkbox-row multi-checkbox-row">
+                  <label>
+                    <input
+                      id="cross-track-only"
+                      type="checkbox"
+                      checked={crossTrackOnly}
+                      onChange={(event) => {
+                        setCrossTrackOnly(getAppContext(), event.target.checked);
+                        refreshTuningForm();
+                      }}
+                    />{" "}
+                    Cross-song branches only
+                  </label>
+                  <label>
+                    <input
+                      id="tempo-sync-enabled"
+                      type="checkbox"
+                      checked={tempoSyncEnabled}
+                      onChange={(event) => {
+                        setTempoSyncEnabled(
+                          getAppContext(),
+                          event.target.checked,
+                        );
+                        refreshTuningForm();
+                      }}
+                    />{" "}
+                    Tempo sync (match BPM)
+                  </label>
+                  <label>
+                    <input
+                      id="normalize-volume-enabled"
+                      type="checkbox"
+                      checked={normalizeVolumeEnabled}
+                      onChange={(event) => {
+                        setNormalizeVolumeEnabled(
+                          getAppContext(),
+                          event.target.checked,
+                        );
+                        refreshTuningForm();
+                      }}
+                    />{" "}
+                    Volume normalization (premix)
+                  </label>
+                </div>
+                <RangeRow
+                  id="cross-threshold"
+                  label={t("tuning.crossSimilarityThreshold")}
+                  valueText={`${form?.crossThreshold ?? 2}`}
+                  min={2}
+                  max={100}
+                  step={1}
+                  value={form?.crossThreshold ?? 2}
+                  onChange={(value) => setFormField("crossThreshold", value)}
+                  hint={
+                    <div className="hint">
+                      {t("tuning.computedThreshold")}{" "}
+                      <span id="computed-cross-threshold">
+                        {form?.computedCrossThreshold === null ||
+                        form?.computedCrossThreshold === undefined
+                          ? "-"
+                          : `${form.computedCrossThreshold}`}
+                      </span>
+                    </div>
+                  }
+                />
+                {mixTracks.map((track, index) => {
                   const gainPct = mixTrackGainsPct[index] ?? 100;
                   return (
                     <RangeRow
@@ -460,94 +603,14 @@ export function TuningModal() {
                       max={150}
                       step={1}
                       value={gainPct}
-                      onChange={(value) =>
-                        setMixTrackGainPct(getAppContext(), index, value)
-                      }
+                      onChange={(value) => {
+                        setMixTrackGainPct(getAppContext(), index, value);
+                        refreshTuningForm();
+                      }}
                     />
                   );
-                })
-              : null}
-            {showReset ? (
-              <div className="tuning-reset-row">
-                <button type="button" id="tuning-reset" onClick={handleReset}>
-                  {t("common.reset")}
-                </button>
+                })}
               </div>
-            ) : null}
-          </div>
-          <div className="checkbox-row tuning-checkboxes-col">
-            <label>
-              <input
-                id="just-backwards"
-                type="checkbox"
-                checked={form?.justBackwards ?? false}
-                onChange={(event) =>
-                  setFormField("justBackwards", event.target.checked)
-                }
-              />{" "}
-              {t("tuning.onlyReverse")}
-            </label>
-            <label>
-              <input
-                id="remove-seq"
-                type="checkbox"
-                checked={form?.removeSequentialBranches ?? false}
-                onChange={(event) =>
-                  setFormField("removeSequentialBranches", event.target.checked)
-                }
-              />{" "}
-              {t("tuning.removeSequential")}
-            </label>
-            <label>
-              <input
-                id="highlight-anchor-branch"
-                type="checkbox"
-                checked={form?.highlightAnchorBranch ?? false}
-                onChange={(event) =>
-                  setFormField("highlightAnchorBranch", event.target.checked)
-                }
-              />{" "}
-              {t("tuning.highlightAnchor")}
-            </label>
-            {multiTrackEnabled || playlistCount >= 2 ? (
-              <>
-                <label>
-                  <input
-                    id="cross-track-only"
-                    type="checkbox"
-                    checked={crossTrackOnly}
-                    onChange={(event) =>
-                      setCrossTrackOnly(getAppContext(), event.target.checked)
-                    }
-                  />{" "}
-                  Cross-song branches only
-                </label>
-                <label>
-                  <input
-                    id="tempo-sync-enabled"
-                    type="checkbox"
-                    checked={tempoSyncEnabled}
-                    onChange={(event) =>
-                      setTempoSyncEnabled(getAppContext(), event.target.checked)
-                    }
-                  />{" "}
-                  Tempo sync (match BPM)
-                </label>
-                <label>
-                  <input
-                    id="normalize-volume-enabled"
-                    type="checkbox"
-                    checked={normalizeVolumeEnabled}
-                    onChange={(event) =>
-                      setNormalizeVolumeEnabled(
-                        getAppContext(),
-                        event.target.checked,
-                      )
-                    }
-                  />{" "}
-                  Volume normalization (premix)
-                </label>
-              </>
             ) : null}
           </div>
         </div>

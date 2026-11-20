@@ -317,6 +317,9 @@
     "playbackStyles": "Wiedergabestile",
     "remixToys": "Remix-Spielzeuge",
     "customAnchor": "Editor für eigenen Anker",
+    "multiTuning": "Multi-Tuning",
+    "crossSimilarityThreshold": "Songübergreifende Ähnlichkeitsschwelle:",
+    "sameSongThresholdDisabledHint": "Gilt nur, wenn Sprünge innerhalb desselben Songs aktiviert sind.",
     "advanced": "Erweitert",
     "maxBranches": "Max. Zweige pro Beat:",
     "maxBranchesHint": "Maximale Anzahl ausgehender Zweige pro Beat (1–32). Wird nicht in Teilen-Links gespeichert."

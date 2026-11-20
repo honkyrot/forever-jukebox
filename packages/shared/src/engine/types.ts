@@ -72,6 +72,8 @@ export interface JukeboxConfig {
   maxBranches: number;
   maxBranchThreshold: number;
   currentThreshold: number;
+  // Similarity threshold for cross-song edges in multi-track mixes (0 = auto).
+  crossTrackThreshold?: number;
   justBackwards: boolean;
   justLongBranches: boolean;
   removeSequentialBranches: boolean;
@@ -88,6 +90,8 @@ export interface JukeboxConfig {
 export interface JukeboxGraphState {
   computedThreshold: number;
   currentThreshold: number;
+  computedCrossThreshold?: number;
+  currentCrossThreshold?: number;
   lastBranchPoint: number;
   totalBeats: number;
   longestReach: number;

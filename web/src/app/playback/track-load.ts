@@ -217,7 +217,11 @@ export function resetForNewTrack(
     useAppStore.setState({ tuningParams: null });
     clearTuningParamsFromUrl(true);
   }
-  engine.updateConfig({ ...defaultConfig, crossTrackOnly: false });
+  engine.updateConfig({
+    ...defaultConfig,
+    crossTrackOnly: false,
+    crossTrackThreshold: 0,
+  });
   syncVolumeUI(context);
   useAppStore.setState({
     analysisStatusText: () => i18n.t("status.noTrack"),

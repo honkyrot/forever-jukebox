@@ -301,7 +301,7 @@ export async function disableMultiTrackMix(
   cachedMixSources = null;
   stopPlayback(context);
   useAppStore.setState({ multiTrackEnabled: false });
-  context.engine.updateConfig({ crossTrackOnly: false });
+  context.engine.updateConfig({ crossTrackOnly: false, crossTrackThreshold: 0 });
 
   const { playlist } = useAppStore.getState();
   const activeTrack =

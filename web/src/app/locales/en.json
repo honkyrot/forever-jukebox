@@ -317,6 +317,9 @@
     "playbackStyles": "Playback Styles",
     "remixToys": "Remix Toys",
     "customAnchor": "Custom anchor editor",
+    "multiTuning": "Multi Tuning",
+    "crossSimilarityThreshold": "Cross Branch Similarity Threshold:",
+    "sameSongThresholdDisabledHint": "Only applies when same-song branches are enabled.",
     "advanced": "Advanced",
     "maxBranches": "Max Branches per Beat:",
     "maxBranchesHint": "Maximum number of outgoing branches each beat can keep (1-512). Not saved in share links."

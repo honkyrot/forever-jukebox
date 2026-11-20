@@ -10,6 +10,7 @@ export function hasNonDefaultTuningConfig(
   return (
     config.maxBranches !== defaults.maxBranches ||
     config.currentThreshold !== defaults.currentThreshold ||
+    (config.crossTrackThreshold ?? 0) !== (defaults.crossTrackThreshold ?? 0) ||
     config.justBackwards !== defaults.justBackwards ||
     config.justLongBranches !== defaults.justLongBranches ||
     config.removeSequentialBranches !== defaults.removeSequentialBranches ||

@@ -773,9 +773,33 @@ button.is-loading::after {
   gap: 12px;
 }
 
+.tuning-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .tuning-checkboxes-col {
   flex-direction: column;
   gap: 8px;
+}
+
+.tuning-multi-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-control);
+}
+
+.tuning-multi-section h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.tuning-body label.is-disabled {
+  opacity: 0.55;
 }
 
 .tuning-reset-row {

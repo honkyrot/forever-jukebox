@@ -378,6 +378,7 @@ describe("changedTuningControls", () => {
       changedTuningControls(base, {
         ...base,
         threshold: 50,
+        crossThreshold: 42,
         minLongBranchPercent: 30,
         justBackwards: true,
         removeSequentialBranches: true,
@@ -385,6 +386,7 @@ describe("changedTuningControls", () => {
       }),
     ).toEqual([
       "threshold",
+      "cross_threshold",
       "min_branch_length",
       "just_backwards",
       "sequential",
@@ -555,6 +557,66 @@ describe("playback tuning", () => {
     expect(useAppStore.getState().highlightAnchorBranch).toBe(true);
     expect(localStorage.getItem("fj-highlight-anchor-branch")).toBe("1");
     expect(context.jukebox.setAnchorHighlightEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("reads and applies crossTrackThreshold independently of currentThreshold", () => {
+    const context = createContext();
+    (context.engine.getGraphState as ReturnType<typeof vi.fn>).mockReturnValue({
+      currentThreshold: 45,
+      computedThreshold: 30,
+      currentCrossThreshold: 55,
+      computedCrossThreshold: 35,
+      allEdges: [],
+      totalBeats: 0,
+    });
+
+    const form = getTuningFormValues(context);
+    expect(form.threshold).toBe(45);
+    expect(form.computedThreshold).toBe(30);
+    expect(form.crossThreshold).toBe(55);
+    expect(form.computedCrossThreshold).toBe(35);
+
+    applyTuningChanges(
+      context,
+      formValues(context, {
+        crossThreshold: 48,
+        computedCrossThreshold: 35,
+      }),
+    );
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        currentThreshold: 45,
+        crossTrackThreshold: 48,
+      }),
+    );
+
+    // Landing back on the computed cross threshold returns crossTrackThreshold to auto (0).
+    applyTuningChanges(
+      context,
+      formValues(context, {
+        crossThreshold: 35,
+        computedCrossThreshold: 35,
+      }),
+    );
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        crossTrackThreshold: 0,
+      }),
+    );
+  });
+
+  it("resets crossTrackThreshold while preserving active crossTrackOnly on tuning reset", () => {
+    const context = createContext();
+    useAppStore.setState({ multiTrackEnabled: true, crossTrackOnly: true });
+
+    resetTuningDefaults(context);
+
+    expect(context.engine.updateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        crossTrackOnly: true,
+        crossTrackThreshold: 0,
+      }),
+    );
   });
 
   it("applies branch stats toggle and audio mode from extras controls", () => {

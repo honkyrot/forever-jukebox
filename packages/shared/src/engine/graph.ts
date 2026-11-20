@@ -106,15 +106,44 @@ function getSegmentDistance(
   );
 }
 
+/**
+ * Returns true when two beats belong to different tracks in a multi-track mix.
+ */
+function isCrossTrackPair(q1: QuantumBase, q2: QuantumBase): boolean {
+  return (
+    q1.trackIndex !== undefined &&
+    q2.trackIndex !== undefined &&
+    q1.trackIndex !== q2.trackIndex
+  );
+}
+
+/**
+ * Returns true when an analysis spans multiple merged tracks.
+ */
+function isMultiTrackAnalysis(analysis: TrackAnalysis): boolean {
+  if (analysis.tracks && analysis.tracks.length >= 2) {
+    return true;
+  }
+  let firstTrackIndex: number | undefined;
+  for (const beat of analysis.beats) {
+    if (beat.trackIndex === undefined) {
+      continue;
+    }
+    if (firstTrackIndex === undefined) {
+      firstTrackIndex = beat.trackIndex;
+    } else if (beat.trackIndex !== firstTrackIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The branch distance between two beats: segment likeness plus 100 when their positions in the bar differ.
 export function beatPairDistance(q1: QuantumBase, q2: QuantumBase): number {
   if (q1.overlappingSegments.length === 0) {
     return Number.POSITIVE_INFINITY;
   }
-  const isCrossTrack =
-    q1.trackIndex !== undefined &&
-    q2.trackIndex !== undefined &&
-    q1.trackIndex !== q2.trackIndex;
+  const isCrossTrack = isCrossTrackPair(q1, q2);
   // Normalize segment durations by beat length ratio when comparing across
   // tracks so remixes at different BPMs are not penalized for tempo differences.
   const durationScale =
@@ -169,6 +198,13 @@ export function beatPairMatch(q1: QuantumBase, q2: QuantumBase): BeatPairMatch {
   return { distance, percent, sameBarPosition, quality };
 }
 
+type EdgeFilter = "all" | "same-track" | "cross-track";
+
+/**
+ * Precomputes nearest-neighbor edges for a single beat, keeping separate
+ * same-track and cross-track pools in multi-track mixes when same-song
+ * branches are allowed so same-song matches cannot crowd out cross-song ones.
+ */
 function calculateNearestNeighborsForQuantum(
   quanta: QuantumBase[],
   maxNeighbors: number,
@@ -176,12 +212,16 @@ function calculateNearestNeighborsForQuantum(
   q1: QuantumBase,
   allEdges: Edge[],
   crossTrackOnly = false,
+  isMultiTrack = false,
 ) {
-  const edges: Edge[] = [];
   if (q1.overlappingSegments.length === 0) {
     q1.allNeighbors = [];
     return;
   }
+
+  const separatePools = isMultiTrack && !crossTrackOnly;
+  const edges: Edge[] = [];
+  const crossEdges: Edge[] = [];
 
   for (let i = 0; i < quanta.length; i += 1) {
     if (i === q1.which) {
@@ -189,23 +229,29 @@ function calculateNearestNeighborsForQuantum(
     }
 
     const q2 = quanta[i];
+    const isCrossTrack = isCrossTrackPair(q1, q2);
     if (
       crossTrackOnly &&
       q1.trackIndex !== undefined &&
       q2.trackIndex !== undefined &&
-      q1.trackIndex === q2.trackIndex
+      !isCrossTrack
     ) {
       continue;
     }
     const totalDistance = beatPairDistance(q1, q2);
     if (totalDistance < maxThreshold) {
-      edges.push({
+      const edge: Edge = {
         id: -1,
         src: q1,
         dest: q2,
         distance: totalDistance,
         deleted: false,
-      });
+      };
+      if (separatePools && isCrossTrack) {
+        crossEdges.push(edge);
+      } else {
+        edges.push(edge);
+      }
     }
   }
 
@@ -218,11 +264,26 @@ function calculateNearestNeighborsForQuantum(
     allEdges.push(edge);
     q1.allNeighbors.push(edge);
   }
+
+  if (separatePools) {
+    crossEdges.sort((a, b) => a.distance - b.distance);
+    for (let i = 0; i < maxNeighbors && i < crossEdges.length; i += 1) {
+      const edge = crossEdges[i];
+      edge.id = allEdges.length;
+      allEdges.push(edge);
+      q1.allNeighbors.push(edge);
+    }
+  }
 }
 
 const cachedNeighborParams = new WeakMap<
   QuantumBase[],
-  { maxNeighbors: number; maxThreshold: number; crossTrackOnly: boolean }
+  {
+    maxNeighbors: number;
+    maxThreshold: number;
+    crossTrackOnly: boolean;
+    isMultiTrack: boolean;
+  }
 >();
 
 function precalculateNearestNeighbors(
@@ -231,19 +292,21 @@ function precalculateNearestNeighbors(
   maxThreshold: number,
   allEdges: Edge[],
   crossTrackOnly = false,
+  isMultiTrack = false,
 ) {
   if (quanta.length === 0) {
     return;
   }
   const cached = cachedNeighborParams.get(quanta);
   // Reuse precalculated neighbors when they were manually seeded (no cache entry)
-  // or when the neighbor cap, distance ceiling, and cross-track mode still match.
+  // or when the neighbor cap, distance ceiling, and multi-track mode still match.
   const canReuseCached =
     quanta[0].allNeighbors.length > 0 &&
     (!cached ||
       (cached.maxNeighbors === maxNeighbors &&
         cached.maxThreshold === maxThreshold &&
-        cached.crossTrackOnly === crossTrackOnly));
+        cached.crossTrackOnly === crossTrackOnly &&
+        cached.isMultiTrack === isMultiTrack));
   if (canReuseCached) {
     allEdges.length = 0;
     for (const q of quanta) {
@@ -262,12 +325,14 @@ function precalculateNearestNeighbors(
       q,
       allEdges,
       crossTrackOnly,
+      isMultiTrack,
     );
   }
   cachedNeighborParams.set(quanta, {
     maxNeighbors,
     maxThreshold,
     crossTrackOnly,
+    isMultiTrack,
   });
 }
 
@@ -309,21 +374,30 @@ function resolveEdgeJumpDistanceAndDirection(
   };
 }
 
+/**
+ * Filters a beat's candidate edges by direction, jump-distance bounds, and
+ * separate same-track / cross-track similarity thresholds.
+ */
 function extractNearestNeighbors(
   q: QuantumBase,
   maxThreshold: number,
   config: JukeboxConfig,
   totalBeats: number,
+  crossTrackThreshold?: number,
+  edgeFilter: EdgeFilter = "all",
 ): Edge[] {
   const neighbors: Edge[] = [];
   for (const neighbor of q.allNeighbors) {
     if (neighbor.deleted) {
       continue;
     }
-    const isCrossTrack =
-      q.trackIndex !== undefined &&
-      neighbor.dest.trackIndex !== undefined &&
-      q.trackIndex !== neighbor.dest.trackIndex;
+    const isCrossTrack = isCrossTrackPair(q, neighbor.dest);
+    if (edgeFilter === "same-track" && isCrossTrack) {
+      continue;
+    }
+    if (edgeFilter === "cross-track" && !isCrossTrack) {
+      continue;
+    }
     if (config.crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
       continue;
     }
@@ -345,22 +419,39 @@ function extractNearestNeighbors(
     ) {
       continue;
     }
-    if (neighbor.distance <= maxThreshold) {
+    const edgeThreshold =
+      isCrossTrack && crossTrackThreshold !== undefined
+        ? crossTrackThreshold
+        : maxThreshold;
+    if (neighbor.distance <= edgeThreshold) {
       neighbors.push(neighbor);
     }
   }
   return neighbors;
 }
 
+/**
+ * Collects active outgoing neighbors for every beat and returns the count of
+ * beats that have at least one branch.
+ */
 function collectNearestNeighbors(
   quanta: QuantumBase[],
   maxThreshold: number,
   config: JukeboxConfig,
+  crossTrackThreshold?: number,
+  edgeFilter: EdgeFilter = "all",
 ): number {
   let branchingCount = 0;
   const totalBeats = quanta.length;
   for (const q of quanta) {
-    q.neighbors = extractNearestNeighbors(q, maxThreshold, config, totalBeats);
+    q.neighbors = extractNearestNeighbors(
+      q,
+      maxThreshold,
+      config,
+      totalBeats,
+      crossTrackThreshold,
+      edgeFilter,
+    );
     if (q.neighbors.length > 0) {
       branchingCount += 1;
     }
@@ -756,6 +847,8 @@ function insertBestBackwardBranch(
   minSourceIndex = Math.floor(quanta.length * 0.66),
   context?: AnchorDecisionContext,
   minJump = 1,
+  crossTrackThreshold?: number,
+  crossTrackOnly = false,
 ): number | null {
   const decisionContext = context ?? buildAnchorDecisionContext(quanta);
   const branches: Array<{
@@ -775,9 +868,17 @@ function insertBestBackwardBranch(
       if (neighbor.deleted) {
         continue;
       }
+      const isCrossTrack = isCrossTrackPair(q, neighbor.dest);
+      if (crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
+        continue;
+      }
       const delta = i - neighbor.dest.which;
       if (delta >= minJump && neighbor.distance < maxThreshold) {
-        if (neighbor.distance <= threshold) {
+        const edgeThreshold =
+          isCrossTrack && crossTrackThreshold !== undefined
+            ? crossTrackThreshold
+            : threshold;
+        if (neighbor.distance <= edgeThreshold) {
           continue;
         }
         branches.push({
@@ -1065,9 +1166,14 @@ function filterOutSequentialBranches(
   }
 }
 
+/**
+ * Sweeps candidate thresholds from 10 upward until at least 1/6 of beats have
+ * an active branch within the specified edge subset.
+ */
 function computeDefaultThreshold(
   quanta: QuantumBase[],
   config: JukeboxConfig,
+  edgeFilter: EdgeFilter = "all",
 ): number {
   const targetBranchCount = quanta.length / 6;
   const densityConfig = {
@@ -1077,7 +1183,13 @@ function computeDefaultThreshold(
     maxLongBranch: 0,
   };
   for (let t = 10; t < config.maxBranchThreshold; t += 5) {
-    const count = collectNearestNeighbors(quanta, t, densityConfig);
+    const count = collectNearestNeighbors(
+      quanta,
+      t,
+      densityConfig,
+      t,
+      edgeFilter,
+    );
     if (count >= targetBranchCount) {
       return t;
     }
@@ -1089,6 +1201,7 @@ function addAnchorBranch(
   quanta: QuantumBase[],
   threshold: number,
   config: JukeboxConfig,
+  crossTrackThreshold?: number,
 ): number | null {
   const decisionContext = buildAnchorDecisionContext(quanta);
   const preferredLateStart = Math.floor(quanta.length * 0.8);
@@ -1118,6 +1231,8 @@ function addAnchorBranch(
     preferredLateStart,
     decisionContext,
     minInsertedJump,
+    crossTrackThreshold,
+    Boolean(config.crossTrackOnly),
   );
   if (lateInsertedSource !== null) {
     return lateInsertedSource;
@@ -1132,6 +1247,8 @@ function addAnchorBranch(
     Math.floor(quanta.length * 0.66),
     decisionContext,
     minInsertedJump,
+    crossTrackThreshold,
+    Boolean(config.crossTrackOnly),
   );
 }
 
@@ -1194,27 +1311,75 @@ function applyBranchFilters(
   return { lastBranchPoint: selectedLastBranchPoint, longestReach: selectedLongestReach };
 }
 
+/**
+ * Precomputes nearest-neighbor edges, resolves default/pinned similarity
+ * thresholds, inserts the end-of-track anchor, and applies branch filters.
+ */
 export function buildJumpGraph(
   analysis: TrackAnalysis,
   config: JukeboxConfig,
 ): JukeboxGraphState {
   const quanta = analysis.beats;
   const allEdges: Edge[] = [];
+  const isMultiTrack = isMultiTrackAnalysis(analysis);
   precalculateNearestNeighbors(
     quanta,
     clampMaxBranches(config.maxBranches),
     config.maxBranchThreshold,
     allEdges,
     Boolean(config.crossTrackOnly),
+    isMultiTrack,
   );
 
-  const computedThreshold = computeDefaultThreshold(quanta, config);
+  if (!isMultiTrack) {
+    const computedThreshold = computeDefaultThreshold(quanta, config);
+    const threshold =
+      config.currentThreshold !== 0
+        ? config.currentThreshold
+        : computedThreshold;
+    collectNearestNeighbors(quanta, threshold, config);
+    const preferredLastBranchPoint = addAnchorBranch(quanta, threshold, config);
+    const { lastBranchPoint, longestReach } = applyBranchFilters(
+      quanta,
+      config,
+      preferredLastBranchPoint,
+    );
+
+    return {
+      computedThreshold,
+      currentThreshold: threshold,
+      lastBranchPoint,
+      totalBeats: quanta.length,
+      longestReach,
+      allEdges,
+    };
+  }
+
+  // Compute independent auto defaults for cross-song and same-song branches so
+  // tuning cross-song similarity never alters independent branch behavior.
+  const computedCrossThreshold = computeDefaultThreshold(
+    quanta,
+    config,
+    "cross-track",
+  );
+  const computedThreshold = config.crossTrackOnly
+    ? computedCrossThreshold
+    : computeDefaultThreshold(quanta, config, "same-track");
   const threshold =
     config.currentThreshold !== 0
       ? config.currentThreshold
       : computedThreshold;
-  collectNearestNeighbors(quanta, threshold, config);
-  const preferredLastBranchPoint = addAnchorBranch(quanta, threshold, config);
+  const crossThreshold =
+    config.crossTrackThreshold !== undefined && config.crossTrackThreshold !== 0
+      ? config.crossTrackThreshold
+      : computedCrossThreshold;
+  collectNearestNeighbors(quanta, threshold, config, crossThreshold);
+  const preferredLastBranchPoint = addAnchorBranch(
+    quanta,
+    threshold,
+    config,
+    crossThreshold,
+  );
   const { lastBranchPoint, longestReach } = applyBranchFilters(
     quanta,
     config,
@@ -1224,6 +1389,8 @@ export function buildJumpGraph(
   return {
     computedThreshold,
     currentThreshold: threshold,
+    computedCrossThreshold,
+    currentCrossThreshold: crossThreshold,
     lastBranchPoint,
     totalBeats: quanta.length,
     longestReach,

@@ -277,6 +277,8 @@ export function resetExtrasDefaults(context: AppContext) {
 export type TuningFormValues = {
   threshold: number;
   computedThreshold: number | null;
+  crossThreshold?: number;
+  computedCrossThreshold?: number | null;
   maxBranches: number;
   minProbPct: number;
   maxProbPct: number;
@@ -287,9 +289,6 @@ export type TuningFormValues = {
   removeSequentialBranches: boolean;
   highlightAnchorBranch: boolean;
 };
-
-// Snapshot the engine config for the React tuning form (the read half of
-// the old syncTuningUI).
 
 // Snapshot the engine config for the React tuning form (the read half of
 // the old syncTuningUI).
@@ -304,9 +303,20 @@ export function getTuningFormValues(context: AppContext): TuningFormValues {
   // The engine's own default for this track, which is not the threshold in use
   // whenever the user has pinned one.
   const computedValue = graph ? Math.round(graph.computedThreshold) : null;
+  const rawCrossThreshold = config.crossTrackThreshold ?? 0;
+  const crossThresholdValue =
+    rawCrossThreshold === 0 && graph?.currentCrossThreshold !== undefined
+      ? Math.round(graph.currentCrossThreshold)
+      : rawCrossThreshold;
+  const computedCrossValue =
+    graph?.computedCrossThreshold !== undefined
+      ? Math.round(graph.computedCrossThreshold)
+      : null;
   return {
     threshold: thresholdValue,
     computedThreshold: computedValue,
+    crossThreshold: crossThresholdValue,
+    computedCrossThreshold: computedCrossValue,
     maxBranches: config.maxBranches,
     minProbPct: Math.round(config.minRandomBranchChance * 100),
     maxProbPct: Math.round(config.maxRandomBranchChance * 100),
@@ -336,6 +346,9 @@ export function changedTuningControls(
   const controls: string[] = [];
   if (previous.threshold !== next.threshold) {
     controls.push("threshold");
+  }
+  if ((previous.crossThreshold ?? 0) !== (next.crossThreshold ?? 0)) {
+    controls.push("cross_threshold");
   }
   if (previous.maxBranches !== next.maxBranches) {
     controls.push("maxBranches");
@@ -368,6 +381,10 @@ export function changedTuningControls(
   return controls;
 }
 
+/**
+ * Applies tuning form values to the engine, rebuilds the jump graph, and syncs
+ * resolved auto thresholds and URL tuning state.
+ */
 export function applyTuningChanges(
   context: AppContext,
   form: TuningFormValues,
@@ -383,6 +400,13 @@ export function applyTuningChanges(
     computed !== null &&
     Number.isFinite(computed) &&
     threshold === computed;
+  const crossThreshold = form.crossThreshold ?? 0;
+  const computedCross = form.computedCrossThreshold ?? null;
+  const useAutoCrossThreshold =
+    crossThreshold <= 0 ||
+    (computedCross !== null &&
+      Number.isFinite(computedCross) &&
+      crossThreshold === computedCross);
   let minProb = form.minProbPct / 100;
   let maxProb = form.maxProbPct / 100;
   const ramp = form.rampPct / RANDOM_BRANCH_DELTA_PERCENT_SCALE;
@@ -399,6 +423,7 @@ export function applyTuningChanges(
   engine.updateConfig({
     maxBranches,
     currentThreshold: useAutoThreshold ? 0 : threshold,
+    crossTrackThreshold: useAutoCrossThreshold ? 0 : crossThreshold,
     minRandomBranchChance: minProb,
     maxRandomBranchChance: maxProb,
     randomBranchChanceDelta: ramp,
@@ -424,13 +449,30 @@ export function applyTuningChanges(
   updateTrackInfo(context);
   let nextThreshold = threshold;
   let nextComputed: number | null;
+  let nextCrossThreshold = crossThreshold;
+  let nextComputedCross: number | null;
   if (graph) {
     if (useAutoThreshold) {
       nextThreshold = Math.max(0, Math.round(graph.currentThreshold));
     }
     nextComputed = Math.round(graph.computedThreshold);
+    if (graph.currentCrossThreshold !== undefined) {
+      if (useAutoCrossThreshold) {
+        nextCrossThreshold = Math.max(
+          0,
+          Math.round(graph.currentCrossThreshold),
+        );
+      }
+      nextComputedCross =
+        graph.computedCrossThreshold !== undefined
+          ? Math.round(graph.computedCrossThreshold)
+          : null;
+    } else {
+      nextComputedCross = null;
+    }
   } else {
     nextComputed = form.computedThreshold;
+    nextComputedCross = form.computedCrossThreshold ?? null;
   }
   for (const control of changedTuningControls(previousForm, form)) {
     trackEvent("tune", { control });
@@ -443,6 +485,8 @@ export function applyTuningChanges(
     maxLongBranchPercent: sliderMaxPct,
     threshold: nextThreshold,
     computedThreshold: nextComputed,
+    crossThreshold: nextCrossThreshold,
+    computedCrossThreshold: nextComputedCross,
     minProbPct: Math.round(minProb * 100),
     maxProbPct: Math.round(maxProb * 100),
   };
@@ -452,11 +496,20 @@ export function hasNonDefaultTuning(context: AppContext): boolean {
   return engineHasNonDefaultTuning(context.engine, context.defaultConfig);
 }
 
+/**
+ * Resets engine tuning parameters and deleted/anchor overrides back to defaults
+ * while preserving the active multi-track cross-song branch restriction.
+ */
 export function resetTuningDefaults(context: AppContext) {
   const { engine, jukebox } = context;
   discardCustomAnchorEdit(context);
   engine.clearDeletedEdges();
-  engine.updateConfig(context.defaultConfig);
+  const { multiTrackEnabled, crossTrackOnly } = useAppStore.getState();
+  engine.updateConfig({
+    ...context.defaultConfig,
+    crossTrackOnly: multiTrackEnabled ? crossTrackOnly : false,
+    crossTrackThreshold: 0,
+  });
   engine.rebuildGraph();
   useAppStore.setState({ vizData: engine.getVisualizationData() });
   const data = useAppStore.getState().vizData;

@@ -337,6 +337,149 @@ describe("mergeTrackAnalyses and cross-track branching", () => {
     // whereas raw deltas 6 and 8 normalize to 20 and ~26.67 (over the cap of 15).
     expect(beat0DestIndices).toEqual([2, 4]);
   });
+
+  it("computes and filters independent same-track and cross-track thresholds when crossTrackOnly is false", () => {
+    const trackA = makeRawTrack({
+      title: "Song A",
+      beatCount: 12,
+      beatDuration: 0.5,
+      tempo: 120,
+      pitchValue: 0.1,
+      timbreValue: 1,
+    });
+    // Give beat 4 a moderate intra-track distance (~6.93 after segment averaging) while beat 8 matches beat 0 (distance 0).
+    // Use 4-beat bars so beats 0, 4, and 8 share bar position 0.
+    trackA.bars = Array.from({ length: 3 }, (_, i) => ({
+      start: i * 2,
+      duration: 2,
+      confidence: 0.9,
+    }));
+    trackA.segments[4].pitches = new Array(12).fill(0.5);
+    const trackB = makeRawTrack({
+      title: "Song B",
+      beatCount: 12,
+      beatDuration: 0.5,
+      tempo: 120,
+      pitchValue: 0.6,
+      timbreValue: 5,
+    });
+    trackB.bars = Array.from({ length: 3 }, (_, i) => ({
+      start: i * 2,
+      duration: 2,
+      confidence: 0.9,
+    }));
+
+    const merged = mergeTrackAnalyses(
+      [{ analysis: trackA }, { analysis: trackB }],
+      { tempoSync: true },
+    );
+
+    const autoGraph = buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      maxBranches: 2,
+      crossTrackOnly: false,
+      currentThreshold: 0,
+      crossTrackThreshold: 0,
+    });
+
+    // Separate precalculation pools ensure close same-song beats cannot crowd out cross-song candidates.
+    const beat0CrossCandidates = merged.beats[0].allNeighbors.filter(
+      (edge) => edge.dest.trackIndex !== edge.src.trackIndex,
+    );
+    expect(beat0CrossCandidates.length).toBeGreaterThan(0);
+    expect(autoGraph.computedCrossThreshold).toBeDefined();
+    expect(autoGraph.computedCrossThreshold!).toBeGreaterThan(
+      autoGraph.computedThreshold,
+    );
+
+    // Tightening crossTrackThreshold drops cross-song edges without dropping same-song edges.
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      maxBranches: 2,
+      crossTrackOnly: false,
+      currentThreshold: 5,
+      crossTrackThreshold: 20,
+    });
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.trackIndex === 1),
+    ).toBe(false);
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.which === 8),
+    ).toBe(true);
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.which === 4),
+    ).toBe(false);
+
+    // Raising currentThreshold adds beat 4 without enabling cross-track edges.
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      maxBranches: 2,
+      crossTrackOnly: false,
+      currentThreshold: 10,
+      crossTrackThreshold: 20,
+    });
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.which === 4),
+    ).toBe(true);
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.trackIndex === 1),
+    ).toBe(false);
+
+    // Raising crossTrackThreshold independently restores cross-track edges.
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      maxBranches: 2,
+      crossTrackOnly: false,
+      currentThreshold: 10,
+      crossTrackThreshold: 40,
+    });
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.which === 4),
+    ).toBe(true);
+    expect(
+      merged.beats[0].neighbors.some((edge) => edge.dest.trackIndex === 1),
+    ).toBe(true);
+  });
+
+  it("uses crossTrackThreshold independently of currentThreshold when crossTrackOnly is true", () => {
+    const trackA = makeRawTrack({
+      title: "Song A",
+      beatCount: 8,
+      beatDuration: 0.5,
+      tempo: 120,
+      pitchValue: 0.1,
+      timbreValue: 1,
+    });
+    const trackB = makeRawTrack({
+      title: "Song B",
+      beatCount: 8,
+      beatDuration: 0.5,
+      tempo: 120,
+      pitchValue: 0.6,
+      timbreValue: 5,
+    });
+
+    const merged = mergeTrackAnalyses(
+      [{ analysis: trackA }, { analysis: trackB }],
+      { tempoSync: true },
+    );
+
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      crossTrackOnly: true,
+      currentThreshold: 5,
+      crossTrackThreshold: 40,
+    });
+    expect(merged.beats[0].neighbors.length).toBeGreaterThan(0);
+
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      crossTrackOnly: true,
+      currentThreshold: 60,
+      crossTrackThreshold: 20,
+    });
+    expect(merged.beats[0].neighbors).toHaveLength(0);
+  });
 });
 
 describe("combineAudioBuffers volume normalization and per-track gain", () => {
