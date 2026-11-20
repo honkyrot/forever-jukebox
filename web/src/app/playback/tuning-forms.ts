@@ -14,8 +14,10 @@ import {
 } from "../tuning";
 import { clearModeLoadingStep, showToast } from "../ui";
 import {
-  clampMaxBranches,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  clampMaxBranches,
   hasNonDefaultTuning as engineHasNonDefaultTuning,
 } from "@forever-jukebox/shared";
 import {
@@ -551,13 +553,32 @@ export function resetTuningDefaults(context: AppContext) {
   const { engine, jukebox } = context;
   discardCustomAnchorEdit(context);
   engine.clearDeletedEdges();
-  const { multiTrackEnabled, crossTrackOnly, coverSyncEnabled } =
-    useAppStore.getState();
+  const {
+    multiTrackEnabled,
+    crossTrackOnly,
+    coverSyncEnabled,
+    timeSignatureBranchingEnabled,
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+    timeSignatureTrackOffsets,
+  } = useAppStore.getState();
   engine.updateConfig({
     ...context.defaultConfig,
     crossTrackOnly: multiTrackEnabled ? crossTrackOnly : false,
     crossTrackThreshold: 0,
     coverSync: multiTrackEnabled ? coverSyncEnabled : false,
+    timeSignatureBranching: multiTrackEnabled
+      ? timeSignatureBranchingEnabled
+      : false,
+    timeSignatureNumerator: multiTrackEnabled
+      ? timeSignatureNumerator
+      : DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureDenominator: multiTrackEnabled
+      ? timeSignatureDenominator
+      : DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    timeSignatureTrackOffsets: multiTrackEnabled
+      ? [...timeSignatureTrackOffsets]
+      : [],
   });
   engine.rebuildGraph();
   useAppStore.setState({ vizData: engine.getVisualizationData() });

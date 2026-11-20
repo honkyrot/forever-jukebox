@@ -2,7 +2,13 @@ import { useLayoutEffect, useState } from "react";
 import {
   hasNonDefaultExtras,
   MAX_MAX_BRANCHES,
+  MAX_TIME_SIGNATURE_NUMERATOR,
+  MAX_TIME_SIGNATURE_TRACK_OFFSET,
   MIN_MAX_BRANCHES,
+  MIN_TIME_SIGNATURE_NUMERATOR,
+  MIN_TIME_SIGNATURE_TRACK_OFFSET,
+  TIME_SIGNATURE_DENOMINATOR_OPTIONS,
+  resolveTimeSignatureBranchStepBeats,
 } from "@forever-jukebox/shared";
 import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import type {
@@ -38,6 +44,10 @@ import {
   setNormalizeVolumeEnabled,
   setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
+  setTimeSignatureBranchingEnabled,
+  setTimeSignatureDenominator,
+  setTimeSignatureNumerator,
+  setTimeSignatureTrackOffset,
   type ExtrasFormValues,
   type TuningFormValues,
 } from "../../playback";
@@ -174,6 +184,20 @@ export function TuningModal() {
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const crossTrackOnly = useAppStore((s) => s.crossTrackOnly);
   const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
+  const timeSignatureBranchingEnabled = useAppStore(
+    (s) => s.timeSignatureBranchingEnabled,
+  );
+  const timeSignatureNumerator = useAppStore((s) => s.timeSignatureNumerator);
+  const timeSignatureDenominator = useAppStore(
+    (s) => s.timeSignatureDenominator,
+  );
+  const timeSignatureTrackOffsets = useAppStore(
+    (s) => s.timeSignatureTrackOffsets,
+  );
+  const timeSignatureStepBeats = resolveTimeSignatureBranchStepBeats(
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+  );
   const tempoSyncEnabled = useAppStore((s) => s.tempoSyncEnabled);
   const normalizeVolumeEnabled = useAppStore((s) => s.normalizeVolumeEnabled);
   const postMixNormalizeVolumeEnabled = useAppStore(
@@ -650,6 +674,7 @@ export function TuningModal() {
                   max={100}
                   step={1}
                   value={form?.crossThreshold ?? 2}
+                  disabled={timeSignatureBranchingEnabled}
                   onChange={(value) => setFormField("crossThreshold", value)}
                   hint={
                     <div className="hint">
@@ -660,6 +685,9 @@ export function TuningModal() {
                           ? "-"
                           : `${form.computedCrossThreshold}`}
                       </span>
+                      {timeSignatureBranchingEnabled ? (
+                        <div>{t("tuning.timeSignatureOverriddenHint")}</div>
+                      ) : null}
                     </div>
                   }
                 />
@@ -682,6 +710,176 @@ export function TuningModal() {
                     />
                   );
                 })}
+                <div className="multi-time-sig-group">
+                  <label>
+                    <input
+                      id="time-signature-branching-enabled"
+                      type="checkbox"
+                      checked={timeSignatureBranchingEnabled}
+                      onChange={(event) => {
+                        setTimeSignatureBranchingEnabled(
+                          getAppContext(),
+                          event.target.checked,
+                        );
+                        refreshTuningForm();
+                      }}
+                    />{" "}
+                    {t("tuning.timeSignatureOverwrite")}
+                  </label>
+                  {timeSignatureBranchingEnabled ? (
+                    <div
+                      id="multi-time-sig-controls"
+                      className="multi-time-sig-controls"
+                    >
+                      <div className="multi-time-sig-fraction">
+                        <input
+                          id="time-signature-numerator"
+                          type="number"
+                          min={MIN_TIME_SIGNATURE_NUMERATOR}
+                          max={MAX_TIME_SIGNATURE_NUMERATOR}
+                          step={1}
+                          aria-label={t("tuning.timeSignatureNumeratorAria")}
+                          value={timeSignatureNumerator}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(
+                              event.target.value,
+                              10,
+                            );
+                            if (!Number.isFinite(parsed)) {
+                              return;
+                            }
+                            setTimeSignatureNumerator(getAppContext(), parsed);
+                            refreshTuningForm();
+                          }}
+                        />
+                        <span className="multi-time-sig-slash">/</span>
+                        <select
+                          id="time-signature-denominator"
+                          aria-label={t("tuning.timeSignatureDenominatorAria")}
+                          value={timeSignatureDenominator}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(
+                              event.target.value,
+                              10,
+                            );
+                            if (!Number.isFinite(parsed)) {
+                              return;
+                            }
+                            setTimeSignatureDenominator(
+                              getAppContext(),
+                              parsed,
+                            );
+                            refreshTuningForm();
+                          }}
+                        >
+                          {TIME_SIGNATURE_DENOMINATOR_OPTIONS.map((den) => (
+                            <option key={den} value={den}>
+                              {den}
+                            </option>
+                          ))}
+                        </select>
+                        <span id="time-signature-step-beats" className="hint">
+                          {t("tuning.timeSignatureEveryBeats", {
+                            count: timeSignatureStepBeats,
+                          })}
+                        </span>
+                      </div>
+                      <div className="hint">
+                        {coverSyncEnabled
+                          ? t("tuning.timeSignatureCoverSyncHint")
+                          : t("tuning.timeSignatureOffsetOnlyHint")}
+                      </div>
+                      <div className="multi-time-sig-offsets">
+                        {mixTracks.map((track, index) => {
+                          const offset = timeSignatureTrackOffsets[index] ?? 0;
+                          return (
+                            <div
+                              key={index}
+                              className="multi-time-sig-offset-row"
+                            >
+                              <div className="multi-time-sig-offset-header">
+                                <span>
+                                  {t("tuning.timeSignatureTrackOffset", {
+                                    index: index + 1,
+                                    title: track.title,
+                                  })}
+                                </span>
+                              </div>
+                              <div className="multi-time-sig-stepper">
+                                <button
+                                  type="button"
+                                  id={`time-signature-track-offset-dec-${index}`}
+                                  aria-label="-"
+                                  disabled={
+                                    offset <= MIN_TIME_SIGNATURE_TRACK_OFFSET
+                                  }
+                                  onClick={() => {
+                                    setTimeSignatureTrackOffset(
+                                      getAppContext(),
+                                      index,
+                                      offset - 1,
+                                    );
+                                    refreshTuningForm();
+                                  }}
+                                >
+                                  -
+                                </button>
+                                <input
+                                  id={`time-signature-track-offset-${index}`}
+                                  type="number"
+                                  min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
+                                  max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
+                                  step={1}
+                                  aria-label={t(
+                                    "tuning.timeSignatureTrackOffset",
+                                    {
+                                      index: index + 1,
+                                      title: track.title,
+                                    },
+                                  )}
+                                  value={offset}
+                                  onChange={(event) => {
+                                    const parsed = Number.parseInt(
+                                      event.target.value,
+                                      10,
+                                    );
+                                    if (!Number.isFinite(parsed)) {
+                                      return;
+                                    }
+                                    setTimeSignatureTrackOffset(
+                                      getAppContext(),
+                                      index,
+                                      parsed,
+                                    );
+                                    refreshTuningForm();
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  id={`time-signature-track-offset-inc-${index}`}
+                                  aria-label="+"
+                                  disabled={
+                                    offset >= MAX_TIME_SIGNATURE_TRACK_OFFSET
+                                  }
+                                  onClick={() => {
+                                    setTimeSignatureTrackOffset(
+                                      getAppContext(),
+                                      index,
+                                      offset + 1,
+                                    );
+                                    refreshTuningForm();
+                                  }}
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>

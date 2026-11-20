@@ -61,6 +61,10 @@ import {
 } from "./status-ui";
 import { maybePrepareInstrumentalMode } from "./instrumental";
 import {
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
+} from "@forever-jukebox/shared";
+import {
   DEFAULT_BEATS_PER_BAR,
   DEFAULT_METRONOME_BEAT_OFFSET,
   detectTrackBeatsPerBar,
@@ -239,6 +243,10 @@ export function resetForNewTrack(
     crossTrackOnly: false,
     crossTrackThreshold: 0,
     coverSync: false,
+    timeSignatureBranching: false,
+    timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    timeSignatureTrackOffsets: [],
   });
   syncVolumeUI(context);
   useAppStore.setState({

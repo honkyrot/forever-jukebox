@@ -7,4 +7,5 @@ export * from "./multiTrack";
 export * from "./random";
 export * from "./resetDefaults";
 export * from "./selection";
+export * from "./timeSignatureBranching";
 export * from "./types";

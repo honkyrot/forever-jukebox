@@ -21,6 +21,7 @@ import {
 import { InfoModal } from "./InfoModal";
 import { PlaylistModal } from "./PlaylistModal";
 import { TuningModal } from "./TuningModal";
+import { getAppContext } from "../../runtime";
 
 vi.mock("../../playback", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../playback")>();
@@ -70,6 +71,9 @@ const EXTRAS_FORM: ExtrasFormValues = {
 };
 
 beforeEach(() => {
+  vi.mocked(getAppContext).mockReturnValue(
+    {} as ReturnType<typeof getAppContext>,
+  );
   (getTuningFormValues as Mock).mockReturnValue({ ...TUNING_FORM });
   (getExtrasFormValues as Mock).mockReturnValue({ ...EXTRAS_FORM });
   (hasNonDefaultTuning as Mock).mockReturnValue(false);
@@ -92,6 +96,10 @@ beforeEach(() => {
       multiTrackEnabled: false,
       crossTrackOnly: true,
       coverSyncEnabled: false,
+      timeSignatureBranchingEnabled: false,
+      timeSignatureNumerator: 4,
+      timeSignatureDenominator: 4,
+      timeSignatureTrackOffsets: [],
       tempoSyncEnabled: true,
       normalizeVolumeEnabled: true,
       postMixNormalizeVolumeEnabled: false,
@@ -528,6 +536,96 @@ describe("TuningModal", () => {
       useAppStore.setState({ crossTrackOnly: false });
     });
     expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it("renders Multi Tuning time-signature branching controls and updates numerator/per-track offsets live", () => {
+    const updateConfig = vi.fn();
+    const rebuildGraph = vi.fn();
+    vi.mocked(getAppContext).mockReturnValue({
+      engine: {
+        updateConfig,
+        rebuildGraph,
+        getVisualizationData: vi.fn(() => null),
+        getGraphState: vi.fn(() => null),
+      },
+      player: {
+        getDuration: vi.fn(() => 0),
+      },
+    } as unknown as ReturnType<typeof getAppContext>);
+
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        multiTrackEnabled: false,
+        playlist: {
+          tracks: [
+            { id: "a", sourceType: "youtube", title: "Song A", artist: "A", duration: null },
+            { id: "b", sourceType: "youtube", title: "Song B", artist: "B", duration: null },
+          ],
+          currentIndex: 0,
+        },
+      });
+    });
+    render(<TuningModal />);
+    expect(document.getElementById("time-signature-branching-enabled")).toBeNull();
+
+    act(() => {
+      useAppStore.setState({ multiTrackEnabled: true });
+    });
+    const toggle = document.getElementById(
+      "time-signature-branching-enabled",
+    ) as HTMLInputElement;
+    expect(toggle).not.toBeNull();
+    expect(document.getElementById("multi-time-sig-controls")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(useAppStore.getState().timeSignatureBranchingEnabled).toBe(true);
+    expect(document.getElementById("multi-time-sig-controls")).not.toBeNull();
+    expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(true);
+    expect((document.getElementById("cross-threshold") as HTMLInputElement).disabled).toBe(true);
+    expect((document.getElementById("cross-track-only") as HTMLInputElement).disabled).toBe(false);
+    act(() => {
+      useAppStore.setState({ crossTrackOnly: false });
+    });
+    expect((document.getElementById("threshold") as HTMLInputElement).disabled).toBe(false);
+    expect((document.getElementById("cross-threshold") as HTMLInputElement).disabled).toBe(true);
+    expect(document.getElementById("time-signature-step-beats")?.textContent).toBe(
+      "Every 4 beats",
+    );
+    expect(document.getElementById("time-signature-track-offset-0")).not.toBeNull();
+    expect(document.getElementById("time-signature-track-offset-1")).not.toBeNull();
+    expect(updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeSignatureBranching: true }),
+    );
+    expect(rebuildGraph).toHaveBeenCalledTimes(1);
+
+    const numeratorInput = document.getElementById(
+      "time-signature-numerator",
+    ) as HTMLInputElement;
+    fireEvent.change(numeratorInput, { target: { value: "8" } });
+    expect(useAppStore.getState().timeSignatureNumerator).toBe(8);
+    expect(document.getElementById("time-signature-step-beats")?.textContent).toBe(
+      "Every 8 beats",
+    );
+    expect(rebuildGraph).toHaveBeenCalledTimes(2);
+
+    const incTrack2 = document.getElementById(
+      "time-signature-track-offset-inc-1",
+    ) as HTMLButtonElement;
+    fireEvent.click(incTrack2);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([0, 1]);
+    expect(
+      (
+        document.getElementById(
+          "time-signature-track-offset-1",
+        ) as HTMLInputElement
+      ).value,
+    ).toBe("1");
+    expect(updateConfig).toHaveBeenLastCalledWith({
+      timeSignatureTrackOffsets: [0, 1],
+    });
+    expect(rebuildGraph).toHaveBeenCalledTimes(3);
   });
 });
 

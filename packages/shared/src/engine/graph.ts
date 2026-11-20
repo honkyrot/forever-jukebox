@@ -1,5 +1,10 @@
 import { buildCoverSyncCrossEdges } from "./coverSync";
 import {
+  buildTimeSignatureCrossEdges,
+  clampTimeSignatureTrackOffset,
+  resolveTimeSignatureBranchStepBeats,
+} from "./timeSignatureBranching";
+import {
   Edge,
   JukeboxConfig,
   JukeboxGraphState,
@@ -289,6 +294,9 @@ const cachedNeighborParams = new WeakMap<
     crossTrackOnly: boolean;
     isMultiTrack: boolean;
     coverSync: boolean;
+    timeSignatureBranching: boolean;
+    timeSignatureStepBeats: number;
+    timeSignatureOffsetsKey: string;
   }
 >();
 
@@ -300,21 +308,40 @@ function precalculateNearestNeighbors(
   crossTrackOnly = false,
   isMultiTrack = false,
   coverSync = false,
+  timeSignatureBranching = false,
+  timeSignatureNumerator?: number,
+  timeSignatureDenominator?: number,
+  timeSignatureTrackOffsets?: readonly number[],
 ) {
   if (quanta.length === 0) {
     return;
   }
+  const timeSignatureStepBeats = timeSignatureBranching
+    ? resolveTimeSignatureBranchStepBeats(
+        timeSignatureNumerator,
+        timeSignatureDenominator,
+      )
+    : 0;
+  const timeSignatureOffsetsKey = timeSignatureBranching
+    ? (timeSignatureTrackOffsets ?? [])
+        .map((offset) => clampTimeSignatureTrackOffset(offset))
+        .join(",")
+    : "";
   const cached = cachedNeighborParams.get(quanta);
   // Reuse precalculated neighbors when they were manually seeded (no cache entry)
-  // or when the neighbor cap, distance ceiling, and multi-track/cover-sync modes match.
+  // or when the neighbor cap, distance ceiling, and multi-track modes match.
+  const paramsMatch =
+    cached !== undefined &&
+    cached.maxNeighbors === maxNeighbors &&
+    cached.maxThreshold === maxThreshold &&
+    cached.crossTrackOnly === crossTrackOnly &&
+    cached.isMultiTrack === isMultiTrack &&
+    cached.coverSync === coverSync &&
+    cached.timeSignatureBranching === timeSignatureBranching &&
+    cached.timeSignatureStepBeats === timeSignatureStepBeats &&
+    cached.timeSignatureOffsetsKey === timeSignatureOffsetsKey;
   const canReuseCached =
-    quanta[0].allNeighbors.length > 0 &&
-    (!cached ||
-      (cached.maxNeighbors === maxNeighbors &&
-        cached.maxThreshold === maxThreshold &&
-        cached.crossTrackOnly === crossTrackOnly &&
-        cached.isMultiTrack === isMultiTrack &&
-        cached.coverSync === coverSync));
+    paramsMatch || (!cached && quanta[0].allNeighbors.length > 0);
   if (canReuseCached) {
     allEdges.length = 0;
     for (const q of quanta) {
@@ -325,7 +352,39 @@ function precalculateNearestNeighbors(
     return;
   }
   allEdges.length = 0;
-  if (isMultiTrack && coverSync) {
+  if (isMultiTrack && timeSignatureBranching) {
+    // Overwrite similarity-based cross-track edges with time-signature
+    // boundary cross-track edges while keeping same-track branches unless
+    // crossTrackOnly is enabled.
+    const timeSigEdgesByBeat = buildTimeSignatureCrossEdges(quanta, {
+      numerator: timeSignatureNumerator,
+      denominator: timeSignatureDenominator,
+      trackOffsets: timeSignatureTrackOffsets,
+      useCoverSync: coverSync,
+    });
+    for (const q of quanta) {
+      if (crossTrackOnly) {
+        q.allNeighbors = [];
+      } else {
+        calculateNearestNeighborsForQuantum(
+          quanta,
+          maxNeighbors,
+          maxThreshold,
+          q,
+          allEdges,
+          false,
+          true,
+          true,
+        );
+      }
+      const edges = timeSigEdgesByBeat.get(q.which) ?? [];
+      for (const edge of edges) {
+        edge.id = allEdges.length;
+        allEdges.push(edge);
+        q.allNeighbors.push(edge);
+      }
+    }
+  } else if (isMultiTrack && coverSync) {
     const coverEdgesByBeat = buildCoverSyncCrossEdges(quanta, maxThreshold);
     for (const q of quanta) {
       if (crossTrackOnly) {
@@ -368,6 +427,9 @@ function precalculateNearestNeighbors(
     crossTrackOnly,
     isMultiTrack,
     coverSync,
+    timeSignatureBranching,
+    timeSignatureStepBeats,
+    timeSignatureOffsetsKey,
   });
 }
 
@@ -436,9 +498,9 @@ function extractNearestNeighbors(
     if (config.crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
       continue;
     }
-    // Cover-sync jumps connect parallel moments across covers, so direction and
-    // timeline-span filters only apply to standard non-cover-sync edges.
-    if (!(config.coverSync && isCrossTrack)) {
+    // Cover-sync and time-signature jumps connect parallel moments across tracks,
+    // so direction and timeline-span filters only apply to standard same-track edges.
+    if (!((config.coverSync || config.timeSignatureBranching) && isCrossTrack)) {
       const { distance, isForward } = resolveEdgeJumpDistanceAndDirection(
         q,
         neighbor.dest,
@@ -1365,6 +1427,8 @@ export function buildJumpGraph(
   const allEdges: Edge[] = [];
   const isMultiTrack = isMultiTrackAnalysis(analysis);
   const useCoverSync = isMultiTrack && Boolean(config.coverSync);
+  const useTimeSignatureBranching =
+    isMultiTrack && Boolean(config.timeSignatureBranching);
   precalculateNearestNeighbors(
     quanta,
     clampMaxBranches(config.maxBranches),
@@ -1373,6 +1437,10 @@ export function buildJumpGraph(
     Boolean(config.crossTrackOnly),
     isMultiTrack,
     useCoverSync,
+    useTimeSignatureBranching,
+    config.timeSignatureNumerator,
+    config.timeSignatureDenominator,
+    config.timeSignatureTrackOffsets,
   );
 
   if (!isMultiTrack) {
@@ -1395,6 +1463,33 @@ export function buildJumpGraph(
       lastBranchPoint,
       totalBeats: quanta.length,
       longestReach,
+      allEdges,
+    };
+  }
+
+  if (useTimeSignatureBranching) {
+    // Time-signature bar-boundary cross edges overwrite cross-track similarity
+    // branches while allowing same-track branches when crossTrackOnly is false.
+    const computedThreshold = config.crossTrackOnly
+      ? 0
+      : computeDefaultThreshold(quanta, config, "same-track");
+    const threshold = config.crossTrackOnly
+      ? 0
+      : config.currentThreshold !== 0
+        ? config.currentThreshold
+        : computedThreshold;
+    collectNearestNeighbors(quanta, threshold, config, 0);
+    if (config.removeSequentialBranches && !config.crossTrackOnly) {
+      filterOutSequentialBranches(quanta, -1, true);
+    }
+    return {
+      computedThreshold,
+      currentThreshold: threshold,
+      computedCrossThreshold: 0,
+      currentCrossThreshold: 0,
+      lastBranchPoint: -1,
+      totalBeats: quanta.length,
+      longestReach: 0,
       allEdges,
     };
   }

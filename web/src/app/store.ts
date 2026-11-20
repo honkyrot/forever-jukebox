@@ -16,6 +16,10 @@ import { DEFAULT_VISUALIZATION_INDEX } from "./constants";
 import { emptyPlaylist } from "./playlist";
 import { buildSearchParams, pathForTab, pathForTrack } from "./tabs";
 import {
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
+} from "@forever-jukebox/shared";
+import {
   DEFAULT_BEATS_PER_BAR,
   DEFAULT_METRONOME_BEAT_OFFSET,
   DEFAULT_METRONOME_VOLUME_PCT,
@@ -521,6 +525,10 @@ const createTuningSlice: Slice<
     | "multiTrackEnabled"
     | "crossTrackOnly"
     | "coverSyncEnabled"
+    | "timeSignatureBranchingEnabled"
+    | "timeSignatureNumerator"
+    | "timeSignatureDenominator"
+    | "timeSignatureTrackOffsets"
     | "tempoSyncEnabled"
     | "normalizeVolumeEnabled"
     | "postMixNormalizeVolumeEnabled"
@@ -536,6 +544,10 @@ const createTuningSlice: Slice<
   multiTrackEnabled: false,
   crossTrackOnly: true,
   coverSyncEnabled: false,
+  timeSignatureBranchingEnabled: false,
+  timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  timeSignatureTrackOffsets: [],
   tempoSyncEnabled: true,
   normalizeVolumeEnabled: true,
   postMixNormalizeVolumeEnabled: false,

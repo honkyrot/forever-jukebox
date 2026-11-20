@@ -1,4 +1,9 @@
 import {
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  clampTimeSignatureDenominator,
+  clampTimeSignatureNumerator,
+  clampTimeSignatureTrackOffset,
   computeTempoSyncRatio,
   mergeTrackAnalyses,
   type TrackAnalysis,
@@ -152,6 +157,10 @@ function applyLoadedMixSources(
   const {
     crossTrackOnly,
     coverSyncEnabled,
+    timeSignatureBranchingEnabled,
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+    timeSignatureTrackOffsets,
     tempoSyncEnabled,
     normalizeVolumeEnabled,
     postMixNormalizeVolumeEnabled,
@@ -166,6 +175,9 @@ function applyLoadedMixSources(
   );
   const resolvedGainsPct = sources.map((_, index) =>
     clampMixTrackGainPct(mixTrackGainsPct[index] ?? DEFAULT_MIX_TRACK_GAIN_PCT),
+  );
+  const resolvedTrackOffsets = sources.map((_, index) =>
+    clampTimeSignatureTrackOffset(timeSignatureTrackOffsets[index] ?? 0),
   );
 
   const combined = combineAudioBuffers(
@@ -200,6 +212,10 @@ function applyLoadedMixSources(
   context.engine.updateConfig({
     crossTrackOnly,
     coverSync: coverSyncEnabled,
+    timeSignatureBranching: timeSignatureBranchingEnabled,
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+    timeSignatureTrackOffsets: resolvedTrackOffsets,
   });
   context.engine.loadAnalysis(mergedAnalysis);
 
@@ -215,6 +231,7 @@ function applyLoadedMixSources(
     branchStats: null,
     multiTrackEnabled: true,
     mixTrackGainsPct: resolvedGainsPct,
+    timeSignatureTrackOffsets: resolvedTrackOffsets,
     metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
     audioLoaded: true,
     analysisLoaded: true,
@@ -340,6 +357,10 @@ export async function disableMultiTrackMix(
     crossTrackOnly: false,
     crossTrackThreshold: 0,
     coverSync: false,
+    timeSignatureBranching: false,
+    timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    timeSignatureTrackOffsets: [],
   });
 
   const { playlist } = useAppStore.getState();
@@ -371,6 +392,9 @@ export async function disableMultiTrackMix(
  * and track-info state without reloading audio buffers.
  */
 function rebuildMixGraphAndSyncViz(context: AppContext): void {
+  if (!context.engine) {
+    return;
+  }
   context.engine.rebuildGraph();
   const vizData = context.engine.getVisualizationData();
   useAppStore.setState({ vizData, selectedEdge: null, branchStats: null });
@@ -410,6 +434,110 @@ export function setCoverSyncEnabled(
   }
   context.engine.updateConfig({ coverSync: enabled });
   rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates whether time-signature boundary branching overwrites similarity-based
+ * branches in multi-track mixes and rebuilds the active jump graph live.
+ */
+export function setTimeSignatureBranchingEnabled(
+  context: AppContext,
+  enabled: boolean,
+): void {
+  useAppStore.setState({ timeSignatureBranchingEnabled: enabled });
+  const {
+    multiTrackEnabled,
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+    timeSignatureTrackOffsets,
+  } = useAppStore.getState();
+  if (!multiTrackEnabled) {
+    return;
+  }
+  context.engine?.updateConfig({
+    timeSignatureBranching: enabled,
+    timeSignatureNumerator,
+    timeSignatureDenominator,
+    timeSignatureTrackOffsets,
+  });
+  rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates the time signature numerator for multi-track boundary branching and
+ * rebuilds the jump graph live when time-signature branching is active.
+ */
+export function setTimeSignatureNumerator(
+  context: AppContext,
+  numerator: number,
+): void {
+  const clamped = clampTimeSignatureNumerator(numerator);
+  useAppStore.setState({ timeSignatureNumerator: clamped });
+  const { multiTrackEnabled, timeSignatureBranchingEnabled } =
+    useAppStore.getState();
+  if (!multiTrackEnabled) {
+    return;
+  }
+  context.engine?.updateConfig({ timeSignatureNumerator: clamped });
+  if (timeSignatureBranchingEnabled) {
+    rebuildMixGraphAndSyncViz(context);
+  }
+}
+
+/**
+ * Updates the time signature denominator for multi-track boundary branching and
+ * rebuilds the jump graph live when time-signature branching is active.
+ */
+export function setTimeSignatureDenominator(
+  context: AppContext,
+  denominator: number,
+): void {
+  const clamped = clampTimeSignatureDenominator(denominator);
+  useAppStore.setState({ timeSignatureDenominator: clamped });
+  const { multiTrackEnabled, timeSignatureBranchingEnabled } =
+    useAppStore.getState();
+  if (!multiTrackEnabled) {
+    return;
+  }
+  context.engine?.updateConfig({ timeSignatureDenominator: clamped });
+  if (timeSignatureBranchingEnabled) {
+    rebuildMixGraphAndSyncViz(context);
+  }
+}
+
+/**
+ * Updates a single track's integer beat offset for multi-track time-signature
+ * branching and rebuilds the jump graph live when active.
+ */
+export function setTimeSignatureTrackOffset(
+  context: AppContext,
+  trackIndex: number,
+  offset: number,
+): void {
+  if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+    return;
+  }
+  const clamped = clampTimeSignatureTrackOffset(offset);
+  const state = useAppStore.getState();
+  const current = state.timeSignatureTrackOffsets;
+  const targetLength = Math.max(
+    trackIndex + 1,
+    current.length,
+    state.vizData?.tracks?.length ?? 0,
+  );
+  const next = current.slice();
+  while (next.length < targetLength) {
+    next.push(0);
+  }
+  next[trackIndex] = clamped;
+  useAppStore.setState({ timeSignatureTrackOffsets: next });
+  if (!state.multiTrackEnabled) {
+    return;
+  }
+  context.engine?.updateConfig({ timeSignatureTrackOffsets: next });
+  if (state.timeSignatureBranchingEnabled) {
+    rebuildMixGraphAndSyncViz(context);
+  }
 }
 
 function reapplyMixFromCacheOrReload(context: AppContext): void {

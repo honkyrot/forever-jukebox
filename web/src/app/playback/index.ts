@@ -81,4 +81,8 @@ export {
   setNormalizeVolumeEnabled,
   setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
+  setTimeSignatureBranchingEnabled,
+  setTimeSignatureDenominator,
+  setTimeSignatureNumerator,
+  setTimeSignatureTrackOffset,
 } from "./multi-track-mix";

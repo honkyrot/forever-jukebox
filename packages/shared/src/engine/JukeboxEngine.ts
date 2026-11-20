@@ -31,6 +31,10 @@ import {
   QuantumBase,
   TrackAnalysis,
 } from "./types";
+import {
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
+} from "./timeSignatureBranching";
 import { computeBeatColors } from "./beatColors";
 
 export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
@@ -50,6 +54,10 @@ export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
   maxLongBranchPercent: 0,
   crossTrackOnly: false,
   coverSync: false,
+  timeSignatureBranching: false,
+  timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  timeSignatureTrackOffsets: [],
 };
 
 const TICK_INTERVAL_MS = 50;

@@ -21,6 +21,10 @@ import {
   setMixTrackGainPct,
   setPostMixNormalizeVolumeEnabled,
   setSleepTimer,
+  setTimeSignatureBranchingEnabled,
+  setTimeSignatureDenominator,
+  setTimeSignatureNumerator,
+  setTimeSignatureTrackOffset,
   startJukeboxFromBeat,
   stopPlayback,
   syncDeletedEdgeState,
@@ -714,6 +718,104 @@ describe("playback tuning", () => {
 
     resetForNewTrack(context);
     expect(context.player.clearPostMixTrackGains).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates time-signature multi-track branching live without stopping playback, preserves it across tuning reset, and clears engine config on track reset", () => {
+    const context = createContext();
+    useAppStore.setState({
+      multiTrackEnabled: true,
+      coverSyncEnabled: true,
+      vizData: {
+        beats: [],
+        beatVisits: [],
+        beatColors: [],
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+        putBackAnchorEdgeId: null,
+        tracks: [
+          {
+            trackIndex: 0,
+            title: "Song A",
+            duration: 10,
+            tempoRatio: 1,
+            startTimeOffset: 0,
+            startBeatIndex: 0,
+            beatCount: 0,
+          },
+          {
+            trackIndex: 1,
+            title: "Song B",
+            duration: 10,
+            tempoRatio: 1,
+            startTimeOffset: 10,
+            startBeatIndex: 0,
+            beatCount: 0,
+          },
+        ],
+      },
+    });
+
+    // Adjusting numerator while disabled updates store + config without rebuilding yet.
+    setTimeSignatureNumerator(context, 8);
+    expect(useAppStore.getState().timeSignatureNumerator).toBe(8);
+    expect(context.engine.rebuildGraph).not.toHaveBeenCalled();
+
+    // Enabling time-signature branching updates config and rebuilds the graph live.
+    setTimeSignatureBranchingEnabled(context, true);
+    expect(useAppStore.getState().timeSignatureBranchingEnabled).toBe(true);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureBranching: true,
+        timeSignatureNumerator: 8,
+        timeSignatureDenominator: 4,
+        timeSignatureTrackOffsets: [],
+      }),
+    );
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(1);
+    expect(context.player.stop).not.toHaveBeenCalled();
+
+    // Changing denominator and per-track offsets rebuilds live and clamps values.
+    setTimeSignatureDenominator(context, 8);
+    expect(useAppStore.getState().timeSignatureDenominator).toBe(8);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(2);
+
+    setTimeSignatureTrackOffset(context, 1, 3);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([0, 3]);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith({
+      timeSignatureTrackOffsets: [0, 3],
+    });
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(3);
+
+    setTimeSignatureNumerator(context, 128);
+    setTimeSignatureDenominator(context, 99);
+    setTimeSignatureTrackOffset(context, 0, -999);
+    expect(useAppStore.getState().timeSignatureNumerator).toBe(64);
+    expect(useAppStore.getState().timeSignatureDenominator).toBe(16);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([-256, 3]);
+
+    // Resetting tuning preserves active multi-track time-signature settings.
+    resetTuningDefaults(context);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureBranching: true,
+        timeSignatureNumerator: 64,
+        timeSignatureDenominator: 16,
+        timeSignatureTrackOffsets: [-256, 3],
+      }),
+    );
+
+    // Resetting for a new track restores engine defaults.
+    resetForNewTrack(context);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureBranching: false,
+        timeSignatureNumerator: 4,
+        timeSignatureDenominator: 4,
+        timeSignatureTrackOffsets: [],
+      }),
+    );
   });
 
   it("applies branch stats toggle and audio mode from extras controls", () => {

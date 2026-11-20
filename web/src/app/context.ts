@@ -81,6 +81,10 @@ export type AppState = {
   multiTrackEnabled: boolean;
   crossTrackOnly: boolean;
   coverSyncEnabled: boolean;
+  timeSignatureBranchingEnabled: boolean;
+  timeSignatureNumerator: number;
+  timeSignatureDenominator: number;
+  timeSignatureTrackOffsets: number[];
   tempoSyncEnabled: boolean;
   normalizeVolumeEnabled: boolean;
   postMixNormalizeVolumeEnabled: boolean;

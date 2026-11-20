@@ -87,6 +87,15 @@ export interface JukeboxConfig {
   crossTrackOnly?: boolean;
   // Aligns cross-song branches across covers using chroma/dynamics DTW.
   coverSync?: boolean;
+  // Overwrites similarity-based branches in multi-track mixes with cross-song
+  // branches placed on time-signature bar boundaries.
+  timeSignatureBranching?: boolean;
+  // Time signature numerator (default 4) for multi-track boundary branching.
+  timeSignatureNumerator?: number;
+  // Time signature denominator (default 4) for multi-track boundary branching.
+  timeSignatureDenominator?: number;
+  // Per-track integer beat offsets for multi-track time-signature branching.
+  timeSignatureTrackOffsets?: number[];
 }
 
 export interface JukeboxGraphState {
