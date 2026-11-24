@@ -1,27 +1,31 @@
 import {
-  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
-  DEFAULT_TIME_SIGNATURE_NUMERATOR,
-  clampTimeSignatureDenominator,
-  clampTimeSignatureNumerator,
-  clampTimeSignatureTrackOffset,
-  computeTempoSyncRatio,
-  mergeTrackAnalyses,
-  type TrackAnalysis,
+	DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+	DEFAULT_TIME_SIGNATURE_NUMERATOR,
+	clampTimeSignatureDenominator,
+	clampTimeSignatureNumerator,
+	clampTimeSignatureTrackOffset,
+	computeTempoSyncRatio,
+	mergeTrackAnalyses,
+	type TrackAnalysis,
 } from "@forever-jukebox/shared";
-import { combineAudioBuffers } from "@forever-jukebox/shared/audio/multiTrackBuffer";
+import {
+	combineAudioBuffers,
+	prepareDualAudioBuffers,
+} from "@forever-jukebox/shared/audio/multiTrackBuffer";
+import type { AutocanonizerMixAlignmentMode } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { detectTrackBeatsPerBar } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import {
-  isAnalysisComplete,
-  isAnalysisFailed,
-  isAnalysisInProgress,
+	isAnalysisComplete,
+	isAnalysisFailed,
+	isAnalysisInProgress,
 } from "../analysisStatus";
 import {
-  fetchAnalysis,
-  fetchAudio,
-  fetchJobBySource,
-  startYoutubeAnalysis,
-  type AnalysisComplete,
-  type AnalysisResponse,
+	fetchAnalysis,
+	fetchAudio,
+	fetchJobBySource,
+	startYoutubeAnalysis,
+	type AnalysisComplete,
+	type AnalysisResponse,
 } from "../api";
 import { readCachedTrack, updateCachedTrack } from "../cache";
 import { ANALYSIS_POLL_INTERVAL_MS } from "../constants";
@@ -33,17 +37,24 @@ import { TRACK_STEP } from "../job-progress";
 import type { PlaylistTrack } from "../playlist";
 import { getPlaybackDeps } from "../runtime";
 import { useAppStore } from "../store";
-import { PENDING_STEP, setAnalysisStatus, setLoadingStep, showToast } from "../ui";
 import {
-  bumpLoadGeneration,
-  getLoadGeneration,
-  isStaleLoad,
+	PENDING_STEP,
+	setAnalysisStatus,
+	setLoadingStep,
+	showToast,
+} from "../ui";
+import {
+	bumpLoadGeneration,
+	getLoadGeneration,
+	isStaleLoad,
 } from "./load-generation";
 import { updateTrackInfo, updateVizVisibility } from "./status-ui";
 import { delay, loadTrackById, loadTrackByJobId } from "./track-load";
-import { stopPlayback } from "./transport";
+import { startAutocanonizerPlayback, stopPlayback } from "./transport";
+import { syncPredictedJumps } from "./branch-lookahead";
 
 const MAX_MIX_TRACKS = 128;
+export const MAX_AUTOCANONIZER_MIX_TRACKS = 2;
 
 export const MIN_MIX_TRACK_GAIN_PCT = 0;
 export const MAX_MIX_TRACK_GAIN_PCT = 200;
@@ -54,206 +65,213 @@ export const DEFAULT_MIX_TRACK_GAIN_PCT = 100;
  * values to 100%.
  */
 function clampMixTrackGainPct(gainPct: number): number {
-  if (!Number.isFinite(gainPct)) {
-    return DEFAULT_MIX_TRACK_GAIN_PCT;
-  }
-  return Math.max(
-    MIN_MIX_TRACK_GAIN_PCT,
-    Math.min(MAX_MIX_TRACK_GAIN_PCT, Math.round(gainPct)),
-  );
+	if (!Number.isFinite(gainPct)) {
+		return DEFAULT_MIX_TRACK_GAIN_PCT;
+	}
+	return Math.max(
+		MIN_MIX_TRACK_GAIN_PCT,
+		Math.min(MAX_MIX_TRACK_GAIN_PCT, Math.round(gainPct)),
+	);
 }
 
 type LoadedMixTrackSource = {
-  track: PlaylistTrack;
-  analysisResult: AnalysisComplete["result"];
-  buffer: AudioBuffer;
-  tempo?: number;
+	track: PlaylistTrack;
+	analysisResult: AnalysisComplete["result"];
+	buffer: AudioBuffer;
+	tempo?: number;
 };
 
 let cachedMixSources: LoadedMixTrackSource[] | null = null;
+let cachedAutocanonizerMixSources:
+  | [LoadedMixTrackSource, LoadedMixTrackSource]
+  | null = null;
 
 export function clearCachedMultiTrackSources(): void {
-  cachedMixSources = null;
+	cachedMixSources = null;
+  cachedAutocanonizerMixSources = null;
 }
 
 async function resolveTrackAnalysis(
-  track: PlaylistTrack,
-  generation: number,
+	track: PlaylistTrack,
+	generation: number,
 ): Promise<AnalysisComplete> {
-  let response: AnalysisResponse | null = null;
-  if (track.sourceType === "upload" || isLikelyJobId(track.id)) {
-    response = await fetchAnalysis(track.id);
-  } else {
-    response = await fetchJobBySource(track.sourceType, track.id);
-    if (!response && track.sourceType === "youtube") {
-      response = await startYoutubeAnalysis({
-        youtube_id: track.id,
-        title: track.title,
-        artist: track.artist,
-      });
-    }
-  }
+	let response: AnalysisResponse | null = null;
+	if (track.sourceType === "upload" || isLikelyJobId(track.id)) {
+		response = await fetchAnalysis(track.id);
+	} else {
+		response = await fetchJobBySource(track.sourceType, track.id);
+		if (!response && track.sourceType === "youtube") {
+			response = await startYoutubeAnalysis({
+				youtube_id: track.id,
+				title: track.title,
+				artist: track.artist,
+			});
+		}
+	}
 
-  while (response && isAnalysisInProgress(response)) {
-    if (isStaleLoad(generation)) {
-      throw new Error("Load cancelled");
-    }
-    await delay(ANALYSIS_POLL_INTERVAL_MS);
-    if (isStaleLoad(generation)) {
-      throw new Error("Load cancelled");
-    }
-    response = await fetchAnalysis(response.id);
-  }
+	while (response && isAnalysisInProgress(response)) {
+		if (isStaleLoad(generation)) {
+			throw new Error("Load cancelled");
+		}
+		await delay(ANALYSIS_POLL_INTERVAL_MS);
+		if (isStaleLoad(generation)) {
+			throw new Error("Load cancelled");
+		}
+		response = await fetchAnalysis(response.id);
+	}
 
-  if (!response) {
-    throw new Error(`Track analysis unavailable for ${track.title || track.id}`);
-  }
-  if (isAnalysisFailed(response)) {
-    throw new Error(
-      formatErrorForDisplay(response.error, {
-        sourceProvider: response.source_provider,
-        errorCode: response.error_code,
-        fallback: i18n.t("status.loadingFailed"),
-      }),
-    );
-  }
-  if (!isAnalysisComplete(response)) {
-    throw new Error(`Track analysis incomplete for ${track.title || track.id}`);
-  }
-  return response;
+	if (!response) {
+		throw new Error(
+			`Track analysis unavailable for ${track.title || track.id}`,
+		);
+	}
+	if (isAnalysisFailed(response)) {
+		throw new Error(
+			formatErrorForDisplay(response.error, {
+				sourceProvider: response.source_provider,
+				errorCode: response.error_code,
+				fallback: i18n.t("status.loadingFailed"),
+			}),
+		);
+	}
+	if (!isAnalysisComplete(response)) {
+		throw new Error(`Track analysis incomplete for ${track.title || track.id}`);
+	}
+	return response;
 }
 
 async function resolveTrackAudioBuffer(
-  context: AppContext,
-  track: PlaylistTrack,
-  jobId: string,
+	context: AppContext,
+	track: PlaylistTrack,
+	jobId: string,
 ): Promise<AudioBuffer> {
-  const cacheCandidates = [jobId, track.id];
-  let audioBytes: ArrayBuffer | null = null;
-  for (const cacheKey of cacheCandidates) {
-    try {
-      const cached = await readCachedTrack(cacheKey);
-      if (cached?.audio) {
-        audioBytes = cached.audio;
-        break;
-      }
-    } catch {
-      // Ignore cache lookup errors and fall back to network fetch.
-    }
-  }
-  if (!audioBytes) {
-    audioBytes = await fetchAudio(jobId);
-    updateCachedTrack(jobId, { audio: audioBytes, jobId }).catch((err) => {
-      console.warn(`Cache save failed: ${String(err)}`);
-    });
-  }
-  return context.player.getContext().decodeAudioData(audioBytes.slice(0));
+	const cacheCandidates = [jobId, track.id];
+	let audioBytes: ArrayBuffer | null = null;
+	for (const cacheKey of cacheCandidates) {
+		try {
+			const cached = await readCachedTrack(cacheKey);
+			if (cached?.audio) {
+				audioBytes = cached.audio;
+				break;
+			}
+		} catch {
+			// Ignore cache lookup errors and fall back to network fetch.
+		}
+	}
+	if (!audioBytes) {
+		audioBytes = await fetchAudio(jobId);
+		updateCachedTrack(jobId, { audio: audioBytes, jobId }).catch((err) => {
+			console.warn(`Cache save failed: ${String(err)}`);
+		});
+	}
+	return context.player.getContext().decodeAudioData(audioBytes.slice(0));
 }
 
 function applyLoadedMixSources(
-  context: AppContext,
-  sources: LoadedMixTrackSource[],
+	context: AppContext,
+	sources: LoadedMixTrackSource[],
 ): void {
-  const {
-    crossTrackOnly,
-    coverSyncEnabled,
-    timeSignatureBranchingEnabled,
-    timeSignatureNumerator,
-    timeSignatureDenominator,
-    timeSignatureTrackOffsets,
-    tempoSyncEnabled,
-    normalizeVolumeEnabled,
-    postMixNormalizeVolumeEnabled,
-    mixTrackGainsPct,
-  } = useAppStore.getState();
-  const masterTempo = sources[0]?.tempo;
+	const {
+		crossTrackOnly,
+		coverSyncEnabled,
+		timeSignatureBranchingEnabled,
+		timeSignatureNumerator,
+		timeSignatureDenominator,
+		timeSignatureTrackOffsets,
+		tempoSyncEnabled,
+		normalizeVolumeEnabled,
+		postMixNormalizeVolumeEnabled,
+		mixTrackGainsPct,
+	} = useAppStore.getState();
+	const masterTempo = sources[0]?.tempo;
 
-  const tempoRatios = sources.map((source, index) =>
-    index === 0
-      ? 1
-      : computeTempoSyncRatio(masterTempo, source.tempo, tempoSyncEnabled),
-  );
-  const resolvedGainsPct = sources.map((_, index) =>
-    clampMixTrackGainPct(mixTrackGainsPct[index] ?? DEFAULT_MIX_TRACK_GAIN_PCT),
-  );
-  const resolvedTrackOffsets = sources.map((_, index) =>
-    clampTimeSignatureTrackOffset(timeSignatureTrackOffsets[index] ?? 0),
-  );
+	const tempoRatios = sources.map((source, index) =>
+		index === 0
+			? 1
+			: computeTempoSyncRatio(masterTempo, source.tempo, tempoSyncEnabled),
+	);
+	const resolvedGainsPct = sources.map((_, index) =>
+		clampMixTrackGainPct(mixTrackGainsPct[index] ?? DEFAULT_MIX_TRACK_GAIN_PCT),
+	);
+	const resolvedTrackOffsets = sources.map((_, index) =>
+		clampTimeSignatureTrackOffset(timeSignatureTrackOffsets[index] ?? 0),
+	);
 
-  const combined = combineAudioBuffers(
-    context.player.getContext(),
-    sources.map((source, index) => ({
-      buffer: source.buffer,
-      tempoRatio: tempoRatios[index],
-    })),
-    { normalizeVolume: normalizeVolumeEnabled },
-  );
+	const combined = combineAudioBuffers(
+		context.player.getContext(),
+		sources.map((source, index) => ({
+			buffer: source.buffer,
+			tempoRatio: tempoRatios[index],
+		})),
+		{ normalizeVolume: normalizeVolumeEnabled },
+	);
 
-  const mergedAnalysis: TrackAnalysis = mergeTrackAnalyses(
-    sources.map((source, index) => ({
-      analysis: source.analysisResult,
-      durationSec: combined.sliceDurations[index],
-      title: source.track.title,
-      artist: source.track.artist,
-      tempoRatio: tempoRatios[index],
-    })),
-    {
-      tempoSync: tempoSyncEnabled,
-      normalizeLoudness: normalizeVolumeEnabled,
-    },
-  );
+	const mergedAnalysis: TrackAnalysis = mergeTrackAnalyses(
+		sources.map((source, index) => ({
+			analysis: source.analysisResult,
+			durationSec: combined.sliceDurations[index],
+			title: source.track.title,
+			artist: source.track.artist,
+			tempoRatio: tempoRatios[index],
+		})),
+		{
+			tempoSync: tempoSyncEnabled,
+			normalizeLoudness: normalizeVolumeEnabled,
+		},
+	);
 
-  context.player.loadBuffer(combined.buffer);
-  context.player.setPostMixTrackSlices?.(
-    combined.sliceDurations,
-    resolvedGainsPct.map((pct) => pct / 100),
-  );
-  context.player.setPostMixNormalization?.(postMixNormalizeVolumeEnabled);
-  context.engine.updateConfig({
-    crossTrackOnly,
-    coverSync: coverSyncEnabled,
-    timeSignatureBranching: timeSignatureBranchingEnabled,
-    timeSignatureNumerator,
-    timeSignatureDenominator,
-    timeSignatureTrackOffsets: resolvedTrackOffsets,
-  });
-  context.engine.loadAnalysis(mergedAnalysis);
+	context.player.loadBuffer(combined.buffer);
+	context.player.setPostMixTrackSlices?.(
+		combined.sliceDurations,
+		resolvedGainsPct.map((pct) => pct / 100),
+	);
+	context.player.setPostMixNormalization?.(postMixNormalizeVolumeEnabled);
+	context.engine.updateConfig({
+		crossTrackOnly,
+		coverSync: coverSyncEnabled,
+		timeSignatureBranching: timeSignatureBranchingEnabled,
+		timeSignatureNumerator,
+		timeSignatureDenominator,
+		timeSignatureTrackOffsets: resolvedTrackOffsets,
+	});
+	context.engine.loadAnalysis(mergedAnalysis);
 
-  const vizData = context.engine.getVisualizationData();
-  const detectedBeatsPerBar = detectTrackBeatsPerBar(
-    vizData?.beats,
-    mergedAnalysis.track?.time_signature,
-  );
-  context.metronomeOverlay.setBeatsPerBar(detectedBeatsPerBar);
-  useAppStore.setState({
-    vizData,
-    selectedEdge: null,
-    branchStats: null,
-    multiTrackEnabled: true,
-    mixTrackGainsPct: resolvedGainsPct,
-    timeSignatureTrackOffsets: resolvedTrackOffsets,
-    metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
-    audioLoaded: true,
-    analysisLoaded: true,
-    audioLoadInFlight: false,
-    loadingStep: null,
-    trackTitle: sources
-      .map((s) => s.track.title || i18n.t("common.untitled"))
-      .join(" × "),
-    trackArtist: "",
-    jukeboxCurrentSeconds: 0,
-    trackDurationSec:
-      mergedAnalysis.tracks?.[0]?.duration ??
-      mergedAnalysis.track?.duration ??
-      combined.buffer.duration,
-  });
+	const vizData = context.engine.getVisualizationData();
+	const detectedBeatsPerBar = detectTrackBeatsPerBar(
+		vizData?.beats,
+		mergedAnalysis.track?.time_signature,
+	);
+	context.metronomeOverlay.setBeatsPerBar(detectedBeatsPerBar);
+	useAppStore.setState({
+		vizData,
+		selectedEdge: null,
+		branchStats: null,
+		multiTrackEnabled: true,
+		mixTrackGainsPct: resolvedGainsPct,
+		timeSignatureTrackOffsets: resolvedTrackOffsets,
+		metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
+		audioLoaded: true,
+		analysisLoaded: true,
+		audioLoadInFlight: false,
+		loadingStep: null,
+		trackTitle: sources
+			.map((s) => s.track.title || i18n.t("common.untitled"))
+			.join(" × "),
+		trackArtist: "",
+		jukeboxCurrentSeconds: 0,
+		trackDurationSec:
+			mergedAnalysis.tracks?.[0]?.duration ??
+			mergedAnalysis.track?.duration ??
+			combined.buffer.duration,
+	});
 
-  if (vizData) {
-    context.jukebox?.setData(vizData);
-  }
-  context.jukebox?.setSelectedEdge(null);
-  updateVizVisibility();
-  updateTrackInfo(context);
+	if (vizData) {
+		context.jukebox?.setData(vizData);
+	}
+	context.jukebox?.setSelectedEdge(null);
+	syncPredictedJumps(context);
+	updateVizVisibility();
+	updateTrackInfo(context);
 }
 
 /**
@@ -261,76 +279,529 @@ function applyLoadedMixSources(
  * (with optional tempo sync), and starts a multi-track cross-branching session.
  */
 export async function loadMultiTrackMix(context: AppContext): Promise<boolean> {
-  const { playlist, playMode } = useAppStore.getState();
-  if (playMode !== "jukebox" || playlist.tracks.length < 2) {
-    return false;
-  }
+	const { playlist, playMode } = useAppStore.getState();
+	if (playMode !== "jukebox" || playlist.tracks.length < 2) {
+		return false;
+	}
 
-  const tracks = playlist.tracks.slice(0, MAX_MIX_TRACKS);
-  stopPlayback(context);
-  bumpLoadGeneration();
-  const generation = getLoadGeneration();
+	const tracks = playlist.tracks.slice(0, MAX_MIX_TRACKS);
+	stopPlayback(context);
+	bumpLoadGeneration();
+	const generation = getLoadGeneration();
 
-  useAppStore.setState({
-    audioLoaded: false,
-    analysisLoaded: false,
-    audioModePreparing: false,
-    selectedEdge: null,
-    branchStats: null,
-    multiTrackEnabled: true,
-  });
-  setLoadingStep(context, PENDING_STEP);
+	useAppStore.setState({
+		audioLoaded: false,
+		analysisLoaded: false,
+		audioModePreparing: false,
+		selectedEdge: null,
+		branchStats: null,
+		multiTrackEnabled: true,
+	});
+	setLoadingStep(context, PENDING_STEP);
 
-  try {
-    const sources: LoadedMixTrackSource[] = [];
-    for (const track of tracks) {
-      if (isStaleLoad(generation)) {
-        return false;
-      }
-      setLoadingStep(context, TRACK_STEP);
-      const complete = await resolveTrackAnalysis(track, generation);
-      if (isStaleLoad(generation)) {
-        return false;
-      }
-      const buffer = await resolveTrackAudioBuffer(context, track, complete.id);
-      if (isStaleLoad(generation)) {
-        return false;
-      }
-      const rawTrackMeta =
-        complete.result.track ?? complete.track;
-      const tempo =
-        typeof rawTrackMeta?.tempo === "number" && Number.isFinite(rawTrackMeta.tempo)
-          ? rawTrackMeta.tempo
-          : undefined;
-      sources.push({
-        track: {
-          ...track,
-          title:
-            typeof rawTrackMeta?.title === "string" && rawTrackMeta.title.trim()
-              ? rawTrackMeta.title
-              : track.title,
-          artist:
-            typeof rawTrackMeta?.artist === "string"
-              ? rawTrackMeta.artist
-              : track.artist,
-        },
-        analysisResult: complete.result,
-        buffer,
-        tempo,
-      });
-    }
+	try {
+		const sources: LoadedMixTrackSource[] = [];
+		for (const track of tracks) {
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			setLoadingStep(context, TRACK_STEP);
+			const complete = await resolveTrackAnalysis(track, generation);
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			const buffer = await resolveTrackAudioBuffer(context, track, complete.id);
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			const rawTrackMeta = complete.result.track ?? complete.track;
+			const tempo =
+				typeof rawTrackMeta?.tempo === "number" &&
+				Number.isFinite(rawTrackMeta.tempo)
+					? rawTrackMeta.tempo
+					: undefined;
+			sources.push({
+				track: {
+					...track,
+					title:
+						typeof rawTrackMeta?.title === "string" && rawTrackMeta.title.trim()
+							? rawTrackMeta.title
+							: track.title,
+					artist:
+						typeof rawTrackMeta?.artist === "string"
+							? rawTrackMeta.artist
+							: track.artist,
+				},
+				analysisResult: complete.result,
+				buffer,
+				tempo,
+			});
+		}
 
-    if (isStaleLoad(generation)) {
-      return false;
-    }
+		if (isStaleLoad(generation)) {
+			return false;
+		}
 
-    cachedMixSources = sources;
-    applyLoadedMixSources(context, sources);
+		cachedMixSources = sources;
+		applyLoadedMixSources(context, sources);
+		return true;
+	} catch (err) {
+		if (!isStaleLoad(generation)) {
+			cachedMixSources = null;
+			useAppStore.setState({ multiTrackEnabled: false });
+			const message = formatErrorForDisplay(err, {
+				fallback: i18n.t("status.loadingFailed"),
+			});
+			setAnalysisStatus(context, () => message);
+			showToast(message, { tone: "error" });
+		}
+		return false;
+	}
+}
+
+/**
+ * Exits multi-track mix mode and restores single-track playback for the active
+ * playlist item.
+ */
+export async function disableMultiTrackMix(
+	context: AppContext,
+): Promise<boolean> {
+	cachedMixSources = null;
+	stopPlayback(context);
+	useAppStore.setState({ multiTrackEnabled: false });
+	context.player.clearPostMixTrackGains?.();
+	context.player.setPostMixNormalization?.(false);
+	context.engine.updateConfig({
+		crossTrackOnly: false,
+		crossTrackThreshold: 0,
+		coverSync: false,
+		timeSignatureBranching: false,
+		timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+		timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+		timeSignatureTrackOffsets: [],
+	});
+
+	const { playlist } = useAppStore.getState();
+	const activeTrack =
+		playlist.tracks[playlist.currentIndex] ?? playlist.tracks[0];
+	const deps = getPlaybackDeps();
+	if (!activeTrack || !deps) {
+		return false;
+	}
+
+	if (activeTrack.sourceType === "upload" || isLikelyJobId(activeTrack.id)) {
+		return loadTrackByJobId(context, deps, activeTrack.id, {
+			playlistLoad: true,
+			selectedTrack: activeTrack,
+		});
+	}
+	const trackId =
+		activeTrack.sourceType === "youtube"
+			? activeTrack.id
+			: `${activeTrack.sourceType}:${activeTrack.id}`;
+	return loadTrackById(context, deps, trackId, {
+		playlistLoad: true,
+		selectedTrack: activeTrack,
+	});
+}
+
+/**
+ * Rebuilds the active multi-track jump graph and pushes updated visualization
+ * and track-info state without reloading audio buffers.
+ */
+function rebuildMixGraphAndSyncViz(context: AppContext): void {
+	if (!context.engine) {
+		return;
+	}
+	context.engine.rebuildGraph();
+	const vizData = context.engine.getVisualizationData();
+	useAppStore.setState({ vizData, selectedEdge: null, branchStats: null });
+	if (vizData) {
+		context.jukebox?.setData(vizData);
+	}
+	context.jukebox?.setSelectedEdge(null);
+	syncPredictedJumps(context);
+	updateTrackInfo(context);
+}
+
+/**
+ * Updates whether branches are restricted to cross-song jumps in multi-track mode.
+ */
+export function setCrossTrackOnly(context: AppContext, enabled: boolean): void {
+	useAppStore.setState({ crossTrackOnly: enabled });
+	if (!useAppStore.getState().multiTrackEnabled) {
+		return;
+	}
+	context.engine.updateConfig({ crossTrackOnly: enabled });
+	rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates whether cross-song branches in multi-track mixes align parallel song
+ * sections via chroma/dynamics DTW instead of unconstrained beat similarity.
+ */
+export function setCoverSyncEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ coverSyncEnabled: enabled });
+	if (!useAppStore.getState().multiTrackEnabled) {
+		return;
+	}
+	context.engine.updateConfig({ coverSync: enabled });
+	rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates whether time-signature boundary branching overwrites similarity-based
+ * branches in multi-track mixes and rebuilds the active jump graph live.
+ */
+export function setTimeSignatureBranchingEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ timeSignatureBranchingEnabled: enabled });
+	const {
+		multiTrackEnabled,
+		timeSignatureNumerator,
+		timeSignatureDenominator,
+		timeSignatureTrackOffsets,
+	} = useAppStore.getState();
+	if (!multiTrackEnabled) {
+		return;
+	}
+	context.engine?.updateConfig({
+		timeSignatureBranching: enabled,
+		timeSignatureNumerator,
+		timeSignatureDenominator,
+		timeSignatureTrackOffsets,
+	});
+	rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates the time signature numerator for multi-track boundary branching and
+ * rebuilds the jump graph live when time-signature branching is active.
+ */
+export function setTimeSignatureNumerator(
+	context: AppContext,
+	numerator: number,
+): void {
+	const clamped = clampTimeSignatureNumerator(numerator);
+	useAppStore.setState({ timeSignatureNumerator: clamped });
+	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
+		useAppStore.getState();
+	if (!multiTrackEnabled) {
+		return;
+	}
+	context.engine?.updateConfig({ timeSignatureNumerator: clamped });
+	if (timeSignatureBranchingEnabled) {
+		rebuildMixGraphAndSyncViz(context);
+	}
+}
+
+/**
+ * Updates the time signature denominator for multi-track boundary branching and
+ * rebuilds the jump graph live when time-signature branching is active.
+ */
+export function setTimeSignatureDenominator(
+	context: AppContext,
+	denominator: number,
+): void {
+	const clamped = clampTimeSignatureDenominator(denominator);
+	useAppStore.setState({ timeSignatureDenominator: clamped });
+	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
+		useAppStore.getState();
+	if (!multiTrackEnabled) {
+		return;
+	}
+	context.engine?.updateConfig({ timeSignatureDenominator: clamped });
+	if (timeSignatureBranchingEnabled) {
+		rebuildMixGraphAndSyncViz(context);
+	}
+}
+
+/**
+ * Updates a single track's integer beat offset for multi-track time-signature
+ * branching and rebuilds the jump graph live when active.
+ */
+export function setTimeSignatureTrackOffset(
+	context: AppContext,
+	trackIndex: number,
+	offset: number,
+): void {
+	if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+		return;
+	}
+	const clamped = clampTimeSignatureTrackOffset(offset);
+	const state = useAppStore.getState();
+	const current = state.timeSignatureTrackOffsets;
+	const targetLength = Math.max(
+		trackIndex + 1,
+		current.length,
+		state.vizData?.tracks?.length ?? 0,
+	);
+	const next = current.slice();
+	while (next.length < targetLength) {
+		next.push(0);
+	}
+	next[trackIndex] = clamped;
+	useAppStore.setState({ timeSignatureTrackOffsets: next });
+	if (!state.multiTrackEnabled) {
+		return;
+	}
+	context.engine?.updateConfig({ timeSignatureTrackOffsets: next });
+	if (state.timeSignatureBranchingEnabled) {
+		rebuildMixGraphAndSyncViz(context);
+	}
+}
+
+function reapplyMixFromCacheOrReload(context: AppContext): void {
+	if (!useAppStore.getState().multiTrackEnabled) {
+		return;
+	}
+	if (cachedMixSources && cachedMixSources.length >= 2) {
+		stopPlayback(context);
+		applyLoadedMixSources(context, cachedMixSources);
+		return;
+	}
+	void loadMultiTrackMix(context);
+}
+
+/**
+ * Updates whether secondary songs in a multi-track mix are time-scaled to the
+ * master song's BPM, re-applying the mix immediately when cached sources exist.
+ */
+export function setTempoSyncEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ tempoSyncEnabled: enabled });
+	reapplyMixFromCacheOrReload(context);
+}
+
+/**
+ * Toggles automatic RMS audio normalization and analysis loudness alignment for
+ * multi-track mixes, re-rendering immediately when a mix is active.
+ */
+export function setNormalizeVolumeEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ normalizeVolumeEnabled: enabled });
+	reapplyMixFromCacheOrReload(context);
+}
+
+/**
+ * Toggles live post-mix output leveling on the audio player without stopping
+ * playback, reloading buffers, or modifying branch analysis.
+ */
+export function setPostMixNormalizeVolumeEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ postMixNormalizeVolumeEnabled: enabled });
+	if (!useAppStore.getState().multiTrackEnabled) {
+		return;
+	}
+	context.player.setPostMixNormalization?.(enabled);
+}
+
+/**
+ * Sets an individual track's live post-mix volume trim percentage (0–200%)
+ * without stopping playback, re-rendering audio buffers, or recomputing branches.
+ */
+export function setMixTrackGainPct(
+	context: AppContext,
+	trackIndex: number,
+	gainPct: number,
+): void {
+	if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+		return;
+	}
+	const clamped = clampMixTrackGainPct(gainPct);
+	const state = useAppStore.getState();
+	const current = state.mixTrackGainsPct;
+	const targetLength = Math.max(
+		trackIndex + 1,
+		current.length,
+		state.vizData?.tracks?.length ?? 0,
+	);
+	const next = current.slice();
+	while (next.length < targetLength) {
+		next.push(DEFAULT_MIX_TRACK_GAIN_PCT);
+	}
+	next[trackIndex] = clamped;
+	useAppStore.setState({ mixTrackGainsPct: next });
+	if (!state.multiTrackEnabled) {
+		return;
+	}
+	context.player?.setPostMixTrackGains?.(next.map((pct) => pct / 100));
+}
+
+/**
+ * Applies two loaded cover sources to the Autocanonizer controller with automatic
+ * tempo sync, RMS volume normalization, and the active alignment mode.
+ */
+function applyLoadedAutocanonizerMixSources(
+	context: AppContext,
+	sources: [LoadedMixTrackSource, LoadedMixTrackSource],
+): void {
+	const [mainSource, otherSource] = sources;
+	const {
+		autocanonizerMixAlignment,
+		autocanonizerMainPan,
+		autocanonizerOtherPan,
+		autocanonizerMainGainPct,
+		autocanonizerOtherGainPct,
+	} = useAppStore.getState();
+
+	const otherTempoRatio = computeTempoSyncRatio(
+		mainSource.tempo,
+		otherSource.tempo,
+		true,
+	);
+	const prepared = prepareDualAudioBuffers(
+		context.player.getContext(),
+		mainSource.buffer,
+		otherSource.buffer,
+		{
+			tempoRatio: otherTempoRatio,
+			normalizeVolume: true,
+		},
+	);
+
+	context.autocanonizer?.setDualAudio?.(
+		prepared.mainBuffer,
+		prepared.otherBuffer,
+		context.player.getContext(),
+	);
+	context.autocanonizer?.setDualAnalysis?.(
+		mainSource.analysisResult,
+		otherSource.analysisResult,
+		{
+			mainDuration: prepared.mainDurationSec,
+			otherDuration: prepared.otherDurationSec,
+			otherTempoRatio,
+			alignmentMode: autocanonizerMixAlignment,
+		},
+	);
+	context.autocanonizer?.setStreamPans?.(
+		autocanonizerMainPan / 100,
+		autocanonizerOtherPan / 100,
+	);
+	context.autocanonizer?.setStreamGains?.(
+		autocanonizerMainGainPct / 100,
+		autocanonizerOtherGainPct / 100,
+	);
+
+	const title1 = mainSource.track.title || i18n.t("common.untitled");
+	const title2 = otherSource.track.title || i18n.t("common.untitled");
+	useAppStore.setState({
+		autocanonizerMixEnabled: true,
+		autocanonizerMixTrackTitles: [title1, title2],
+		autocanonizerOtherDurationSec: prepared.otherDurationSec,
+		audioLoaded: true,
+		analysisLoaded: true,
+		audioLoadInFlight: false,
+		loadingStep: null,
+		trackTitle: `${title1} × ${title2}`,
+		trackArtist: "",
+		trackDurationSec: prepared.mainDurationSec,
+		autocanonizerMainSeconds: 0,
+		autocanonizerOtherSeconds: 0,
+	});
+	updateVizVisibility();
+	updateTrackInfo(context);
+}
+
+/**
+ * Loads up to the first 2 playlist tracks, tempo-syncs the second cover to the
+ * first, and starts a dual-song Autocanonizer mix session.
+ */
+export async function loadAutocanonizerMix(
+	context: AppContext,
+): Promise<boolean> {
+	const { playlist, playMode } = useAppStore.getState();
+	if (playMode !== "autocanonizer" || playlist.tracks.length < 2) {
+		return false;
+	}
+
+	if (playlist.tracks.length > MAX_AUTOCANONIZER_MIX_TRACKS) {
+		showToast("Autocanonizer mix uses the first 2 playlist songs.");
+	}
+
+	const tracks = playlist.tracks.slice(0, MAX_AUTOCANONIZER_MIX_TRACKS);
+	stopPlayback(context);
+	bumpLoadGeneration();
+	const generation = getLoadGeneration();
+
+	useAppStore.setState({
+		audioLoaded: false,
+		analysisLoaded: false,
+		audioModePreparing: false,
+		autocanonizerMixEnabled: true,
+	});
+	setLoadingStep(context, PENDING_STEP);
+
+	try {
+		const sources: LoadedMixTrackSource[] = [];
+		for (const track of tracks) {
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			setLoadingStep(context, TRACK_STEP);
+			const complete = await resolveTrackAnalysis(track, generation);
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			const buffer = await resolveTrackAudioBuffer(context, track, complete.id);
+			if (isStaleLoad(generation)) {
+				return false;
+			}
+			const rawTrackMeta = complete.result.track ?? complete.track;
+			const tempo =
+				typeof rawTrackMeta?.tempo === "number" &&
+				Number.isFinite(rawTrackMeta.tempo)
+					? rawTrackMeta.tempo
+					: undefined;
+			sources.push({
+				track: {
+					...track,
+					title:
+						typeof rawTrackMeta?.title === "string" && rawTrackMeta.title.trim()
+							? rawTrackMeta.title
+							: track.title,
+					artist:
+						typeof rawTrackMeta?.artist === "string"
+							? rawTrackMeta.artist
+							: track.artist,
+				},
+				analysisResult: complete.result,
+				buffer,
+				tempo,
+			});
+		}
+
+		if (isStaleLoad(generation) || sources.length < 2) {
+			return false;
+		}
+
+    const pair: [LoadedMixTrackSource, LoadedMixTrackSource] = [
+      sources[0],
+      sources[1],
+    ];
+    cachedAutocanonizerMixSources = pair;
+    applyLoadedAutocanonizerMixSources(context, pair);
     return true;
   } catch (err) {
     if (!isStaleLoad(generation)) {
-      cachedMixSources = null;
-      useAppStore.setState({ multiTrackEnabled: false });
+      cachedAutocanonizerMixSources = null;
+      useAppStore.setState({
+        autocanonizerMixEnabled: false,
+        autocanonizerMixTrackTitles: null,
+        autocanonizerOtherDurationSec: null,
+      });
       const message = formatErrorForDisplay(err, {
         fallback: i18n.t("status.loadingFailed"),
       });
@@ -342,283 +813,103 @@ export async function loadMultiTrackMix(context: AppContext): Promise<boolean> {
 }
 
 /**
- * Exits multi-track mix mode and restores single-track playback for the active
- * playlist item.
+ * Exits 2-song Autocanonizer mix mode, resets per-song gain trims, and
+ * restores single-track playback for the active playlist item.
  */
-export async function disableMultiTrackMix(
-  context: AppContext,
+export async function disableAutocanonizerMix(
+	context: AppContext,
 ): Promise<boolean> {
-  cachedMixSources = null;
-  stopPlayback(context);
-  useAppStore.setState({ multiTrackEnabled: false });
-  context.player.clearPostMixTrackGains?.();
-  context.player.setPostMixNormalization?.(false);
-  context.engine.updateConfig({
-    crossTrackOnly: false,
-    crossTrackThreshold: 0,
-    coverSync: false,
-    timeSignatureBranching: false,
-    timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
-    timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
-    timeSignatureTrackOffsets: [],
-  });
+  cachedAutocanonizerMixSources = null;
+	stopPlayback(context);
+	useAppStore.setState({
+		autocanonizerMixEnabled: false,
+		autocanonizerMixTrackTitles: null,
+		autocanonizerOtherDurationSec: null,
+		autocanonizerMainGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
+		autocanonizerOtherGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
+	});
+	context.autocanonizer?.setStreamGains?.(1, 1);
 
-  const { playlist } = useAppStore.getState();
-  const activeTrack =
-    playlist.tracks[playlist.currentIndex] ?? playlist.tracks[0];
-  const deps = getPlaybackDeps();
-  if (!activeTrack || !deps) {
+	const { playlist } = useAppStore.getState();
+	const activeTrack =
+		playlist.tracks[playlist.currentIndex] ?? playlist.tracks[0];
+	const deps = getPlaybackDeps();
+	if (!activeTrack || !deps) {
+		return false;
+	}
+
+	if (activeTrack.sourceType === "upload" || isLikelyJobId(activeTrack.id)) {
+		return loadTrackByJobId(context, deps, activeTrack.id, {
+			playlistLoad: true,
+			selectedTrack: activeTrack,
+		});
+	}
+	const trackId =
+		activeTrack.sourceType === "youtube"
+			? activeTrack.id
+			: `${activeTrack.sourceType}:${activeTrack.id}`;
+	return loadTrackById(context, deps, trackId, {
+		playlistLoad: true,
+		selectedTrack: activeTrack,
+	});
+}
+
+/**
+ * Switches the 2-song Autocanonizer cross-alignment mode ("cover-sync" or
+ * "section-fold") and updates the active controller live when mixed.
+ */
+export function setAutocanonizerMixAlignment(
+	context: AppContext,
+	mode: AutocanonizerMixAlignmentMode,
+): void {
+	useAppStore.setState({ autocanonizerMixAlignment: mode });
+	if (!useAppStore.getState().autocanonizerMixEnabled) {
+		return;
+	}
+	context.autocanonizer?.setDualAlignmentMode?.(mode);
+}
+
+/**
+ * Sets Song 1 or Song 2's live volume balance trim percentage (0–200%) in
+ * Autocanonizer mix mode without interrupting playback.
+ */
+export function setAutocanonizerSongGainPct(
+	context: AppContext,
+	stream: "main" | "other",
+	gainPct: number,
+): void {
+	const clamped = clampMixTrackGainPct(gainPct);
+	const state = useAppStore.getState();
+	const nextMain = stream === "main" ? clamped : state.autocanonizerMainGainPct;
+	const nextOther =
+		stream === "other" ? clamped : state.autocanonizerOtherGainPct;
+	useAppStore.setState({
+		autocanonizerMainGainPct: nextMain,
+		autocanonizerOtherGainPct: nextOther,
+	});
+	context.autocanonizer?.setStreamGains?.(nextMain / 100, nextOther / 100);
+}
+
+/**
+ * Swaps Song 1 (top / Blue / straight) and Song 2 (bottom / Green / jumping)
+ * using the cached dual mix sources, resuming playback if already running.
+ */
+export function swapAutocanonizerMixSongs(context: AppContext): boolean {
+  if (
+    !useAppStore.getState().autocanonizerMixEnabled ||
+    !cachedAutocanonizerMixSources
+  ) {
     return false;
   }
-
-  if (activeTrack.sourceType === "upload" || isLikelyJobId(activeTrack.id)) {
-    return loadTrackByJobId(context, deps, activeTrack.id, {
-      playlistLoad: true,
-      selectedTrack: activeTrack,
-    });
+  const wasRunning = useAppStore.getState().isRunning;
+  stopPlayback(context);
+  cachedAutocanonizerMixSources = [
+    cachedAutocanonizerMixSources[1],
+    cachedAutocanonizerMixSources[0],
+  ];
+  applyLoadedAutocanonizerMixSources(context, cachedAutocanonizerMixSources);
+  if (wasRunning) {
+    startAutocanonizerPlayback(context, 0, { resetSession: true });
   }
-  const trackId =
-    activeTrack.sourceType === "youtube"
-      ? activeTrack.id
-      : `${activeTrack.sourceType}:${activeTrack.id}`;
-  return loadTrackById(context, deps, trackId, {
-    playlistLoad: true,
-    selectedTrack: activeTrack,
-  });
-}
-
-/**
- * Rebuilds the active multi-track jump graph and pushes updated visualization
- * and track-info state without reloading audio buffers.
- */
-function rebuildMixGraphAndSyncViz(context: AppContext): void {
-  if (!context.engine) {
-    return;
-  }
-  context.engine.rebuildGraph();
-  const vizData = context.engine.getVisualizationData();
-  useAppStore.setState({ vizData, selectedEdge: null, branchStats: null });
-  if (vizData) {
-    context.jukebox?.setData(vizData);
-  }
-  context.jukebox?.setSelectedEdge(null);
-  updateTrackInfo(context);
-}
-
-/**
- * Updates whether branches are restricted to cross-song jumps in multi-track mode.
- */
-export function setCrossTrackOnly(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ crossTrackOnly: enabled });
-  if (!useAppStore.getState().multiTrackEnabled) {
-    return;
-  }
-  context.engine.updateConfig({ crossTrackOnly: enabled });
-  rebuildMixGraphAndSyncViz(context);
-}
-
-/**
- * Updates whether cross-song branches in multi-track mixes align parallel song
- * sections via chroma/dynamics DTW instead of unconstrained beat similarity.
- */
-export function setCoverSyncEnabled(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ coverSyncEnabled: enabled });
-  if (!useAppStore.getState().multiTrackEnabled) {
-    return;
-  }
-  context.engine.updateConfig({ coverSync: enabled });
-  rebuildMixGraphAndSyncViz(context);
-}
-
-/**
- * Updates whether time-signature boundary branching overwrites similarity-based
- * branches in multi-track mixes and rebuilds the active jump graph live.
- */
-export function setTimeSignatureBranchingEnabled(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ timeSignatureBranchingEnabled: enabled });
-  const {
-    multiTrackEnabled,
-    timeSignatureNumerator,
-    timeSignatureDenominator,
-    timeSignatureTrackOffsets,
-  } = useAppStore.getState();
-  if (!multiTrackEnabled) {
-    return;
-  }
-  context.engine?.updateConfig({
-    timeSignatureBranching: enabled,
-    timeSignatureNumerator,
-    timeSignatureDenominator,
-    timeSignatureTrackOffsets,
-  });
-  rebuildMixGraphAndSyncViz(context);
-}
-
-/**
- * Updates the time signature numerator for multi-track boundary branching and
- * rebuilds the jump graph live when time-signature branching is active.
- */
-export function setTimeSignatureNumerator(
-  context: AppContext,
-  numerator: number,
-): void {
-  const clamped = clampTimeSignatureNumerator(numerator);
-  useAppStore.setState({ timeSignatureNumerator: clamped });
-  const { multiTrackEnabled, timeSignatureBranchingEnabled } =
-    useAppStore.getState();
-  if (!multiTrackEnabled) {
-    return;
-  }
-  context.engine?.updateConfig({ timeSignatureNumerator: clamped });
-  if (timeSignatureBranchingEnabled) {
-    rebuildMixGraphAndSyncViz(context);
-  }
-}
-
-/**
- * Updates the time signature denominator for multi-track boundary branching and
- * rebuilds the jump graph live when time-signature branching is active.
- */
-export function setTimeSignatureDenominator(
-  context: AppContext,
-  denominator: number,
-): void {
-  const clamped = clampTimeSignatureDenominator(denominator);
-  useAppStore.setState({ timeSignatureDenominator: clamped });
-  const { multiTrackEnabled, timeSignatureBranchingEnabled } =
-    useAppStore.getState();
-  if (!multiTrackEnabled) {
-    return;
-  }
-  context.engine?.updateConfig({ timeSignatureDenominator: clamped });
-  if (timeSignatureBranchingEnabled) {
-    rebuildMixGraphAndSyncViz(context);
-  }
-}
-
-/**
- * Updates a single track's integer beat offset for multi-track time-signature
- * branching and rebuilds the jump graph live when active.
- */
-export function setTimeSignatureTrackOffset(
-  context: AppContext,
-  trackIndex: number,
-  offset: number,
-): void {
-  if (!Number.isInteger(trackIndex) || trackIndex < 0) {
-    return;
-  }
-  const clamped = clampTimeSignatureTrackOffset(offset);
-  const state = useAppStore.getState();
-  const current = state.timeSignatureTrackOffsets;
-  const targetLength = Math.max(
-    trackIndex + 1,
-    current.length,
-    state.vizData?.tracks?.length ?? 0,
-  );
-  const next = current.slice();
-  while (next.length < targetLength) {
-    next.push(0);
-  }
-  next[trackIndex] = clamped;
-  useAppStore.setState({ timeSignatureTrackOffsets: next });
-  if (!state.multiTrackEnabled) {
-    return;
-  }
-  context.engine?.updateConfig({ timeSignatureTrackOffsets: next });
-  if (state.timeSignatureBranchingEnabled) {
-    rebuildMixGraphAndSyncViz(context);
-  }
-}
-
-function reapplyMixFromCacheOrReload(context: AppContext): void {
-  if (!useAppStore.getState().multiTrackEnabled) {
-    return;
-  }
-  if (cachedMixSources && cachedMixSources.length >= 2) {
-    stopPlayback(context);
-    applyLoadedMixSources(context, cachedMixSources);
-    return;
-  }
-  void loadMultiTrackMix(context);
-}
-
-/**
- * Updates whether secondary songs in a multi-track mix are time-scaled to the
- * master song's BPM, re-applying the mix immediately when cached sources exist.
- */
-export function setTempoSyncEnabled(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ tempoSyncEnabled: enabled });
-  reapplyMixFromCacheOrReload(context);
-}
-
-/**
- * Toggles automatic RMS audio normalization and analysis loudness alignment for
- * multi-track mixes, re-rendering immediately when a mix is active.
- */
-export function setNormalizeVolumeEnabled(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ normalizeVolumeEnabled: enabled });
-  reapplyMixFromCacheOrReload(context);
-}
-
-/**
- * Toggles live post-mix output leveling on the audio player without stopping
- * playback, reloading buffers, or modifying branch analysis.
- */
-export function setPostMixNormalizeVolumeEnabled(
-  context: AppContext,
-  enabled: boolean,
-): void {
-  useAppStore.setState({ postMixNormalizeVolumeEnabled: enabled });
-  if (!useAppStore.getState().multiTrackEnabled) {
-    return;
-  }
-  context.player.setPostMixNormalization?.(enabled);
-}
-
-/**
- * Sets an individual track's live post-mix volume trim percentage (0–200%)
- * without stopping playback, re-rendering audio buffers, or recomputing branches.
- */
-export function setMixTrackGainPct(
-  context: AppContext,
-  trackIndex: number,
-  gainPct: number,
-): void {
-  if (!Number.isInteger(trackIndex) || trackIndex < 0) {
-    return;
-  }
-  const clamped = clampMixTrackGainPct(gainPct);
-  const state = useAppStore.getState();
-  const current = state.mixTrackGainsPct;
-  const targetLength = Math.max(
-    trackIndex + 1,
-    current.length,
-    state.vizData?.tracks?.length ?? 0,
-  );
-  const next = current.slice();
-  while (next.length < targetLength) {
-    next.push(DEFAULT_MIX_TRACK_GAIN_PCT);
-  }
-  next[trackIndex] = clamped;
-  useAppStore.setState({ mixTrackGainsPct: next });
-  if (!state.multiTrackEnabled) {
-    return;
-  }
-  context.player?.setPostMixTrackGains?.(next.map((pct) => pct / 100));
+  return true;
 }

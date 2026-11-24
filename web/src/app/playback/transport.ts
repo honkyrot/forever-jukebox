@@ -10,6 +10,7 @@ import {
 } from "./status-ui";
 import { requestWakeLock } from "./wake-lock";
 import { maybePrepareWubMachine } from "./wubmachine";
+import { syncPredictedJumps } from "./branch-lookahead";
 import i18n from "../i18n";
 
 let listenTimerId: number | null = null;
@@ -98,6 +99,7 @@ export function stopPlayback(context: AppContext) {
     useAppStore.setState({ bringItHomeMode: false });
     engine.setBringItHomeMode(false);
   }
+  syncPredictedJumps(context);
   stopListenTimer();
   updateListenTimeDisplay();
   updatePlayButton();
@@ -179,6 +181,7 @@ export function startJukeboxPlayback(context: AppContext, resetSession: boolean)
   }
   engine.play();
   engine.startJukebox(resetSession);
+  syncPredictedJumps(context);
   trackPlay("jukebox", getCurrentTrackId(), useAppStore.getState().trackTitle);
   useAppStore.setState({ lastPlayStamp: performance.now() });
   useAppStore.setState({ isRunning: true });
@@ -245,6 +248,7 @@ export function startJukeboxFromBeat(context: AppContext, index: number) {
   if (!useAppStore.getState().isRunning) {
     engine.play();
     engine.startJukebox(false);
+    syncPredictedJumps(context);
     useAppStore.setState({ lastPlayStamp: performance.now() });
     useAppStore.setState({ isRunning: true });
     useAppStore.setState({ isPaused: false });
@@ -258,6 +262,7 @@ export function startJukeboxFromBeat(context: AppContext, index: number) {
   if (!player.isPlaying()) {
     engine.play();
   }
+  syncPredictedJumps(context);
 }
 
 export function startAutocanonizerPlayback(

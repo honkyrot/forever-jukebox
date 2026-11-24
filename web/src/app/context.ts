@@ -7,7 +7,10 @@ import type { Edge } from "@forever-jukebox/shared/types";
 import type { FavoriteTrack } from "./favorites";
 import type { PlaylistState } from "./playlist";
 import type { AppConfig } from "./api";
-import type { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import type {
+  AutocanonizerController,
+  AutocanonizerMixAlignmentMode,
+} from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import type { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
 import type { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
@@ -39,6 +42,12 @@ export type AppState = {
   autocanonizerOtherSeconds: number;
   autocanonizerMainPan: number;
   autocanonizerOtherPan: number;
+  autocanonizerMainGainPct: number;
+  autocanonizerOtherGainPct: number;
+  autocanonizerMixEnabled: boolean;
+  autocanonizerMixAlignment: AutocanonizerMixAlignmentMode;
+  autocanonizerMixTrackTitles: [string, string] | null;
+  autocanonizerOtherDurationSec: number | null;
   wubMachineSeconds: number;
   wubMachineDurationSec: number;
   vizData: ReturnType<JukeboxEngine["getVisualizationData"]>;

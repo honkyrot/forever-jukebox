@@ -6,6 +6,7 @@ import { VizBottomRight } from "./VizBottomRight";
 
 const h = vi.hoisted(() => ({
   setAutocanonizerStreamPans: vi.fn(),
+  setAutocanonizerSongGainPct: vi.fn(),
   setMasterVolume: vi.fn(),
   toggleFullscreen: vi.fn(),
 }));
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock("../../playback", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../playback")>()),
   setAutocanonizerStreamPans: h.setAutocanonizerStreamPans,
+  setAutocanonizerSongGainPct: h.setAutocanonizerSongGainPct,
   setMasterVolume: h.setMasterVolume,
 }));
 vi.mock("../../fullscreen", async (importOriginal) => ({
@@ -32,6 +34,10 @@ describe("VizBottomRight", () => {
         playMode: "jukebox",
         autocanonizerMainPan: 0,
         autocanonizerOtherPan: 0,
+        autocanonizerMainGainPct: 100,
+        autocanonizerOtherGainPct: 100,
+        autocanonizerMixEnabled: false,
+        autocanonizerMixTrackTitles: null,
         isFullscreen: false,
         playlistModalOpen: false,
       });
@@ -204,5 +210,59 @@ describe("VizBottomRight", () => {
     expect(button.getAttribute("title")).toBe("Playlist (1/2)");
     await userEvent.click(button);
     expect(useAppStore.getState().playlistModalOpen).toBe(true);
+  });
+
+  it("shows per-song titles, gain sliders, and reset in dual autocanonizer mix mode", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: true,
+        autocanonizerMixTrackTitles: ["Cover A", "Cover B"],
+        autocanonizerMainPan: -25,
+        autocanonizerOtherPan: 25,
+        autocanonizerMainGainPct: 120,
+        autocanonizerOtherGainPct: 80,
+      });
+    });
+    render(<VizBottomRight />);
+    await userEvent.click(document.getElementById("autocanonizer-pan-button")!);
+
+    const panel = document.getElementById("autocanonizer-pan-control-panel")!;
+    expect(panel.classList.contains("is-dual")).toBe(true);
+    expect(panel.textContent).toContain("Cover A");
+    expect(panel.textContent).toContain("Cover B");
+
+    const mainGain = document.getElementById("autocanonizer-main-gain") as HTMLInputElement;
+    const otherGain = document.getElementById("autocanonizer-other-gain") as HTMLInputElement;
+    expect(mainGain.value).toBe("120");
+    expect(otherGain.value).toBe("80");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(otherGain, "150");
+      otherGain.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(h.setAutocanonizerSongGainPct).toHaveBeenCalledWith(
+      expect.anything(),
+      "other",
+      150,
+    );
+
+    const resetBtn = document.getElementById("autocanonizer-balance-reset")!;
+    await userEvent.click(resetBtn);
+    expect(h.setAutocanonizerStreamPans).toHaveBeenCalledWith(expect.anything(), 0, 0);
+    expect(h.setAutocanonizerSongGainPct).toHaveBeenCalledWith(
+      expect.anything(),
+      "main",
+      100,
+    );
+    expect(h.setAutocanonizerSongGainPct).toHaveBeenCalledWith(
+      expect.anything(),
+      "other",
+      100,
+    );
   });
 });

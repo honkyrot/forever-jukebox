@@ -7,8 +7,12 @@ import {
 import { trackEvent } from "../../analytics";
 import { getAppContext } from "../../runtime";
 import {
+  disableAutocanonizerMix,
   disableMultiTrackMix,
+  loadAutocanonizerMix,
   loadMultiTrackMix,
+  setAutocanonizerMixAlignment,
+  swapAutocanonizerMixSongs,
 } from "../../playback";
 import { showToast } from "../../ui";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
@@ -50,6 +54,16 @@ export function VizTop() {
   const anchorEditing = useAppStore((s) => s.customAnchorEdit !== null);
   const playlistCount = useAppStore((s) => s.playlist.tracks.length);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const autocanonizerMixEnabled = useAppStore(
+    (s) => s.autocanonizerMixEnabled,
+  );
+  const autocanonizerMixAlignment = useAppStore(
+    (s) => s.autocanonizerMixAlignment,
+  );
+  const isCanonizer = playMode === "autocanonizer";
+  const activeMixEnabled = isCanonizer
+    ? autocanonizerMixEnabled
+    : multiTrackEnabled;
   const [finishOutSong, setFinishOutSong] = useState(
     () => localStorage.getItem(CANONIZER_FINISH_KEY) === "true",
   );
@@ -97,34 +111,108 @@ export function VizTop() {
           </span>
         </label>
         <CustomAnchorButton />
-        {playMode === "jukebox" &&
-        ((audioLoaded && analysisLoaded) || multiTrackEnabled) ? (
+        {(playMode === "jukebox" || isCanonizer) &&
+        ((audioLoaded && analysisLoaded) ||
+          multiTrackEnabled ||
+          autocanonizerMixEnabled) ? (
           <button
             type="button"
             id="multi-track-mix-toggle"
             className={
-              multiTrackEnabled
+              activeMixEnabled
                 ? "custom-anchor-button is-active"
                 : "custom-anchor-button"
             }
+            title={
+              isCanonizer
+                ? autocanonizerMixEnabled
+                  ? "Exit 2-song mix and return to single-song Autocanonizer"
+                  : "Layer two covers together as a 2-song canon"
+                : undefined
+            }
             onClick={() => {
               const ctx = getAppContext();
-              if (multiTrackEnabled) {
-                void disableMultiTrackMix(ctx);
+              if (activeMixEnabled) {
+                void (isCanonizer
+                  ? disableAutocanonizerMix(ctx)
+                  : disableMultiTrackMix(ctx));
                 return;
               }
               if (playlistCount >= 2) {
                 useAppStore.setState({ playlistAddSticky: false });
-                void loadMultiTrackMix(ctx);
+                void (isCanonizer
+                  ? loadAutocanonizerMix(ctx)
+                  : loadMultiTrackMix(ctx));
                 return;
               }
               useAppStore.setState({ playlistAddSticky: true });
               useAppStore.getState().selectTab("top");
-              showToast("Click + on a song to add it to your mix");
+              showToast(
+                isCanonizer
+                  ? "Click + on a song to add it to your 2-song mix"
+                  : "Click + on a song to add it to your mix",
+              );
             }}
           >
-            {multiTrackEnabled ? "Unmix Songs" : "Mix Songs"}
+            {activeMixEnabled
+              ? "Unmix Songs"
+              : isCanonizer
+                ? "Mix 2 Songs"
+                : "Mix Songs"}
           </button>
+        ) : null}
+        {isCanonizer && autocanonizerMixEnabled ? (
+          <>
+            <button
+              type="button"
+              id="canonizer-mix-swap"
+              className="custom-anchor-button"
+              title="Swap Blue (top, straight) and Green (bottom, jumping) so the other song branches instead"
+              onClick={() => swapAutocanonizerMixSongs(getAppContext())}
+            >
+              Flip Songs
+            </button>
+            <span className="viz-actions-divider" aria-hidden="true" />
+            <div
+              id="canonizer-mix-alignment-group"
+              className="canonizer-alignment-toggle"
+              role="group"
+              aria-label="Mix alignment mode"
+            >
+              <button
+                type="button"
+                id="canonizer-alignment-cover-sync"
+                className={
+                  autocanonizerMixAlignment === "cover-sync"
+                    ? "custom-anchor-button is-active"
+                    : "custom-anchor-button"
+                }
+                aria-pressed={autocanonizerMixAlignment === "cover-sync"}
+                title="Maps Song 1's canon jumps onto the matching sections of Song 2 using cover-sync alignment (best for covers with different vocals or mixes)"
+                onClick={() =>
+                  setAutocanonizerMixAlignment(getAppContext(), "cover-sync")
+                }
+              >
+                Cover Sync
+              </button>
+              <button
+                type="button"
+                id="canonizer-alignment-section-fold"
+                className={
+                  autocanonizerMixAlignment === "section-fold"
+                    ? "custom-anchor-button is-active"
+                    : "custom-anchor-button"
+                }
+                aria-pressed={autocanonizerMixAlignment === "section-fold"}
+                title="Matches each section of Song 1 directly to the closest non-unison section of Song 2 by audio similarity"
+                onClick={() =>
+                  setAutocanonizerMixAlignment(getAppContext(), "section-fold")
+                }
+              >
+                Section Fold
+              </button>
+            </div>
+          </>
         ) : null}
       </div>
       <div className="viz-controls">

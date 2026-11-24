@@ -7,6 +7,7 @@ import type { AnchorEditState } from "@forever-jukebox/shared/viz/JukeboxViz";
 import type { AppContext } from "../context";
 import { useAppStore } from "../store";
 import { syncTuningParamsState, writeTuningParamsToUrl } from "../tuning";
+import { syncPredictedJumps } from "./branch-lookahead";
 import { updateTrackInfo } from "./status-ui";
 
 const editing = new CustomAnchorEditing();
@@ -30,6 +31,7 @@ function hostFor(context: AppContext): CustomAnchorEditHost {
       updateTrackInfo(context);
       syncTuningParamsState(context);
       writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
+      syncPredictedJumps(context);
     },
   };
 }

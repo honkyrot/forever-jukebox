@@ -627,6 +627,67 @@ describe("TuningModal", () => {
     });
     expect(rebuildGraph).toHaveBeenCalledTimes(3);
   });
+
+  it("toggles upcoming branch lookahead, persists count without seed UI or tuning reset", async () => {
+    localStorage.clear();
+    const predicted = [
+      { fromIndex: 1, toIndex: 5, edgeId: 10 },
+      { fromIndex: 6, toIndex: 2, edgeId: 11 },
+      { fromIndex: 3, toIndex: 8, edgeId: 12 },
+      { fromIndex: 9, toIndex: 4, edgeId: 13 },
+    ];
+    const getPredictedJumps = vi.fn((count: number) =>
+      predicted.slice(0, count),
+    );
+    const setPredictedJumps = vi.fn();
+    vi.mocked(getAppContext).mockReturnValue({
+      engine: { getPredictedJumps },
+      jukebox: { setPredictedJumps },
+    } as unknown as ReturnType<typeof getAppContext>);
+
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        branchLookaheadEnabled: false,
+        branchLookaheadCount: 3,
+      });
+    });
+    render(<TuningModal />);
+
+    const toggle = document.getElementById(
+      "branch-lookahead-toggle",
+    ) as HTMLInputElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.checked).toBe(false);
+    expect(document.getElementById("branch-lookahead-count")).toBeNull();
+    expect(screen.queryByLabelText(/seed/i)).toBeNull();
+
+    await userEvent.click(toggle);
+    expect(useAppStore.getState().branchLookaheadEnabled).toBe(true);
+    expect(localStorage.getItem("fj-branch-lookahead-enabled")).toBe("1");
+    expect(getPredictedJumps).toHaveBeenCalledWith(3);
+    expect(setPredictedJumps).toHaveBeenLastCalledWith(predicted.slice(0, 3));
+    expect(document.getElementById("tuning-reset")).toBeNull();
+
+    const countSlider = document.getElementById(
+      "branch-lookahead-count",
+    ) as HTMLInputElement;
+    expect(countSlider).not.toBeNull();
+    expect(countSlider.min).toBe("1");
+    expect(countSlider.max).toBe("8");
+    fireEvent.change(countSlider, { target: { value: "4" } });
+    expect(useAppStore.getState().branchLookaheadCount).toBe(4);
+    expect(localStorage.getItem("fj-branch-lookahead-count")).toBe("4");
+    expect(document.getElementById("branch-lookahead-count-val")?.textContent).toBe("4");
+    expect(getPredictedJumps).toHaveBeenLastCalledWith(4);
+    expect(setPredictedJumps).toHaveBeenLastCalledWith(predicted.slice(0, 4));
+    expect(document.getElementById("tuning-reset")).toBeNull();
+
+    await userEvent.click(toggle);
+    expect(useAppStore.getState().branchLookaheadEnabled).toBe(false);
+    expect(setPredictedJumps).toHaveBeenLastCalledWith([]);
+    expect(document.getElementById("branch-lookahead-count")).toBeNull();
+  });
 });
 
 describe("InfoModal", () => {

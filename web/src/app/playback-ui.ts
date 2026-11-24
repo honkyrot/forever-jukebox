@@ -18,6 +18,8 @@ import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import {
   applyExtrasChanges,
   cancelWubMachineRender,
+  disableAutocanonizerMix,
+  disableMultiTrackMix,
   maybePrepareWubMachine,
   openExtras,
   startAutocanonizerPlayback,
@@ -25,6 +27,7 @@ import {
   startWubMachinePlayback,
   stopPlayback,
   syncDeletedEdgeState,
+  syncPredictedJumps,
   togglePlayback,
   updateTrackInfo,
   updateVizVisibility,
@@ -216,6 +219,7 @@ export function deleteSelectedBranch(): void {
     updateTrackInfo(context);
     writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
     clearSelectedEdge(jukebox);
+    syncPredictedJumps(context);
     showToast(
       resetsAnchor ? i18n.t("playback.anchorReset") : i18n.t("playback.branchDeleted"),
     );
@@ -269,6 +273,10 @@ export function initializePlayback(): void {
     // A track that plays to its end hands over to the next playlist track.
     const handleLinearTrackEnded = () => {
       if (!useAppStore.getState().isRunning) {
+        return;
+      }
+      if (useAppStore.getState().autocanonizerMixEnabled) {
+        stopPlayback(context);
         return;
       }
       advancePlaylistOnAutocanonizerEnded()
@@ -369,6 +377,7 @@ export function initializePlayback(): void {
           useAppStore.setState({ lastBeatIndex: engineState.currentBeatIndex });
         }
       }
+      syncPredictedJumps(context);
     });
   }
 
@@ -384,6 +393,7 @@ export function initializePlayback(): void {
       useAppStore.setState({ shiftBranching: false });
       engine.setForceBranch(false);
     }
+    syncPredictedJumps(context);
   }
 
 export function setCanonizerFinish(checked: boolean): void {
@@ -476,6 +486,7 @@ export function setWubMachineLoop(checked: boolean): void {
     const result = serializeParams(tuningParams);
     useAppStore.setState({ tuningParams: result.length > 0 ? result : null });
     writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
+    syncPredictedJumps(context);
     showToast(
       nextAnchor ? i18n.t("playback.anchorSet") : i18n.t("playback.anchorReset"),
     );
@@ -571,6 +582,7 @@ export function handleKeydown(event: KeyboardEvent): void {
       const direction = bracketDirection;
       const velocity = engine.getPlayVelocity() + direction;
       engine.setPlayVelocity(velocity);
+      syncPredictedJumps(context);
       showToast(
         i18n.t("playback.playVelocity", {
           value: formatPlayVelocity(engine.getPlayVelocity()),
@@ -582,6 +594,7 @@ export function handleKeydown(event: KeyboardEvent): void {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       engine.setPlayVelocity(0);
+      syncPredictedJumps(context);
       showToast(i18n.t("playback.playVelocity", { value: "0" }), {
         key: "play-velocity",
       });
@@ -590,6 +603,7 @@ export function handleKeydown(event: KeyboardEvent): void {
     if (event.key === "ArrowUp") {
       event.preventDefault();
       engine.setPlayVelocity(1);
+      syncPredictedJumps(context);
       showToast(i18n.t("playback.playVelocity", { value: "+1" }), {
         key: "play-velocity",
       });
@@ -599,6 +613,7 @@ export function handleKeydown(event: KeyboardEvent): void {
       event.preventDefault();
       engine.setFreezeCurrentBeat(true);
       useAppStore.setState({ freezeBeat: true });
+      syncPredictedJumps(context);
       return;
     }
     if (
@@ -627,6 +642,7 @@ export function handleKeydown(event: KeyboardEvent): void {
     ) {
       useAppStore.setState({ shiftBranching: true });
       engine.setForceBranch(true);
+      syncPredictedJumps(context);
     }
   }
 
@@ -639,6 +655,7 @@ export function handleKeyup(event: KeyboardEvent): void {
     if (event.key === "Control") {
       engine.setFreezeCurrentBeat(false);
       useAppStore.setState({ freezeBeat: false });
+      syncPredictedJumps(context);
     }
     if (useAppStore.getState().playMode !== "jukebox") {
       return;
@@ -646,6 +663,7 @@ export function handleKeyup(event: KeyboardEvent): void {
     if (event.key === "Shift" && useAppStore.getState().shiftBranching) {
       useAppStore.setState({ shiftBranching: false });
       engine.setForceBranch(false);
+      syncPredictedJumps(context);
     }
   }
 
@@ -660,6 +678,7 @@ export function handleWindowBlur(): void {
       useAppStore.setState({ shiftBranching: false });
       context.engine.setForceBranch(false);
     }
+    syncPredictedJumps(context);
   }
 
 export function handleBeatSelect(index: number): void {
@@ -779,7 +798,8 @@ export function setPlayMode(mode: PlayMode): void {
       return;
     }
     const { autocanonizer, jukebox, wubmachine } = context;
-    if (useAppStore.getState().playMode === mode) {
+    const prevMode = useAppStore.getState().playMode;
+    if (prevMode === mode) {
       return;
     }
     if (useAppStore.getState().isRunning || useAppStore.getState().isPaused) {
@@ -793,6 +813,11 @@ export function setPlayMode(mode: PlayMode): void {
       autocanonizerMainSeconds: 0,
       autocanonizerOtherSeconds: 0,
     });
+    if (prevMode === "autocanonizer" && useAppStore.getState().autocanonizerMixEnabled) {
+      void disableAutocanonizerMix(context);
+    } else if (prevMode === "jukebox" && useAppStore.getState().multiTrackEnabled) {
+      void disableMultiTrackMix(context);
+    }
     if (mode !== "jukebox") {
       // The extras tab disappears outside jukebox mode, so force the stored
       // tab back to "tuning".
@@ -802,6 +827,7 @@ export function setPlayMode(mode: PlayMode): void {
     autocanonizer.setVisible(mode === "autocanonizer");
     wubmachine.setVisible(mode === "wubmachine");
     jukebox.setVisible(mode === "jukebox");
+    syncPredictedJumps(context);
     maybePrepareWubMachine(context);
     syncExtrasPopup(useAppStore.getState().selectedEdge);
     if (useAppStore.getState().activeTabId === "play") {

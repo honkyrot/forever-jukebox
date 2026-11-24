@@ -8,6 +8,10 @@ import { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController
 import { applyThemeVariables, resolveStoredTheme } from "./theme";
 import { resolveStoredAnchorHighlight } from "./anchorHighlight";
 import {
+  resolveStoredBranchLookaheadCount,
+  resolveStoredBranchLookaheadEnabled,
+} from "./branchLookahead";
+import {
   resolveStoredBranchStatsEnabled,
   resolveStoredCustomAnchorEnabled,
 } from "./extrasMode";
@@ -92,6 +96,8 @@ export function initRuntime(): void {
   metronomeOverlay.setVolume(player.getVolume());
   const engine = new JukeboxEngine(player, { randomMode: "random" });
   const highlightAnchorBranch = resolveStoredAnchorHighlight();
+  const branchLookaheadEnabled = resolveStoredBranchLookaheadEnabled();
+  const branchLookaheadCount = resolveStoredBranchLookaheadCount();
   const branchStatsEnabled = resolveStoredBranchStatsEnabled();
   const { mainPan: autocanonizerMainPan, otherPan: autocanonizerOtherPan } =
     resolveStoredAudioBalance();
@@ -105,6 +111,8 @@ export function initRuntime(): void {
     favoritesSyncCode: loadFavoritesSyncCode(),
     branchStatsEnabled,
     highlightAnchorBranch,
+    branchLookaheadEnabled,
+    branchLookaheadCount,
     customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
     volumePct,
     autocanonizerMainPan,

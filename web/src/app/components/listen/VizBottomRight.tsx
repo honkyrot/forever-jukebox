@@ -4,6 +4,10 @@ import {
   AUTOCANONIZER_OTHER_COLOR,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
 import {
+  DEFAULT_MIX_TRACK_GAIN_PCT,
+  MAX_MIX_TRACK_GAIN_PCT,
+  MIN_MIX_TRACK_GAIN_PCT,
+  setAutocanonizerSongGainPct,
   setAutocanonizerStreamPans,
   setMasterVolume,
 } from "../../playback";
@@ -28,6 +32,14 @@ export function VizBottomRight() {
   const playMode = useAppStore((s) => s.playMode);
   const mainPan = useAppStore((s) => s.autocanonizerMainPan);
   const otherPan = useAppStore((s) => s.autocanonizerOtherPan);
+  const mainGainPct = useAppStore((s) => s.autocanonizerMainGainPct);
+  const otherGainPct = useAppStore((s) => s.autocanonizerOtherGainPct);
+  const autocanonizerMixEnabled = useAppStore(
+    (s) => s.autocanonizerMixEnabled,
+  );
+  const autocanonizerMixTrackTitles = useAppStore(
+    (s) => s.autocanonizerMixTrackTitles,
+  );
   const isFullscreen = useAppStore((s) => s.isFullscreen);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [panOpen, setPanOpen] = useState(false);
@@ -91,6 +103,26 @@ export function VizBottomRight() {
     storeAudioBalance(nextMain, nextOther);
   };
 
+  const handleResetBalance = () => {
+    const ctx = getAppContext();
+    useAppStore.setState({
+      autocanonizerMainPan: 0,
+      autocanonizerOtherPan: 0,
+    });
+    setAutocanonizerStreamPans(ctx, 0, 0);
+    storeAudioBalance(0, 0);
+    setAutocanonizerSongGainPct(ctx, "main", DEFAULT_MIX_TRACK_GAIN_PCT);
+    setAutocanonizerSongGainPct(ctx, "other", DEFAULT_MIX_TRACK_GAIN_PCT);
+  };
+
+  const hasNonDefaultDualBalance =
+    mainPan !== 0 ||
+    otherPan !== 0 ||
+    mainGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT ||
+    otherGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT;
+  const mainSongLabel = autocanonizerMixTrackTitles?.[0] ?? "Song 1";
+  const otherSongLabel = autocanonizerMixTrackTitles?.[1] ?? "Song 2";
+
   return (
     <>
       <button
@@ -116,62 +148,152 @@ export function VizBottomRight() {
         <div className="pan-control-wrap" ref={panWrapRef}>
           <div
             className={
-              panOpen ? "pan-control-panel" : "pan-control-panel is-hidden"
+              panOpen
+                ? `pan-control-panel${autocanonizerMixEnabled ? " is-dual" : ""}`
+                : `pan-control-panel is-hidden${autocanonizerMixEnabled ? " is-dual" : ""}`
             }
             id="autocanonizer-pan-control-panel"
           >
-            <label className="stream-pan-control">
-              <div className="label-line">
-                <span className="pan-end-label">{t("playback.balanceLeft")}</span>
-                <span style={{ color: AUTOCANONIZER_MAIN_COLOR }}>
-                  {t("playback.blueBalance")}
-                </span>
-                <span className="pan-end-label">
-                  {t("playback.balanceRight")}
-                </span>
-              </div>
-              <input
-                className="pan-slider stream-pan-slider"
-                id="autocanonizer-main-pan"
-                type="range"
-                aria-label={t("playback.blueBalance")}
-                min={-100}
-                max={100}
-                step={1}
-                list="autocanonizer-pan-ticks"
-                value={mainPan}
-                style={{ accentColor: AUTOCANONIZER_MAIN_COLOR }}
-                onChange={(event) =>
-                  handleStreamPanChange("main", Number(event.target.value))
-                }
-              />
-            </label>
-            <label className="stream-pan-control">
-              <div className="label-line">
-                <span className="pan-end-label">{t("playback.balanceLeft")}</span>
-                <span style={{ color: AUTOCANONIZER_OTHER_COLOR }}>
-                  {t("playback.greenBalance")}
-                </span>
-                <span className="pan-end-label">
-                  {t("playback.balanceRight")}
-                </span>
-              </div>
-              <input
-                className="pan-slider stream-pan-slider"
-                id="autocanonizer-other-pan"
-                type="range"
-                aria-label={t("playback.greenBalance")}
-                min={-100}
-                max={100}
-                step={1}
-                list="autocanonizer-pan-ticks"
-                value={otherPan}
-                style={{ accentColor: AUTOCANONIZER_OTHER_COLOR }}
-                onChange={(event) =>
-                  handleStreamPanChange("other", Number(event.target.value))
-                }
-              />
-            </label>
+            <div className={autocanonizerMixEnabled ? "stream-balance-group" : undefined}>
+              {autocanonizerMixEnabled ? (
+                <div
+                  className="stream-balance-song-title"
+                  style={{ color: AUTOCANONIZER_MAIN_COLOR }}
+                  title={mainSongLabel}
+                >
+                  {mainSongLabel}
+                </div>
+              ) : null}
+              <label className="stream-pan-control">
+                <div className="label-line">
+                  <span className="pan-end-label">{t("playback.balanceLeft")}</span>
+                  <span style={{ color: AUTOCANONIZER_MAIN_COLOR }}>
+                    {t("playback.blueBalance")}
+                  </span>
+                  <span className="pan-end-label">
+                    {t("playback.balanceRight")}
+                  </span>
+                </div>
+                <input
+                  className="pan-slider stream-pan-slider"
+                  id="autocanonizer-main-pan"
+                  type="range"
+                  aria-label={t("playback.blueBalance")}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  list="autocanonizer-pan-ticks"
+                  value={mainPan}
+                  style={{ accentColor: AUTOCANONIZER_MAIN_COLOR }}
+                  onChange={(event) =>
+                    handleStreamPanChange("main", Number(event.target.value))
+                  }
+                />
+              </label>
+              {autocanonizerMixEnabled ? (
+                <label className="stream-pan-control">
+                  <div className="label-line stream-gain-line">
+                    <span style={{ color: AUTOCANONIZER_MAIN_COLOR }}>
+                      Volume
+                    </span>
+                    <span className="stream-gain-value">{mainGainPct}%</span>
+                  </div>
+                  <input
+                    className="pan-slider stream-pan-slider"
+                    id="autocanonizer-main-gain"
+                    type="range"
+                    aria-label={`${mainSongLabel} volume`}
+                    min={MIN_MIX_TRACK_GAIN_PCT}
+                    max={MAX_MIX_TRACK_GAIN_PCT}
+                    step={1}
+                    value={mainGainPct}
+                    style={{ accentColor: AUTOCANONIZER_MAIN_COLOR }}
+                    onChange={(event) =>
+                      setAutocanonizerSongGainPct(
+                        getAppContext(),
+                        "main",
+                        Number(event.target.value),
+                      )
+                    }
+                  />
+                </label>
+              ) : null}
+            </div>
+            <div className={autocanonizerMixEnabled ? "stream-balance-group" : undefined}>
+              {autocanonizerMixEnabled ? (
+                <div
+                  className="stream-balance-song-title"
+                  style={{ color: AUTOCANONIZER_OTHER_COLOR }}
+                  title={otherSongLabel}
+                >
+                  {otherSongLabel}
+                </div>
+              ) : null}
+              <label className="stream-pan-control">
+                <div className="label-line">
+                  <span className="pan-end-label">{t("playback.balanceLeft")}</span>
+                  <span style={{ color: AUTOCANONIZER_OTHER_COLOR }}>
+                    {t("playback.greenBalance")}
+                  </span>
+                  <span className="pan-end-label">
+                    {t("playback.balanceRight")}
+                  </span>
+                </div>
+                <input
+                  className="pan-slider stream-pan-slider"
+                  id="autocanonizer-other-pan"
+                  type="range"
+                  aria-label={t("playback.greenBalance")}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  list="autocanonizer-pan-ticks"
+                  value={otherPan}
+                  style={{ accentColor: AUTOCANONIZER_OTHER_COLOR }}
+                  onChange={(event) =>
+                    handleStreamPanChange("other", Number(event.target.value))
+                  }
+                />
+              </label>
+              {autocanonizerMixEnabled ? (
+                <label className="stream-pan-control">
+                  <div className="label-line stream-gain-line">
+                    <span style={{ color: AUTOCANONIZER_OTHER_COLOR }}>
+                      Volume
+                    </span>
+                    <span className="stream-gain-value">{otherGainPct}%</span>
+                  </div>
+                  <input
+                    className="pan-slider stream-pan-slider"
+                    id="autocanonizer-other-gain"
+                    type="range"
+                    aria-label={`${otherSongLabel} volume`}
+                    min={MIN_MIX_TRACK_GAIN_PCT}
+                    max={MAX_MIX_TRACK_GAIN_PCT}
+                    step={1}
+                    value={otherGainPct}
+                    style={{ accentColor: AUTOCANONIZER_OTHER_COLOR }}
+                    onChange={(event) =>
+                      setAutocanonizerSongGainPct(
+                        getAppContext(),
+                        "other",
+                        Number(event.target.value),
+                      )
+                    }
+                  />
+                </label>
+              ) : null}
+            </div>
+            {autocanonizerMixEnabled && hasNonDefaultDualBalance ? (
+              <button
+                type="button"
+                id="autocanonizer-balance-reset"
+                className="custom-anchor-button stream-balance-reset"
+                onClick={handleResetBalance}
+              >
+                {t("common.reset")}
+              </button>
+            ) : null}
             <datalist id="autocanonizer-pan-ticks">
               <option value={-100} />
               <option value={0} />

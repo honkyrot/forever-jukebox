@@ -1,4 +1,4 @@
-import type { QuantumBase, Segment } from "../engine/types";
+import type { QuantumBase, Segment, TrackAnalysis } from "../engine/types";
 import { normalizeAnalysis } from "../engine/analysis";
 import { AutocanonizerViz, type CanonizerBeat } from "./AutocanonizerViz";
 import {
@@ -12,11 +12,25 @@ import {
   type CanonizerRenderPlan,
 } from "./canonizerRenderPlan";
 import { computeBeatColors } from "../engine/beatColors";
+import {
+  alignTrackPairDtw,
+  computeCoverBeatDistance,
+  extractTrackBeatFeatures,
+} from "../engine/coverSync";
 import { clampVolume } from "../audio/volume";
 
 type BeatWithSim = CanonizerBeat & {
   sim?: CanonizerBeat;
   simDistance?: number;
+};
+
+export type AutocanonizerMixAlignmentMode = "cover-sync" | "section-fold";
+
+export type AutocanonizerDualAnalysisOptions = {
+  mainDuration?: number | null;
+  otherDuration?: number | null;
+  otherTempoRatio?: number;
+  alignmentMode?: AutocanonizerMixAlignmentMode;
 };
 
 const TIMBRE_WEIGHT = 1;
@@ -26,6 +40,9 @@ const LOUD_MAX_WEIGHT = 1;
 const DURATION_WEIGHT = 100;
 const CONFIDENCE_WEIGHT = 1;
 const VOLUME_WINDOW = 20;
+const MIN_STREAM_GAIN = 0;
+const MAX_STREAM_GAIN = 2;
+const SECTION_FOLD_BAR_MISMATCH_PENALTY = 15;
 
 export type AutocanonizerCursorTimes = {
   mainSeconds: number;
@@ -35,6 +52,7 @@ export type AutocanonizerCursorTimes = {
 class AutocanonizerPlayer {
   private readonly context: AudioContext;
   private buffer: AudioBuffer;
+  private otherBuffer: AudioBuffer | null = null;
   private readonly mainGain: GainNode;
   private readonly otherGain: GainNode;
   private readonly mainPanner: StereoPannerNode | null;
@@ -43,6 +61,8 @@ class AutocanonizerPlayer {
   private baseVolume = 1;
   private mainStreamPan = 0;
   private otherStreamPan = 0;
+  private mainStreamGain = 1;
+  private otherStreamGain = 1;
   private otherBeatGain = 1;
 
   private currentBeat: CanonizerBeat | null = null;
@@ -85,6 +105,15 @@ class AutocanonizerPlayer {
 
   setBuffer(buffer: AudioBuffer) {
     this.buffer = buffer;
+    this.otherBuffer = null;
+  }
+
+  /**
+   * Assigns distinct main and secondary AudioBuffers for dual-song mix playback.
+   */
+  setBuffers(mainBuffer: AudioBuffer, otherBuffer: AudioBuffer | null) {
+    this.buffer = mainBuffer;
+    this.otherBuffer = otherBuffer;
   }
 
   setVolume(volume: number) {
@@ -96,6 +125,16 @@ class AutocanonizerPlayer {
     this.mainStreamPan = clampPan(main);
     this.otherStreamPan = clampPan(other);
     this.applyPans();
+  }
+
+  /**
+   * Sets per-stream linear volume trim multipliers (0–2) for the main and
+   * secondary autocanonizer voices independently of master volume.
+   */
+  setStreamGains(main: number, other: number) {
+    this.mainStreamGain = clampStreamGain(main, this.mainStreamGain);
+    this.otherStreamGain = clampStreamGain(other, this.otherStreamGain);
+    this.applyGains();
   }
 
   reset() {
@@ -150,6 +189,7 @@ class AutocanonizerPlayer {
       }
       const duration = this.buffer.duration - beat.start;
       this.mainSource = this.playBuffer(
+        this.buffer,
         beat.start,
         duration,
         this.mainPanner ?? this.mainGain,
@@ -163,6 +203,7 @@ class AutocanonizerPlayer {
 
     this.otherBeatGain = clampedOtherGain;
     this.applyOtherGain();
+    const otherBuf = this.otherBuffer ?? this.buffer;
     if (
       this.currentBeat?.other.next !== beat.other ||
       Math.abs(this.skewDelta) > this.maxSkewDelta
@@ -171,8 +212,9 @@ class AutocanonizerPlayer {
       if (this.otherSource) {
         this.otherSource.stop();
       }
-      const duration = this.buffer.duration - beat.other.start;
+      const duration = otherBuf.duration - beat.other.start;
       this.otherSource = this.playBuffer(
+        otherBuf,
         beat.other.start,
         duration,
         this.otherPanner ?? this.otherGain,
@@ -191,12 +233,14 @@ class AutocanonizerPlayer {
     const clampedOtherGain = Math.max(0, Math.min(1, beat.otherGain));
     this.otherBeatGain = clampedOtherGain;
     this.applyOtherGain();
+    const otherBuf = this.otherBuffer ?? this.buffer;
     if (this.currentBeat?.other.next !== beat) {
       if (this.otherSource) {
         this.otherSource.stop();
       }
-      const duration = this.buffer.duration - beat.start;
+      const duration = otherBuf.duration - beat.start;
       this.otherSource = this.playBuffer(
+        otherBuf,
         beat.start,
         duration,
         this.otherPanner ?? this.otherGain,
@@ -209,22 +253,31 @@ class AutocanonizerPlayer {
     return beat.duration - delta;
   }
 
-  private playBuffer(start: number, duration: number, destination: AudioNode) {
+  private playBuffer(
+    buffer: AudioBuffer,
+    start: number,
+    duration: number,
+    destination: AudioNode,
+  ) {
     const source = this.context.createBufferSource();
-    source.buffer = this.buffer;
+    source.buffer = buffer;
     source.connect(destination);
     source.start(0, start, Math.max(0, duration));
     return source;
   }
 
   private applyGains() {
-    this.mainGain.gain.value = this.baseVolume * this.masterBlend;
+    this.mainGain.gain.value =
+      this.baseVolume * this.masterBlend * this.mainStreamGain;
     this.applyOtherGain();
   }
 
   private applyOtherGain() {
     this.otherGain.gain.value =
-      this.baseVolume * (1 - this.masterBlend) * this.otherBeatGain;
+      this.baseVolume *
+      (1 - this.masterBlend) *
+      this.otherStreamGain *
+      this.otherBeatGain;
   }
 
   private applyPans() {
@@ -240,6 +293,12 @@ class AutocanonizerPlayer {
 export class AutocanonizerController {
   private readonly viz: AutocanonizerViz;
   private beats: BeatWithSim[] = [];
+  private otherBeats: BeatWithSim[] = [];
+  private mainSections: Array<{ start: number; duration: number }> = [];
+  private otherSections: Array<{ start: number; duration: number }> = [];
+  private mainDuration = 0;
+  private otherDuration = 0;
+  private dualAlignmentMode: AutocanonizerMixAlignmentMode = "cover-sync";
   private player: AutocanonizerPlayer | null = null;
   private running = false;
   private timerId: number | null = null;
@@ -249,6 +308,8 @@ export class AutocanonizerController {
   private currentIndex = 0;
   private mainStreamPan = 0;
   private otherStreamPan = 0;
+  private mainStreamGain = 1;
+  private otherStreamGain = 1;
   private volume = 1;
   private onBeat:
     | ((
@@ -314,14 +375,49 @@ export class AutocanonizerController {
     this.player?.setStreamPans(this.mainStreamPan, this.otherStreamPan);
   }
 
+  /**
+   * Sets per-stream linear volume trim multipliers (0–2) for the main and
+   * secondary voices, persisting across subsequent audio attachments.
+   */
+  setStreamGains(main: number, other: number) {
+    this.mainStreamGain = clampStreamGain(main, this.mainStreamGain);
+    this.otherStreamGain = clampStreamGain(other, this.otherStreamGain);
+    this.player?.setStreamGains(this.mainStreamGain, this.otherStreamGain);
+  }
+
   setAudio(buffer: AudioBuffer | null, context: AudioContext | null) {
     if (buffer && context) {
       if (!this.player) {
         this.player = new AutocanonizerPlayer(context, buffer);
         this.player.setStreamPans(this.mainStreamPan, this.otherStreamPan);
+        this.player.setStreamGains(this.mainStreamGain, this.otherStreamGain);
         this.player.setVolume(this.volume);
       } else {
-        this.player.setBuffer(buffer);
+        this.player.setBuffers(buffer, null);
+      }
+    } else {
+      this.player = null;
+    }
+  }
+
+  /**
+   * Attaches two separate AudioBuffers (Song 1 main and Song 2 secondary) for
+   * dual-song Autocanonizer mix playback.
+   */
+  setDualAudio(
+    mainBuffer: AudioBuffer | null,
+    otherBuffer: AudioBuffer | null,
+    context: AudioContext | null,
+  ) {
+    if (mainBuffer && otherBuffer && context) {
+      if (!this.player) {
+        this.player = new AutocanonizerPlayer(context, mainBuffer);
+        this.player.setBuffers(mainBuffer, otherBuffer);
+        this.player.setStreamPans(this.mainStreamPan, this.otherStreamPan);
+        this.player.setStreamGains(this.mainStreamGain, this.otherStreamGain);
+        this.player.setVolume(this.volume);
+      } else {
+        this.player.setBuffers(mainBuffer, otherBuffer);
       }
     } else {
       this.player = null;
@@ -330,38 +426,143 @@ export class AutocanonizerController {
 
   setAnalysis(raw: unknown, durationOverride?: number | null) {
     const analysis = normalizeAnalysis(raw);
-    const beats = analysis.beats as BeatWithSim[];
+    const beats = prepareCanonizerBeats(analysis);
+    this.otherBeats = [];
+    this.otherSections = [];
+    this.otherDuration = 0;
     if (!beats.length) {
       this.beats = [];
+      this.mainSections = [];
+      this.mainDuration = 0;
       return;
     }
     const trackDuration =
       durationOverride ??
       analysis.track?.duration ??
       beats[beats.length - 1].start + beats[beats.length - 1].duration;
-    beats.forEach((beat) => {
-      beat.section = getSectionIndex(beat);
-    });
     calculateNearestNeighbors(beats);
     foldBySection(beats);
-    assignNormalizedVolumes(beats);
-    computeBeatColors(beats, analysis.segments).forEach((color, index) => {
-      beats[index].color = color;
-    });
     this.beats = beats;
-    this.viz.setData(
-      beats,
-      trackDuration,
-      analysis.sections.map((section) => ({
-        start: section.start,
-        duration: section.duration,
-      }))
+    this.mainDuration = trackDuration;
+    this.mainSections = analysis.sections.map((section) => ({
+      start: section.start,
+      duration: section.duration,
+    }));
+    this.viz.setData(beats, trackDuration, this.mainSections);
+  }
+
+  /**
+   * Configures a 2-song Autocanonizer mix using Song 1 as the main timeline
+   * and Song 2 (scaled by `otherTempoRatio`) as the secondary voice.
+   */
+  setDualAnalysis(
+    mainRaw: unknown,
+    otherRaw: unknown,
+    options?: AutocanonizerDualAnalysisOptions,
+  ) {
+    const mainAnalysis = normalizeAnalysis(mainRaw);
+    const otherAnalysis = normalizeAnalysis(otherRaw);
+    const tempoRatio =
+      options?.otherTempoRatio !== undefined &&
+      Number.isFinite(options.otherTempoRatio) &&
+      options.otherTempoRatio > 0
+        ? options.otherTempoRatio
+        : 1;
+    if (tempoRatio !== 1) {
+      scaleAnalysisTiming(otherAnalysis, 1 / tempoRatio);
+    }
+
+    const mainBeats = prepareCanonizerBeats(mainAnalysis);
+    const otherBeats = prepareCanonizerBeats(otherAnalysis);
+    if (!mainBeats.length || !otherBeats.length) {
+      this.beats = [];
+      this.otherBeats = [];
+      this.mainSections = [];
+      this.otherSections = [];
+      this.mainDuration = 0;
+      this.otherDuration = 0;
+      return;
+    }
+
+    const mainDuration =
+      options?.mainDuration ??
+      mainAnalysis.track?.duration ??
+      mainBeats[mainBeats.length - 1].start +
+        mainBeats[mainBeats.length - 1].duration;
+    const otherDuration =
+      options?.otherDuration ??
+      (otherAnalysis.track?.duration !== undefined
+        ? otherAnalysis.track.duration / tempoRatio
+        : otherBeats[otherBeats.length - 1].start +
+          otherBeats[otherBeats.length - 1].duration);
+
+    this.dualAlignmentMode = options?.alignmentMode ?? this.dualAlignmentMode;
+    applyDualAlignment(mainBeats, otherBeats, this.dualAlignmentMode);
+
+    this.beats = mainBeats;
+    this.otherBeats = otherBeats;
+    this.mainDuration = mainDuration;
+    this.otherDuration = otherDuration;
+    this.mainSections = mainAnalysis.sections.map((section) => ({
+      start: section.start,
+      duration: section.duration,
+    }));
+    this.otherSections = otherAnalysis.sections.map((section) => ({
+      start: section.start,
+      duration: section.duration,
+    }));
+
+    this.viz.setDualData(
+      this.beats,
+      this.mainDuration,
+      this.mainSections,
+      this.otherBeats,
+      this.otherDuration,
+      this.otherSections,
     );
+  }
+
+  /**
+   * Switches the 2-song cross-alignment strategy ("cover-sync" vs
+   * "section-fold") and updates the visualization and live playback in place.
+   */
+  setDualAlignmentMode(mode: AutocanonizerMixAlignmentMode) {
+    this.dualAlignmentMode = mode;
+    if (!this.beats.length || !this.otherBeats.length) {
+      return;
+    }
+    applyDualAlignment(this.beats, this.otherBeats, mode);
+    this.viz.setDualData(
+      this.beats,
+      this.mainDuration,
+      this.mainSections,
+      this.otherBeats,
+      this.otherDuration,
+      this.otherSections,
+    );
+    if (this.running && !this.secondaryOnly) {
+      if (this.timerId !== null) {
+        backgroundClearTimeout(this.timerId);
+        this.timerId = null;
+      }
+      this.player?.reset();
+      this.tick();
+    } else if (
+      this.currentIndex >= 0 &&
+      this.currentIndex < this.beats.length
+    ) {
+      this.viz.update(this.currentIndex);
+    }
   }
 
   reset() {
     this.stop();
     this.beats = [];
+    this.otherBeats = [];
+    this.mainSections = [];
+    this.otherSections = [];
+    this.mainDuration = 0;
+    this.otherDuration = 0;
     this.viz.reset();
   }
 
@@ -372,6 +573,11 @@ export class AutocanonizerController {
   destroy() {
     this.stop();
     this.beats = [];
+    this.otherBeats = [];
+    this.mainSections = [];
+    this.otherSections = [];
+    this.mainDuration = 0;
+    this.otherDuration = 0;
     this.viz.destroy();
     this.player = null;
   }
@@ -487,17 +693,18 @@ export class AutocanonizerController {
     if (!this.running || !this.secondaryOnly) {
       return;
     }
-    if (!this.player || !this.beats.length) {
+    const secondaryBeats = this.otherBeats.length ? this.otherBeats : this.beats;
+    if (!this.player || !secondaryBeats.length) {
       this.stop();
       this.onEnded?.();
       return;
     }
-    if (this.secondaryIndex >= this.beats.length) {
+    if (this.secondaryIndex >= secondaryBeats.length) {
       this.stop();
       this.onEnded?.();
       return;
     }
-    const beat = this.beats[this.secondaryIndex];
+    const beat = secondaryBeats[this.secondaryIndex];
     const delay = this.player.playOtherOnly(beat);
     this.viz.setOtherIndex(this.secondaryIndex);
     this.onBeat?.(this.secondaryIndex, beat, {
@@ -515,6 +722,313 @@ function clampPan(pan: number) {
     return 0;
   }
   return Math.max(-1, Math.min(1, pan));
+}
+
+function clampStreamGain(gain: number, fallback: number) {
+  if (!Number.isFinite(gain)) {
+    return fallback;
+  }
+  return Math.max(MIN_STREAM_GAIN, Math.min(MAX_STREAM_GAIN, gain));
+}
+
+/**
+ * Prepares normalized canonizer beats with section indices, normalized volumes,
+ * and segment-based beat colors.
+ */
+function prepareCanonizerBeats(analysis: TrackAnalysis): BeatWithSim[] {
+  const beats = analysis.beats as BeatWithSim[];
+  if (!beats.length) {
+    return [];
+  }
+  beats.forEach((beat) => {
+    beat.section = getSectionIndex(beat);
+  });
+  assignNormalizedVolumes(beats);
+  computeBeatColors(beats, analysis.segments).forEach((color, index) => {
+    beats[index].color = color;
+  });
+  return beats;
+}
+
+/**
+ * Scales all timestamps and durations in a normalized TrackAnalysis in place so
+ * a tempo-synced secondary cover aligns with the primary song's timeline.
+ */
+function scaleAnalysisTiming(analysis: TrackAnalysis, timeScale: number) {
+  if (timeScale === 1) {
+    return;
+  }
+  const scaleList = (items: QuantumBase[]) => {
+    for (const item of items) {
+      item.start *= timeScale;
+      item.duration *= timeScale;
+    }
+  };
+  scaleList(analysis.sections);
+  scaleList(analysis.bars);
+  scaleList(analysis.beats);
+  scaleList(analysis.tatums);
+  for (const seg of analysis.segments) {
+    seg.start *= timeScale;
+    seg.duration *= timeScale;
+    seg.loudness_max_time *= timeScale;
+  }
+}
+
+/**
+ * Builds a beat-index lookup mapping each beat of Song 1 to the structurally
+ * aligned beat index in Song 2 via Semi-Global DTW, linearly extrapolating any
+ * unaligned intro/outro beats and clamping to valid indices.
+ */
+function buildCoverSyncIndexMap(
+  featuresA: ReturnType<typeof extractTrackBeatFeatures>,
+  featuresB: ReturnType<typeof extractTrackBeatFeatures>,
+  mainLength: number,
+  otherLength: number,
+): number[] {
+  const aligned = alignTrackPairDtw(featuresA, featuresB);
+  const bestByA = new Map<number, { indexB: number; distance: number }>();
+  for (const pair of aligned) {
+    const existing = bestByA.get(pair.indexA);
+    if (!existing || pair.distance < existing.distance) {
+      bestByA.set(pair.indexA, {
+        indexB: pair.indexB,
+        distance: pair.distance,
+      });
+    }
+  }
+  const coveredIndices = [...bestByA.keys()].sort((a, b) => a - b);
+  const firstA = coveredIndices[0] ?? 0;
+  const lastA = coveredIndices[coveredIndices.length - 1] ?? 0;
+  const firstB = bestByA.get(firstA)?.indexB ?? 0;
+  const lastB = bestByA.get(lastA)?.indexB ?? 0;
+  const maxOtherIndex = Math.max(0, otherLength - 1);
+
+  const map = new Array<number>(mainLength);
+  for (let i = 0; i < mainLength; i += 1) {
+    let targetIdx: number;
+    const mapped = bestByA.get(i);
+    if (mapped) {
+      targetIdx = mapped.indexB;
+    } else if (coveredIndices.length === 0) {
+      targetIdx = Math.min(i, maxOtherIndex);
+    } else if (i < firstA) {
+      // Extrapolate backward linearly before the DTW-aligned span begins.
+      targetIdx = firstB - (firstA - i);
+    } else if (i > lastA) {
+      // Extrapolate forward linearly after the DTW-aligned span ends.
+      targetIdx = lastB + (i - lastA);
+    } else {
+      targetIdx = firstB;
+    }
+    map[i] = Math.max(0, Math.min(maxOtherIndex, targetIdx));
+  }
+  return map;
+}
+
+/**
+ * Picks the highest-count in-bounds beat offset `delta` for a section,
+ * optionally filtering to deltas whose median distance from `syncedOtherIndices`
+ * exceeds `minSyncSeparation`.
+ */
+function pickSectionDelta(
+  list: BeatWithSim[],
+  counter: Map<number, number>,
+  maxOtherIndex: number,
+  syncedOtherIndices: number[],
+  minSyncSeparation: number,
+): number {
+  const pickFrom = (requireSeparation: boolean): number | null => {
+    let bestDelta: number | null = null;
+    let bestCount = -1;
+    for (const [delta, count] of counter) {
+      const hasInBoundsBeat = list.some((beat) => {
+        const target = beat.which - delta;
+        return target >= 0 && target <= maxOtherIndex;
+      });
+      if (!hasInBoundsBeat) {
+        continue;
+      }
+      if (requireSeparation) {
+        const offsets = list
+          .map((beat) => {
+            const clampedTarget = Math.max(
+              0,
+              Math.min(maxOtherIndex, beat.which - delta),
+            );
+            return Math.abs(clampedTarget - (syncedOtherIndices[beat.which] ?? 0));
+          })
+          .sort((a, b) => a - b);
+        const medianOffset = offsets[Math.floor(offsets.length / 2)] ?? 0;
+        if (medianOffset <= minSyncSeparation) {
+          continue;
+        }
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        bestDelta = delta;
+      }
+    }
+    return bestDelta;
+  };
+
+  if (minSyncSeparation >= 0) {
+    const separated = pickFrom(true);
+    if (separated !== null) {
+      return separated;
+    }
+  }
+  return pickFrom(false) ?? 0;
+}
+
+/**
+ * Pairs every beat of `mainBeats` with a beat in `otherBeats` according to the
+ * selected alignment mode and applies seam ducking across discontinuous jumps.
+ */
+function applyDualAlignment(
+  mainBeats: BeatWithSim[],
+  otherBeats: BeatWithSim[],
+  mode: AutocanonizerMixAlignmentMode,
+) {
+  const featuresA = extractTrackBeatFeatures(mainBeats);
+  const featuresB = extractTrackBeatFeatures(otherBeats);
+  const syncedOtherIndices = buildCoverSyncIndexMap(
+    featuresA,
+    featuresB,
+    mainBeats.length,
+    otherBeats.length,
+  );
+  const maxOtherIndex = otherBeats.length - 1;
+  const sections = new Map<number, BeatWithSim[]>();
+  for (const beat of mainBeats) {
+    const list = sections.get(beat.section) ?? [];
+    list.push(beat);
+    sections.set(beat.section, list);
+  }
+
+  if (mode === "cover-sync") {
+    // Compute Song 1's self-similarity canon first, then project those canon
+    // targets onto Song 2 through the DTW cover-sync map so covers canonize
+    // across sections rather than playing in unison.
+    calculateNearestNeighbors(mainBeats);
+    foldBySection(mainBeats);
+
+    for (const [, list] of sections) {
+      if (!list.length) {
+        continue;
+      }
+      const counter = new Map<number, number>();
+      for (const beat of list) {
+        const syncedTarget = syncedOtherIndices[beat.other.which] ?? 0;
+        const delta = beat.which - syncedTarget;
+        counter.set(delta, (counter.get(delta) ?? 0) + 1);
+      }
+      const bestDelta = pickSectionDelta(
+        list,
+        counter,
+        maxOtherIndex,
+        syncedOtherIndices,
+        -1,
+      );
+      for (const beat of list) {
+        const clampedIdx = Math.max(
+          0,
+          Math.min(maxOtherIndex, beat.which - bestDelta),
+        );
+        beat.other = otherBeats[clampedIdx];
+        beat.otherGain = 1;
+      }
+    }
+    applyOtherSeamDucking(mainBeats);
+    return;
+  }
+
+  // Section Fold mode: match each beat in Song 1 to its closest non-unison
+  // beat in Song 2 using cover-normalized features, then fold by section.
+  const exclusionRadius = Math.min(4, Math.floor((otherBeats.length - 1) / 4));
+  for (let i = 0; i < mainBeats.length; i += 1) {
+    const beat = mainBeats[i];
+    const featA = featuresA[i];
+    const syncedIndex = syncedOtherIndices[i] ?? 0;
+    const findBest = (enforceExclusion: boolean) => {
+      let best: BeatWithSim | null = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (let j = 0; j < otherBeats.length; j += 1) {
+        if (enforceExclusion && Math.abs(j - syncedIndex) <= exclusionRadius) {
+          continue;
+        }
+        const other = otherBeats[j];
+        const barPenalty =
+          beat.indexInParent === other.indexInParent
+            ? 0
+            : SECTION_FOLD_BAR_MISMATCH_PENALTY;
+        const dist = computeCoverBeatDistance(featA, featuresB[j]) + barPenalty;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = other;
+        }
+      }
+      return { best, bestDist };
+    };
+
+    let result = findBest(true);
+    if (!result.best) {
+      result = findBest(false);
+    }
+    beat.sim = result.best ?? undefined;
+    beat.simDistance = Number.isFinite(result.bestDist)
+      ? result.bestDist
+      : undefined;
+  }
+
+  for (const [, list] of sections) {
+    if (!list.length) {
+      continue;
+    }
+    const counter = new Map<number, number>();
+    for (const beat of list) {
+      if (!beat.sim) {
+        continue;
+      }
+      const delta = beat.which - beat.sim.which;
+      counter.set(delta, (counter.get(delta) ?? 0) + 1);
+    }
+    const bestDelta = pickSectionDelta(
+      list,
+      counter,
+      maxOtherIndex,
+      syncedOtherIndices,
+      exclusionRadius,
+    );
+    for (const beat of list) {
+      const clampedIdx = Math.max(
+        0,
+        Math.min(maxOtherIndex, beat.which - bestDelta),
+      );
+      beat.other = otherBeats[clampedIdx];
+      beat.otherGain = 1;
+    }
+  }
+  applyOtherSeamDucking(mainBeats);
+}
+
+/**
+ * Ducks the secondary voice gain at discontinuous jumps so transitions between
+ * non-consecutive beats cross-fade smoothly.
+ */
+function applyOtherSeamDucking(beats: BeatWithSim[]) {
+  for (const beat of beats) {
+    const prev = beat.prev as BeatWithSim | null;
+    const next = beat.next as BeatWithSim | null;
+    if (prev?.other && prev.other.which + 1 !== beat.other.which) {
+      prev.otherGain = 0.5;
+      beat.otherGain = 0.5;
+    }
+    if (next?.other && next.other.which - 1 !== beat.other.which) {
+      next.otherGain = 0.5;
+      beat.otherGain = 0.5;
+    }
+  }
 }
 
 function getSectionIndex(beat: QuantumBase) {
@@ -616,18 +1130,7 @@ function foldBySection(beats: BeatWithSim[]) {
       beat.otherGain = 1;
     }
   }
-  for (const beat of beats) {
-    const prev = beat.prev as BeatWithSim | null;
-    const next = beat.next as BeatWithSim | null;
-    if (prev?.other && prev.other.which + 1 !== beat.other.which) {
-      prev.otherGain = 0.5;
-      beat.otherGain = 0.5;
-    }
-    if (next?.other && next.other.which - 1 !== beat.other.which) {
-      next.otherGain = 0.5;
-      beat.otherGain = 0.5;
-    }
-  }
+  applyOtherSeamDucking(beats);
 }
 
 function assignNormalizedVolumes(beats: BeatWithSim[]) {

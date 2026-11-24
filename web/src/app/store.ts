@@ -6,6 +6,10 @@ import {
   type AnchorEditState,
   type VisualPreferences,
 } from "@forever-jukebox/shared/viz/JukeboxViz";
+import {
+  resolveStoredBranchLookaheadCount,
+  resolveStoredBranchLookaheadEnabled,
+} from "./branchLookahead";
 import i18n from "./i18n";
 import type { SpotifySearchItem, YoutubeSearchItem } from "./api";
 import type { AppState, SleepTimerState, TabId } from "./context";
@@ -167,6 +171,8 @@ type ShellSlice = {
   branchChanceText: string;
   bpmBarEnabled: boolean;
   visualPreferences: VisualPreferences;
+  branchLookaheadEnabled: boolean;
+  branchLookaheadCount: number;
   playlistLoadBusy: boolean;
   branchStats: BranchStatsState | null;
   // Non-null while the custom anchor editor is open on the viz.
@@ -267,6 +273,8 @@ const createUiSlice: Slice<
     | "branchChanceText"
     | "bpmBarEnabled"
     | "visualPreferences"
+    | "branchLookaheadEnabled"
+    | "branchLookaheadCount"
     | "playlistLoadBusy"
     | "branchStats"
     | "customAnchorEdit"
@@ -337,6 +345,8 @@ const createUiSlice: Slice<
       typeof localStorage === "undefined" ||
       localStorage.getItem("bpmBarEnabled") !== "false",
     visualPreferences: readStoredVisualPreferences(),
+    branchLookaheadEnabled: resolveStoredBranchLookaheadEnabled(),
+    branchLookaheadCount: resolveStoredBranchLookaheadCount(),
     playlistLoadBusy: false,
     branchStats: null,
     customAnchorEdit: null,
@@ -435,6 +445,12 @@ const createPlaybackSlice: Slice<
     | "autocanonizerOtherSeconds"
     | "autocanonizerMainPan"
     | "autocanonizerOtherPan"
+    | "autocanonizerMainGainPct"
+    | "autocanonizerOtherGainPct"
+    | "autocanonizerMixEnabled"
+    | "autocanonizerMixAlignment"
+    | "autocanonizerMixTrackTitles"
+    | "autocanonizerOtherDurationSec"
     | "wubMachineSeconds"
     | "wubMachineDurationSec"
     | "vizData"
@@ -462,6 +478,12 @@ const createPlaybackSlice: Slice<
   autocanonizerOtherSeconds: 0,
   autocanonizerMainPan: 0,
   autocanonizerOtherPan: 0,
+  autocanonizerMainGainPct: 100,
+  autocanonizerOtherGainPct: 100,
+  autocanonizerMixEnabled: false,
+  autocanonizerMixAlignment: "cover-sync",
+  autocanonizerMixTrackTitles: null,
+  autocanonizerOtherDurationSec: null,
   wubMachineSeconds: 0,
   wubMachineDurationSec: 0,
   vizData: null,

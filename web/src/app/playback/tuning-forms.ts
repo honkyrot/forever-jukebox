@@ -43,6 +43,7 @@ import {
 } from "./instrumental";
 import { cancelInstrumentalRender } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import { canPrepareSwingMode, prepareSwingMode } from "./swing";
+import { syncPredictedJumps } from "./branch-lookahead";
 import i18n from "../i18n";
 import { MAX_RANDOM_BRANCH_DELTA } from "@forever-jukebox/shared/constants/playback";
 
@@ -90,6 +91,7 @@ export function applyDeletedEdgesFromUrl(context: AppContext) {
     if (vizData) {
       context.jukebox?.setData(vizData);
     }
+    syncPredictedJumps(context);
   }
 }
 
@@ -277,6 +279,7 @@ export function applyExtrasChanges(
   ) {
     trackAudioModeChange(nextAudioMode, nextAudioIntensity);
   }
+  syncPredictedJumps(context);
   syncTuningParamsState(context);
   writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
   return {
@@ -319,6 +322,7 @@ export function resetExtrasDefaults(context: AppContext) {
   ) {
     engine.syncToPlaybackPosition();
   }
+  syncPredictedJumps(context);
   syncTuningParamsState(context);
   writeTuningParamsToUrl(useAppStore.getState().tuningParams, true);
 }
@@ -494,6 +498,7 @@ export function applyTuningChanges(
   if (data) {
     jukebox?.setData(data);
   }
+  syncPredictedJumps(context);
   const graph = engine.getGraphState();
   updateTrackInfo(context);
   let nextThreshold = threshold;
@@ -586,6 +591,7 @@ export function resetTuningDefaults(context: AppContext) {
   if (data) {
     jukebox?.setData(data);
   }
+  syncPredictedJumps(context);
   syncDeletedEdgeState(context);
   // Serialize am/ai only in jukebox mode — autocanonizer URLs carry no tuning.
   const { jukeboxAudioMode, audioIntensity, playMode } = useAppStore.getState();

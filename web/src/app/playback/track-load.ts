@@ -79,6 +79,7 @@ import {
 import { stopPlayback } from "./transport";
 import { discardCustomAnchorEdit } from "./custom-anchor";
 import { clearCachedMultiTrackSources } from "./multi-track-mix";
+import { syncPredictedJumps } from "./branch-lookahead";
 import {
   applyAnchorBranchFromUrl,
   applyDeletedEdgesFromUrl,
@@ -210,6 +211,14 @@ export function resetForNewTrack(
   useAppStore.setState({ analysisLoaded: false });
   useAppStore.setState({ audioLoadInFlight: false });
   useAppStore.setState({ multiTrackEnabled: false });
+  useAppStore.setState({
+    autocanonizerMixEnabled: false,
+    autocanonizerMixTrackTitles: null,
+    autocanonizerOtherDurationSec: null,
+    autocanonizerMainGainPct: 100,
+    autocanonizerOtherGainPct: 100,
+  });
+  autocanonizer?.setStreamGains?.(1, 1);
   player.clearPostMixTrackGains?.();
   player.setPostMixNormalization?.(false);
   useAppStore.setState({ lastJobId: null });
@@ -280,6 +289,7 @@ export function resetForNewTrack(
   };
   jukebox?.setData(emptyVizData);
   jukebox?.reset();
+  syncPredictedJumps(context);
 }
 
 export async function loadAudioFromJob(context: AppContext, jobId: string) {
@@ -361,6 +371,7 @@ export function applyAnalysisResult(
   jukebox.setSelectedEdge(null);
   useAppStore.setState({ branchStats: null });
   syncDeletedEdgeState(context);
+  syncPredictedJumps(context);
   useAppStore.setState({ analysisLoaded: true });
   updateVizVisibility();
   maybePrepareSwingMode(context);

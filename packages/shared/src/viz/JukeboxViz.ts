@@ -1,5 +1,10 @@
 import type { JukeboxEngine } from "../engine";
-import type { Edge, QuantumBase, TrackSliceMeta } from "../engine/types";
+import type {
+  Edge,
+  PredictedJump,
+  QuantumBase,
+  TrackSliceMeta,
+} from "../engine/types";
 import {
   moveCustomAnchorEnd,
   type CustomAnchor,
@@ -55,12 +60,38 @@ const TILE_MAX_STEPS = 12;
 // The jump line fades in fixed alpha steps, one overlay redraw per step.
 const JUMP_FADE_MS = 1000;
 const JUMP_FADE_STEPS = 12;
+// Fixed per-branch ROYGBIV hues (Red -> Orange -> Yellow -> Green -> Cyan -> Blue -> Violet -> Magenta).
+const PREDICTED_JUMP_RAINBOW_HUES = [4, 28, 50, 132, 188, 224, 272, 318] as const;
 
 interface JumpLine {
   from: number;
   to: number;
   at: number;
   control: [number, number] | null;
+}
+
+/**
+ * Compares two predicted-jump lists by coordinates and edge id so repeated
+ * identical syncs do not restart the flowing overlay animation.
+ */
+function predictedJumpsEqual(
+  left: readonly PredictedJump[],
+  right: readonly PredictedJump[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let i = 0; i < left.length; i += 1) {
+    if (
+      left[i].fromIndex !== right[i].fromIndex ||
+      left[i].toIndex !== right[i].toIndex ||
+      left[i].edgeId !== right[i].edgeId ||
+      left[i].sequenceIndex !== right[i].sequenceIndex
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export type AnchorEditState = CustomAnchor & { active: CustomAnchorEnd };
@@ -146,7 +177,10 @@ class CanvasViz {
   private currentIndex = -1;
   private jumpLine: JumpLine | null = null;
   private selectedEdge: Edge | null = null;
+  private predictedJumps: PredictedJump[] = [];
+  private predictedJumpControls: Array<[number, number] | null> = [];
   private overlayTimerId: number | null = null;
+  private overlayRafId: number | null = null;
   private jumpFadeColors: string[] = [];
   private readonly background: CanvasVizOptions["background"];
   private backgroundFill: CanvasGradient | null = null;
@@ -285,6 +319,8 @@ class CanvasViz {
     this.currentIndex = -1;
     this.jumpLine = null;
     this.selectedEdge = null;
+    this.predictedJumps = [];
+    this.predictedJumpControls = [];
     this.cancelOverlayAnimation();
     this.syncTiles();
     this.drawOverlay();
@@ -308,6 +344,8 @@ class CanvasViz {
     }
     this.data = null;
     this.positions = [];
+    this.predictedJumps = [];
+    this.predictedJumpControls = [];
     this.edgeGeometry = new WeakMap();
     this.bendCache.clear();
     this.cancelOverlayAnimation();
@@ -323,6 +361,18 @@ class CanvasViz {
 
   setSelectedEdge(edge: Edge | null) {
     this.selectedEdge = edge;
+    this.drawOverlay();
+  }
+
+  /**
+   * Updates the ordered list of upcoming predicted jumps to render on the overlay.
+   */
+  setPredictedJumps(jumps: readonly PredictedJump[]) {
+    if (predictedJumpsEqual(this.predictedJumps, jumps)) {
+      return;
+    }
+    this.predictedJumps = jumps.map((jump) => ({ ...jump }));
+    this.syncPredictedJumpControls();
     this.drawOverlay();
   }
 
@@ -437,6 +487,13 @@ class CanvasViz {
     if (this.jumpLine) {
       this.jumpLine.control = this.resolveJumpControl(this.jumpLine.from, this.jumpLine.to);
     }
+    this.syncPredictedJumpControls();
+  }
+
+  private syncPredictedJumpControls() {
+    this.predictedJumpControls = this.predictedJumps.map((jump) =>
+      this.resolveJumpControl(jump.fromIndex, jump.toIndex),
+    );
   }
 
   private computeEdgeGeometry() {
@@ -927,6 +984,12 @@ class CanvasViz {
     if (!this.data || !this.visible) {
       return;
     }
+    const now = performance.now();
+    const hasAnimatedLookahead =
+      this.predictedJumps.length > 0 && !this.prefersReducedMotion();
+    if (this.predictedJumps.length > 0) {
+      this.drawPredictedJumps(now);
+    }
     if (this.selectedEdge && !this.selectedEdge.deleted) {
       this.drawEdge(
         this.overlayCtx,
@@ -957,6 +1020,9 @@ class CanvasViz {
       }
     }
     if (this.currentIndex < 0) {
+      if (hasAnimatedLookahead) {
+        this.scheduleOverlayFrame();
+      }
       return;
     }
     const current = this.positions[this.currentIndex];
@@ -984,8 +1050,9 @@ class CanvasViz {
         this.drawBeatCursor(current, cursorColor, this.currentIndex);
       }
     }
+    let fadeDelayMs: number | null = null;
     if (this.jumpLine) {
-      const age = performance.now() - this.jumpLine.at;
+      const age = now - this.jumpLine.at;
       const step = Math.floor((age * JUMP_FADE_STEPS) / JUMP_FADE_MS);
       if (step < JUMP_FADE_STEPS) {
         const from = this.positions[this.jumpLine.from];
@@ -1010,11 +1077,176 @@ class CanvasViz {
             this.overlayCtx.stroke();
           }
         }
-        this.requestOverlayAnimation(((step + 1) * JUMP_FADE_MS) / JUMP_FADE_STEPS - age);
+        fadeDelayMs = ((step + 1) * JUMP_FADE_MS) / JUMP_FADE_STEPS - age;
       } else {
         this.jumpLine = null;
       }
     }
+    const scheduledRaf = hasAnimatedLookahead
+      ? this.scheduleOverlayFrame()
+      : false;
+    if (!scheduledRaf && fadeDelayMs !== null) {
+      this.requestOverlayAnimation(fadeDelayMs);
+    }
+  }
+
+  /**
+   * Renders predicted upcoming jumps back-to-front as soft flowing ROYGBIV pipes
+   * (1st = Red, 2nd = Orange, 3rd = Yellow, ...).
+   */
+  private drawPredictedJumps(now: number) {
+    const ctx = this.overlayCtx;
+    const isLightTheme =
+      typeof document !== "undefined" &&
+      Boolean(document.body?.classList?.contains("theme-light"));
+    const timeSec = this.prefersReducedMotion() ? 0 : now / 1000;
+
+    const coreWidth = 3.2;
+    const glowWidth = coreWidth * 2.8;
+    const pulseWidth = coreWidth * 0.48;
+    const flowSpeed = 52;
+
+    for (let rank = this.predictedJumps.length - 1; rank >= 0; rank -= 1) {
+      const jump = this.predictedJumps[rank];
+      const from = this.positions[jump.fromIndex];
+      const to = this.positions[jump.toIndex];
+      if (!from || !to || (from.x === to.x && from.y === to.y)) {
+        continue;
+      }
+      const control = this.predictedJumpControls[rank] ?? null;
+      const colorCount = PREDICTED_JUMP_RAINBOW_HUES.length;
+      const rawSequenceIndex = jump.sequenceIndex ?? rank;
+      const colorIndex =
+        ((rawSequenceIndex % colorCount) + colorCount) % colorCount;
+      const hue = PREDICTED_JUMP_RAINBOW_HUES[colorIndex];
+
+      const buildPipeStroke = (
+        baseLightness: number,
+        lightnessBoost: number,
+        saturation: number,
+        baseAlpha: number,
+      ): string | CanvasGradient => {
+        if (typeof ctx.createLinearGradient === "function") {
+          const gradient = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
+          for (const stop of [0, 0.25, 0.5, 0.75, 1]) {
+            // Subtracting time shifts the brightness pulse forward from takeoff to landing.
+            const wave =
+              0.5 + 0.5 * Math.sin(stop * Math.PI * 2 - timeSec * 4.2);
+            const stopLightness = Math.min(
+              96,
+              baseLightness + wave * lightnessBoost,
+            );
+            const stopAlpha = Math.min(1, baseAlpha * (0.78 + 0.22 * wave));
+            gradient.addColorStop(
+              stop,
+              `hsla(${hue}, ${saturation}%, ${stopLightness.toFixed(1)}%, ${stopAlpha.toFixed(3)})`,
+            );
+          }
+          return gradient;
+        }
+        return `hsla(${hue}, ${saturation}%, ${baseLightness}%, ${baseAlpha})`;
+      };
+
+      const tracePath = () => {
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        if (control) {
+          ctx.quadraticCurveTo(control[0], control[1], to.x, to.y);
+        } else {
+          ctx.lineTo(to.x, to.y);
+        }
+      };
+
+      const chordLen = Math.hypot(to.x - from.x, to.y - from.y);
+      const approxLen = control
+        ? (chordLen +
+            Math.hypot(control[0] - from.x, control[1] - from.y) +
+            Math.hypot(to.x - control[0], to.y - control[1])) *
+          0.5
+        : chordLen;
+
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      // Pass 1: soft outer halo sleeve in the branch's assigned ROYGBIV hue.
+      const glowLightness = isLightTheme ? (hue === 50 ? 46 : 52) : 60;
+      ctx.strokeStyle = buildPipeStroke(
+        glowLightness,
+        8,
+        96,
+        isLightTheme ? 0.18 : 0.24,
+      );
+      ctx.lineWidth = glowWidth;
+      tracePath();
+      ctx.stroke();
+
+      // Pass 2: soft flowing pipe body in the branch's assigned ROYGBIV hue.
+      const coreLightness = isLightTheme ? (hue === 50 ? 44 : 48) : 58;
+      ctx.strokeStyle = buildPipeStroke(
+        coreLightness,
+        isLightTheme ? 10 : 14,
+        95,
+        isLightTheme ? 0.9 : 0.86,
+      );
+      ctx.lineWidth = coreWidth;
+      tracePath();
+      ctx.stroke();
+
+      // Pass 3: flowing luminous inner stream gliding from jump source to destination.
+      if (typeof ctx.setLineDash === "function") {
+        const dashLen = Math.max(10, Math.min(26, approxLen * 0.14));
+        const gapLen = dashLen * 1.45;
+        const cycle = dashLen + gapLen;
+        ctx.setLineDash([dashLen, gapLen]);
+        ctx.lineDashOffset = -((timeSec * flowSpeed) % cycle);
+        ctx.strokeStyle = buildPipeStroke(
+          isLightTheme ? 92 : 86,
+          6,
+          100,
+          isLightTheme ? 0.85 : 0.8,
+        );
+        ctx.lineWidth = pulseWidth;
+        tracePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Endpoint beads clarify takeoff and landing positions in the branch color.
+      ctx.fillStyle = `hsla(${hue}, 95%, ${isLightTheme ? 48 : 66}%, ${isLightTheme ? 0.88 : 0.82})`;
+      ctx.beginPath();
+      ctx.arc(from.x, from.y, coreWidth * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `hsla(${hue}, 100%, ${isLightTheme ? 54 : 78}%, ${isLightTheme ? 0.96 : 0.94})`;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, coreWidth * 0.95, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  private prefersReducedMotion(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  private scheduleOverlayFrame(): boolean {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function"
+    ) {
+      this.overlayRafId = window.requestAnimationFrame(() => {
+        this.overlayRafId = null;
+        this.drawOverlay();
+      });
+      return true;
+    }
+    return false;
   }
 
   // Redraws the overlay at the next fade step boundary.
@@ -1026,11 +1258,19 @@ class CanvasViz {
   }
 
   private cancelOverlayAnimation() {
-    if (this.overlayTimerId === null) {
-      return;
+    if (this.overlayTimerId !== null) {
+      window.clearTimeout(this.overlayTimerId);
+      this.overlayTimerId = null;
     }
-    window.clearTimeout(this.overlayTimerId);
-    this.overlayTimerId = null;
+    if (this.overlayRafId !== null) {
+      if (
+        typeof window !== "undefined" &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(this.overlayRafId);
+      }
+      this.overlayRafId = null;
+    }
   }
 
   private resolveBeatHighlightColor(alpha: number) {
@@ -1879,6 +2119,7 @@ export class JukeboxViz {
   private visible = true;
   private data: VizData | null = null;
   private selectedEdge: Edge | null = null;
+  private predictedJumps: PredictedJump[] = [];
   private lastUpdate: LastUpdate | null = null;
   private anchorHighlightEnabled = false;
   private visualPreferences: VisualPreferences = readStoredVisualPreferences();
@@ -2000,6 +2241,9 @@ export class JukeboxViz {
     if (this.selectedEdge) {
       viz.setSelectedEdge(this.selectedEdge);
     }
+    if (this.predictedJumps.length > 0) {
+      viz.setPredictedJumps(this.predictedJumps);
+    }
     // The wrapper tracks drag changes, so a layout switch keeps the pair on screen.
     viz.setOnAnchorEditChange((state) => {
       this.anchorEdit = state;
@@ -2085,6 +2329,7 @@ export class JukeboxViz {
   }
 
   reset() {
+    this.predictedJumps = [];
     this.activeViz?.reset();
   }
 
@@ -2093,6 +2338,7 @@ export class JukeboxViz {
     this.activeViz = null;
     this.data = null;
     this.selectedEdge = null;
+    this.predictedJumps = [];
     this.lastUpdate = null;
     this.visible = false;
     this.activeIndex = 0;
@@ -2134,6 +2380,14 @@ export class JukeboxViz {
   setSelectedEdgeActive(edge: Edge | null) {
     this.selectedEdge = edge;
     this.activeViz?.setSelectedEdge(edge);
+  }
+
+  /**
+   * Stores and renders the upcoming predicted branch jumps on the active layout.
+   */
+  setPredictedJumps(jumps: readonly PredictedJump[]) {
+    this.predictedJumps = jumps.map((jump) => ({ ...jump }));
+    this.activeViz?.setPredictedJumps(this.predictedJumps);
   }
 }
 

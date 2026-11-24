@@ -177,4 +177,81 @@ describe("AutocanonizerViz", () => {
     const inner = viz as unknown as { currentIndex: number };
     expect(inner.currentIndex).toBe(0);
   });
+
+  it("renders upright top beats and upside-down bottom beats with upward arcs in dual mode", () => {
+    const container = createContainer();
+    const viz = new AutocanonizerViz(container);
+    viz.setVisible(true);
+
+    const otherBeats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which * 0.5,
+      duration: 0.5,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(200, 200, 200)",
+      section: which,
+      otherGain: 1,
+    })) as any[];
+    otherBeats.forEach((beat) => {
+      beat.other = beat;
+    });
+
+    const mainBeats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(100, 150, 255)",
+      section: which,
+      otherGain: 1,
+    })) as any[];
+    mainBeats[0].other = otherBeats[0];
+    mainBeats[1].other = otherBeats[3];
+    mainBeats[2].other = otherBeats[1];
+    mainBeats[3].other = otherBeats[2];
+
+    viz.setDualData(
+      mainBeats,
+      4,
+      mainBeats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+      otherBeats,
+      2,
+      otherBeats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+    );
+
+    const inner = viz as unknown as {
+      layoutMetrics: { mainSectionY: number; otherSectionY: number; otherBaseY: number };
+      layouts: Array<{ y: number; height: number }>;
+      otherLayouts: Array<{ x: number; y: number; width: number; height: number }>;
+      connections: Array<{ startY: number; cy: number } | null>;
+    };
+
+    const { mainSectionY, otherSectionY, otherBaseY } = inner.layoutMetrics;
+    expect(otherSectionY).toBeGreaterThan(mainSectionY);
+    for (const layout of inner.layouts) {
+      expect(layout.y + layout.height).toBeCloseTo(mainSectionY, 5);
+    }
+    for (const layout of inner.otherLayouts) {
+      expect(layout.y).toBeCloseTo(otherBaseY, 5);
+      expect(layout.y + layout.height).toBeGreaterThan(otherBaseY);
+    }
+
+    const branch = inner.connections.find(Boolean);
+    expect(branch).toBeTruthy();
+    expect(branch!.startY).toBeGreaterThan(mainSectionY);
+    expect(branch!.cy).toBeLessThan(branch!.startY);
+
+    const onSelect = vi.fn();
+    viz.setOnSelect(onSelect);
+    const clickTarget = inner.otherLayouts[3];
+    const clickHandler = (viz as unknown as { handleClick: (event: MouseEvent) => void })
+      .handleClick;
+    clickHandler({
+      clientX: clickTarget.x + clickTarget.width / 2,
+      clientY: clickTarget.y + clickTarget.height / 2,
+    } as MouseEvent);
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
 });

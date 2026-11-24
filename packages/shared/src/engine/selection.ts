@@ -329,14 +329,19 @@ function computeBranchesToEarlyTarget(
   return branchesNeeded;
 }
 
+/**
+ * Selects the best outgoing neighbor index for the default last-branch anchor beat.
+ */
 export function getBestLastBranchNeighborIndex(
   seed: QuantumBase,
+  neighborsOverride?: readonly Edge[],
 ): number {
+  const neighbors = neighborsOverride ?? seed.neighbors;
   const beats = collectTimeline(seed);
   const earlyTargetBeat = resolveEarlyTargetBeat(beats, 25);
   const earliestByBeat = computeEarliestReachableByBeat(beats);
   const branchesToTarget = computeBranchesToEarlyTarget(beats, earlyTargetBeat);
-  const hasBackwardNeighbor = seed.neighbors.some(
+  const hasBackwardNeighbor = neighbors.some(
     (edge) => edge.dest.which < seed.which,
   );
   let bestIndex = 0;
@@ -344,8 +349,8 @@ export function getBestLastBranchNeighborIndex(
   let bestEarliest = Number.POSITIVE_INFINITY;
   let bestDistance = Number.POSITIVE_INFINITY;
   let bestImmediate = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < seed.neighbors.length; i += 1) {
-    const edge = seed.neighbors[i];
+  for (let i = 0; i < neighbors.length; i += 1) {
+    const edge = neighbors[i];
     const immediate = seed.which - edge.dest.which;
     if (hasBackwardNeighbor && immediate <= 0) {
       continue;
@@ -406,25 +411,31 @@ export function shouldRandomBranch(
   return shouldBranch;
 }
 
-export function selectNextBeatIndex(
+/**
+ * Selects the next beat index and reports the chosen edge id when a branch fires.
+ * Passing `neighborsOverride` rotates that copy instead of mutating `seed.neighbors`.
+ */
+export function selectNextBeatWithEdge(
   seed: QuantumBase,
   graph: JukeboxGraphState,
   config: JukeboxConfig,
   rng: () => number,
   state: BranchState,
   forceBranch = false,
-  userAnchor: UserAnchorSelection | null = null
-): { index: number; jumped: boolean } {
-  if (seed.neighbors.length === 0) {
-    return { index: seed.which, jumped: false };
+  userAnchor: UserAnchorSelection | null = null,
+  neighborsOverride?: Edge[],
+): { index: number; jumped: boolean; edgeId: number | null } {
+  const neighbors = neighborsOverride ?? seed.neighbors;
+  if (neighbors.length === 0) {
+    return { index: seed.which, jumped: false, edgeId: null };
   }
   const userAnchorIndex =
     userAnchor === null
       ? -1
-      : seed.neighbors.findIndex((edge) => edge.id === userAnchor.edgeId);
+      : neighbors.findIndex((edge) => edge.id === userAnchor.edgeId);
   const candidateIndexes =
     userAnchor !== null && seed.which < userAnchor.sourceIndex
-      ? seed.neighbors
+      ? neighbors
           .map((edge, index) =>
             edge.dest.which < userAnchor.sourceIndex ? index : -1,
           )
@@ -434,7 +445,7 @@ export function selectNextBeatIndex(
     userAnchorIndex < 0 &&
     candidateIndexes?.length === 0
   ) {
-    return { index: seed.which, jumped: false };
+    return { index: seed.which, jumped: false, edgeId: null };
   }
   if (
     userAnchorIndex < 0 &&
@@ -448,15 +459,15 @@ export function selectNextBeatIndex(
       userAnchor !== null,
     )
   ) {
-    return { index: seed.which, jumped: false };
+    return { index: seed.which, jumped: false, edgeId: null };
   }
   let nextEdge;
   if (userAnchorIndex >= 0) {
-    const selected = seed.neighbors.splice(userAnchorIndex, 1);
+    const selected = neighbors.splice(userAnchorIndex, 1);
     nextEdge = selected[0];
   } else if (userAnchor === null && seed.which === graph.lastBranchPoint) {
-    const bestIndex = getBestLastBranchNeighborIndex(seed);
-    const selected = seed.neighbors.splice(bestIndex, 1);
+    const bestIndex = getBestLastBranchNeighborIndex(seed, neighbors);
+    const selected = neighbors.splice(bestIndex, 1);
     nextEdge = selected[0];
   } else {
     const selectedIndex = selectWeightedNeighborIndex(
@@ -464,21 +475,47 @@ export function selectNextBeatIndex(
       rng,
       state,
       candidateIndexes,
+      neighbors,
     );
     if (selectedIndex < 0) {
-      return { index: seed.which, jumped: false };
+      return { index: seed.which, jumped: false, edgeId: null };
     }
-    const selected = seed.neighbors.splice(selectedIndex, 1);
+    const selected = neighbors.splice(selectedIndex, 1);
     nextEdge = selected[0];
   }
   if (!nextEdge) {
-    return { index: seed.which, jumped: false };
+    return { index: seed.which, jumped: false, edgeId: null };
   }
-  seed.neighbors.push(nextEdge);
+  neighbors.push(nextEdge);
   state.lastDestBySource ??= new Map<number, number>();
   state.lastDestBySource.set(seed.which, nextEdge.dest.which);
   const nextIndex = nextEdge.dest.which;
-  return { index: nextIndex, jumped: nextIndex !== seed.which };
+  const jumped = nextIndex !== seed.which;
+  return { index: nextIndex, jumped, edgeId: jumped ? nextEdge.id : null };
+}
+
+/**
+ * Selects the next beat index using live graph neighbors.
+ */
+export function selectNextBeatIndex(
+  seed: QuantumBase,
+  graph: JukeboxGraphState,
+  config: JukeboxConfig,
+  rng: () => number,
+  state: BranchState,
+  forceBranch = false,
+  userAnchor: UserAnchorSelection | null = null
+): { index: number; jumped: boolean } {
+  const result = selectNextBeatWithEdge(
+    seed,
+    graph,
+    config,
+    rng,
+    state,
+    forceBranch,
+    userAnchor,
+  );
+  return { index: result.index, jumped: result.jumped };
 }
 
 function selectWeightedNeighborIndex(
@@ -486,15 +523,17 @@ function selectWeightedNeighborIndex(
   rng: () => number,
   state: BranchState,
   candidateIndexes?: number[],
+  neighborsOverride?: readonly Edge[],
 ): number {
+  const neighbors = neighborsOverride ?? seed.neighbors;
   const indexes =
-    candidateIndexes ?? seed.neighbors.map((_edge, index) => index);
+    candidateIndexes ?? neighbors.map((_edge, index) => index);
   if (indexes.length <= 1) {
     return indexes[0] ?? -1;
   }
   const lastDest = state.lastDestBySource?.get(seed.which);
   const weights = indexes.map((index) => {
-    const edge = seed.neighbors[index];
+    const edge = neighbors[index];
     const distanceWeight = 1 / (1 + Math.max(0, edge.distance));
     const repeatPenalty =
       lastDest !== undefined && edge.dest.which === lastDest ? 0.35 : 1;

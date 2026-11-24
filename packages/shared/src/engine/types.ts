@@ -109,6 +109,13 @@ export interface JukeboxGraphState {
   allEdges: Edge[];
 }
 
+export interface PredictedJump {
+  fromIndex: number;
+  toIndex: number;
+  edgeId: number | null;
+  sequenceIndex?: number;
+}
+
 export interface JukeboxState {
   currentBeatIndex: number;
   beatsPlayed: number;

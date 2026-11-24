@@ -1,4 +1,4 @@
-import type { Edge } from "../engine/types";
+import type { Edge, PredictedJump } from "../engine/types";
 import {
   JukeboxViz,
   type AnchorEditState,
@@ -74,6 +74,13 @@ export class JukeboxController {
 
   setSelectedEdgeActive(edge: Edge | null) {
     this.viz.setSelectedEdgeActive(edge);
+  }
+
+  /**
+   * Forwards upcoming predicted jumps to the visualization overlay.
+   */
+  setPredictedJumps(jumps: readonly PredictedJump[]) {
+    this.viz.setPredictedJumps(jumps);
   }
 
   setAnchorEdit(state: AnchorEditState | null) {

@@ -7,7 +7,12 @@ import {
   type PointerEvent,
 } from "react";
 import { useAppStore } from "../../store";
-import { disableMultiTrackMix, loadMultiTrackMix } from "../../playback";
+import {
+  disableAutocanonizerMix,
+  disableMultiTrackMix,
+  loadAutocanonizerMix,
+  loadMultiTrackMix,
+} from "../../playback";
 import { getAppContext } from "../../runtime";
 import {
   clearPlaylist,
@@ -60,6 +65,11 @@ export function PlaylistModal() {
   const playlist = useAppStore((s) => s.playlist);
   const playMode = useAppStore((s) => s.playMode);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const autocanonizerMixEnabled = useAppStore(
+    (s) => s.autocanonizerMixEnabled,
+  );
+  const isCanonizer = playMode === "autocanonizer";
+  const isMixActive = isCanonizer ? autocanonizerMixEnabled : multiTrackEnabled;
   const close = () => useAppStore.setState({ playlistModalOpen: false });
   const isEmpty = playlist.tracks.length === 0;
   const canReorder = playlist.tracks.length > 1;
@@ -341,14 +351,22 @@ export function PlaylistModal() {
         </div>
       </div>
       <div className="modal-footer">
-        {playMode === "jukebox" &&
-        (playlist.tracks.length >= 2 || multiTrackEnabled) ? (
+        {(playMode === "jukebox" || isCanonizer) &&
+        (playlist.tracks.length >= 2 || isMixActive) ? (
           <button
             id="playlist-mix-toggle"
             type="button"
             onClick={() => {
               close();
               const ctx = getAppContext();
+              if (isCanonizer) {
+                if (autocanonizerMixEnabled) {
+                  void disableAutocanonizerMix(ctx);
+                } else {
+                  void loadAutocanonizerMix(ctx);
+                }
+                return;
+              }
               if (multiTrackEnabled) {
                 void disableMultiTrackMix(ctx);
               } else {
@@ -356,7 +374,11 @@ export function PlaylistModal() {
               }
             }}
           >
-            {multiTrackEnabled ? "Unmix Songs" : "Mix Songs"}
+            {isMixActive
+              ? "Unmix Songs"
+              : isCanonizer
+                ? "Mix 2 Songs"
+                : "Mix Songs"}
           </button>
         ) : null}
         <button

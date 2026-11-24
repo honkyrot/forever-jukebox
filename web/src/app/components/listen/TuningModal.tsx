@@ -52,6 +52,14 @@ import {
   type TuningFormValues,
 } from "../../playback";
 import { applyExtrasAndSync } from "../../playback-ui";
+import { syncPredictedJumps } from "../../playback";
+import {
+  MAX_BRANCH_LOOKAHEAD_COUNT,
+  MIN_BRANCH_LOOKAHEAD_COUNT,
+  clampBranchLookaheadCount,
+  storeBranchLookaheadCount,
+  storeBranchLookaheadEnabled,
+} from "../../branchLookahead";
 import { isInstrumentalModeAvailable } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import { getAppContext } from "../../runtime";
 import { useAppStore } from "../../store";
@@ -181,6 +189,8 @@ export function TuningModal() {
     (s) => s.metronomeDetectedBeatsPerBar,
   );
   const visualPreferences = useAppStore((s) => s.visualPreferences);
+  const branchLookaheadEnabled = useAppStore((s) => s.branchLookaheadEnabled);
+  const branchLookaheadCount = useAppStore((s) => s.branchLookaheadCount);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const crossTrackOnly = useAppStore((s) => s.crossTrackOnly);
   const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
@@ -387,6 +397,19 @@ export function TuningModal() {
   const toggleBpmBar = (enabled: boolean) => {
     localStorage.setItem("bpmBarEnabled", String(enabled));
     useAppStore.setState({ bpmBarEnabled: enabled });
+  };
+
+  const toggleBranchLookahead = (enabled: boolean) => {
+    storeBranchLookaheadEnabled(enabled);
+    useAppStore.setState({ branchLookaheadEnabled: enabled });
+    syncPredictedJumps(getAppContext());
+  };
+
+  const updateBranchLookaheadCount = (count: number) => {
+    const clamped = clampBranchLookaheadCount(count);
+    storeBranchLookaheadCount(clamped);
+    useAppStore.setState({ branchLookaheadCount: clamped });
+    syncPredictedJumps(getAppContext());
   };
 
   const audioModeOption = (option: (typeof AUDIO_MODE_OPTIONS)[number]) => (
@@ -923,7 +946,30 @@ export function TuningModal() {
               />{" "}
               Alternate Seek Shape
             </label>
+            <label>
+              <input
+                id="branch-lookahead-toggle"
+                type="checkbox"
+                checked={branchLookaheadEnabled}
+                onChange={(event) =>
+                  toggleBranchLookahead(event.target.checked)
+                }
+              />{" "}
+              Show upcoming branches
+            </label>
           </div>
+          {branchLookaheadEnabled ? (
+            <RangeRow
+              id="branch-lookahead-count"
+              label="Upcoming branches:"
+              valueText={`${branchLookaheadCount}`}
+              min={MIN_BRANCH_LOOKAHEAD_COUNT}
+              max={MAX_BRANCH_LOOKAHEAD_COUNT}
+              step={1}
+              value={branchLookaheadCount}
+              onChange={updateBranchLookaheadCount}
+            />
+          ) : null}
           <div className="visual-mode-group">
             <div className="label-line">Coloring</div>
             <div

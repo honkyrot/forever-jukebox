@@ -48,12 +48,17 @@ export class AutocanonizerViz {
   private sections: CanonizerSections = [];
   private trackDuration = 0;
   private layouts: BeatLayout[] = [];
+  private otherBeats: CanonizerBeat[] = [];
+  private otherSections: CanonizerSections = [];
+  private otherDuration = 0;
+  private otherLayouts: BeatLayout[] = [];
   private visible = false;
   private currentIndex = -1;
   private maxDelta = 1;
   private onSelect: ((index: number) => void) | null = null;
   private connections: Array<ConnectionPath | null> = [];
   private readonly tileColorOverrides = new Map<number, string>();
+  private readonly otherTileColorOverrides = new Map<number, string>();
   private otherAnim: {
     path: ConnectionPath;
     start: number;
@@ -70,6 +75,11 @@ export class AutocanonizerViz {
     fullHeight: 0,
     tileHeight: 0,
     connectionHeight: 0,
+    mainSectionY: 0,
+    otherSectionY: 0,
+    otherBaseY: 0,
+    laneHeight: 0,
+    arcBandHeight: 0,
     hPad: 20,
     vPad: 12,
     topPad: 0,
@@ -104,6 +114,10 @@ export class AutocanonizerViz {
     }
   }
 
+  /**
+   * Loads single-song beat, duration, and section data into the visualization
+   * and clears any previous dual-song mix layout state.
+   */
   setData(
     beats: CanonizerBeat[],
     trackDuration: number,
@@ -112,7 +126,46 @@ export class AutocanonizerViz {
     this.beats = beats;
     this.trackDuration = trackDuration;
     this.sections = sections;
+    this.otherBeats = [];
+    this.otherSections = [];
+    this.otherDuration = 0;
+    this.otherLayouts = [];
     this.tileColorOverrides.clear();
+    this.otherTileColorOverrides.clear();
+    this.otherAnim = null;
+    this.forcedOtherIndex = null;
+    this.lastOtherCursor = null;
+    this.otherAnimEndedAt = null;
+    this.computeLayout();
+    this.drawBase();
+    this.drawOverlay();
+  }
+
+  /**
+   * Loads two songs for mirrored dual-lane Autocanonizer mix visualization:
+   * Song 1 sits upright on top and Song 2 sits upside-down below, with jump
+   * arcs routed between their section bars.
+   */
+  setDualData(
+    mainBeats: CanonizerBeat[],
+    mainDuration: number,
+    mainSections: CanonizerSections,
+    otherBeats: CanonizerBeat[],
+    otherDuration: number,
+    otherSections: CanonizerSections,
+  ) {
+    this.beats = mainBeats;
+    this.trackDuration = mainDuration;
+    this.sections = mainSections;
+    this.otherBeats = otherBeats;
+    this.otherDuration = otherDuration;
+    this.otherSections = otherSections;
+    this.tileColorOverrides.clear();
+    this.otherTileColorOverrides.clear();
+    this.otherAnim = null;
+    this.forcedOtherIndex = null;
+    this.lastOtherCursor = null;
+    this.otherAnimEndedAt = null;
     this.computeLayout();
     this.drawBase();
     this.drawOverlay();
@@ -120,7 +173,12 @@ export class AutocanonizerViz {
 
   reset() {
     this.currentIndex = -1;
+    this.forcedOtherIndex = null;
+    this.otherAnim = null;
+    this.lastOtherCursor = null;
+    this.otherAnimEndedAt = null;
     this.tileColorOverrides.clear();
+    this.otherTileColorOverrides.clear();
     this.clearCanvas(this.overlayCtx);
   }
 
@@ -156,10 +214,17 @@ export class AutocanonizerViz {
     this.beats = [];
     this.sections = [];
     this.layouts = [];
+    this.otherBeats = [];
+    this.otherSections = [];
+    this.otherLayouts = [];
   }
 
   setOnSelect(handler: ((index: number) => void) | null) {
     this.onSelect = handler;
+  }
+
+  private isDualMode() {
+    return this.otherBeats.length > 0 && this.otherDuration > 0;
   }
 
   private applyCanvasStyles() {
@@ -178,28 +243,107 @@ export class AutocanonizerViz {
     const rect = this.container.getBoundingClientRect();
     if (!rect.width || !rect.height || !this.trackDuration) {
       this.layouts = [];
+      this.otherLayouts = [];
       return;
     }
     const availableHeight = Math.max(
       0,
       rect.height - this.layoutMetrics.bottomPad - this.layoutMetrics.topPad,
     );
+    const hPad = 20;
+    const vPad = 12;
+    const topPad = this.layoutMetrics.topPad;
+    const bottomPad = this.layoutMetrics.bottomPad;
+    const spanWidth = Math.max(1, rect.width - hPad * 2);
+
+    if (this.isDualMode()) {
+      // Split height into an upright top lane, a shared middle arc band between
+      // the two section bars, and a mirrored upside-down bottom lane.
+      const contentHeight = Math.max(
+        120,
+        availableHeight - vPad * 2 - SECTION_HEIGHT * 2,
+      );
+      const laneHeight = Math.floor(contentHeight * 0.38);
+      const arcBandHeight = Math.max(36, contentHeight - laneHeight * 2);
+      const mainSectionY = topPad + vPad + laneHeight;
+      const otherSectionY = mainSectionY + SECTION_HEIGHT + arcBandHeight;
+      const otherBaseY = otherSectionY + SECTION_HEIGHT;
+      this.layoutMetrics = {
+        width: rect.width,
+        height: availableHeight,
+        fullHeight: rect.height,
+        tileHeight: laneHeight + vPad,
+        connectionHeight: arcBandHeight,
+        mainSectionY,
+        otherSectionY,
+        otherBaseY,
+        laneHeight,
+        arcBandHeight,
+        hPad,
+        vPad,
+        topPad,
+        bottomPad,
+      };
+      this.layouts = this.beats.map((beat) => {
+        const beatWidth = (spanWidth * beat.duration) / this.trackDuration;
+        const x = hPad + (spanWidth * beat.start) / this.trackDuration;
+        const height =
+          laneHeight * Math.pow(Math.max(0, beat.median_volume), 4) * 0.92;
+        const clampedHeight = Math.max(2, height);
+        const y = mainSectionY - clampedHeight;
+        const otherX =
+          hPad +
+          (spanWidth * (beat.other ? beat.other.start : 0)) /
+            this.otherDuration;
+        return {
+          x,
+          y,
+          width: Math.max(1, beatWidth),
+          height: clampedHeight,
+          color: beat.color,
+          otherX,
+        };
+      });
+      this.otherLayouts = this.otherBeats.map((beat) => {
+        const beatWidth = (spanWidth * beat.duration) / this.otherDuration;
+        const x = hPad + (spanWidth * beat.start) / this.otherDuration;
+        const height =
+          laneHeight * Math.pow(Math.max(0, beat.median_volume), 4) * 0.92;
+        const clampedHeight = Math.max(2, height);
+        return {
+          x,
+          y: otherBaseY,
+          width: Math.max(1, beatWidth),
+          height: clampedHeight,
+          color: beat.color,
+          otherX: x,
+        };
+      });
+      this.maxDelta = this.computeMaxDelta();
+      this.connections = this.computeConnections();
+      return;
+    }
+
     const tileHeight = Math.max(120, availableHeight * 0.64);
     const connectionHeight = Math.max(80, availableHeight - tileHeight - 6);
+    const sectionY = topPad + tileHeight - vPad;
     this.layoutMetrics = {
       width: rect.width,
       height: availableHeight,
       fullHeight: rect.height,
       tileHeight,
       connectionHeight,
-      hPad: 20,
-      vPad: 12,
-      topPad: this.layoutMetrics.topPad,
-      bottomPad: this.layoutMetrics.bottomPad,
+      mainSectionY: sectionY,
+      otherSectionY: sectionY,
+      otherBaseY: sectionY,
+      laneHeight: tileHeight - vPad,
+      arcBandHeight: connectionHeight,
+      hPad,
+      vPad,
+      topPad,
+      bottomPad,
     };
-    const { width, hPad, vPad, topPad } = this.layoutMetrics;
-    const spanWidth = Math.max(1, width - hPad * 2);
-    const baseY = topPad + tileHeight - vPad;
+    const baseY = sectionY;
     this.layouts = this.beats.map((beat) => {
       const beatWidth = (spanWidth * beat.duration) / this.trackDuration;
       const x = hPad + (spanWidth * beat.start) / this.trackDuration;
@@ -221,6 +365,7 @@ export class AutocanonizerViz {
         otherX,
       };
     });
+    this.otherLayouts = [];
     this.maxDelta = this.computeMaxDelta();
     this.connections = this.computeConnections();
   }
@@ -242,12 +387,28 @@ export class AutocanonizerViz {
   }
 
   private computeConnections() {
-    const { width, tileHeight, connectionHeight, hPad, topPad, vPad } =
-      this.layoutMetrics;
+    const {
+      width,
+      tileHeight,
+      connectionHeight,
+      mainSectionY,
+      otherSectionY,
+      hPad,
+      topPad,
+      vPad,
+    } = this.layoutMetrics;
     const spanWidth = Math.max(1, width - hPad * 2);
     const maxDelta = this.maxDelta || 1;
+    const isDual = this.isDualMode();
+    const otherDuration = isDual ? this.otherDuration : this.trackDuration;
     const sectionY = topPad + tileHeight - vPad;
-    const startY = sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    // In dual mode, anchor arcs to the top edge of Song 2's section strip and
+    // curve upward into the middle band between both songs.
+    const startY = isDual
+      ? otherSectionY + CURSOR_SIZE / 2
+      : sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
+    const maxApexRise = Math.max(12, startY - maxApexY);
     return this.beats.map((beat, i) => {
       const next = this.beats[i + 1];
       if (!beat?.other || !next?.other) {
@@ -257,17 +418,28 @@ export class AutocanonizerViz {
       if (i === 0 || delta === 1) {
         return null;
       }
-      const fromX = hPad + (spanWidth * beat.other.start) / this.trackDuration;
-      const toX = hPad + (spanWidth * next.other.start) / this.trackDuration;
+      const fromX = hPad + (spanWidth * beat.other.start) / otherDuration;
+      const toX = hPad + (spanWidth * next.other.start) / otherDuration;
       const cx = (toX - fromX) / 2 + fromX;
-      let cy = (Math.abs(delta) / maxDelta) * connectionHeight * 1.35;
-      if (cy < 24) {
-        cy = 24;
+      let cy: number;
+      if (isDual) {
+        // Quadratic Bezier apex sits at 0.5 * (startY + cy), so pull cy up by
+        // twice the desired apex rise to fill the middle band cleanly.
+        const apexRise = Math.max(
+          Math.min(18, maxApexRise),
+          (Math.abs(delta) / maxDelta) * maxApexRise,
+        );
+        cy = startY - apexRise * 2;
+      } else {
+        cy = (Math.abs(delta) / maxDelta) * connectionHeight * 1.35;
+        if (cy < 24) {
+          cy = 24;
+        }
+        cy = Math.min(
+          topPad + tileHeight + connectionHeight - 8,
+          topPad + tileHeight + cy,
+        );
       }
-      cy = Math.min(
-        topPad + tileHeight + connectionHeight - 8,
-        topPad + tileHeight + cy,
-      );
       const samples = sampleQuadraticPath(
         fromX,
         startY,
@@ -282,6 +454,27 @@ export class AutocanonizerViz {
     });
   }
 
+  private drawSectionBar(
+    sections: CanonizerSections,
+    duration: number,
+    y: number,
+    hPad: number,
+    spanWidth: number,
+  ) {
+    if (!sections.length || !duration) {
+      return;
+    }
+    this.baseCtx.save();
+    for (let i = 0; i < sections.length; i += 1) {
+      const section = sections[i];
+      const sectionX = hPad + (spanWidth * section.start) / duration;
+      const sectionWidth = (spanWidth * section.duration) / duration;
+      this.baseCtx.fillStyle = sectionColor(i);
+      this.baseCtx.fillRect(sectionX, y, sectionWidth, SECTION_HEIGHT);
+    }
+    this.baseCtx.restore();
+  }
+
   private drawBase() {
     if (!this.visible) {
       return;
@@ -291,6 +484,9 @@ export class AutocanonizerViz {
       fullHeight,
       tileHeight,
       connectionHeight,
+      mainSectionY,
+      otherSectionY,
+      otherBaseY,
       hPad,
       topPad,
       vPad,
@@ -300,6 +496,7 @@ export class AutocanonizerViz {
       return;
     }
     const spanWidth = Math.max(1, width - hPad * 2);
+    const isDual = this.isDualMode();
     this.drawConnections();
     this.baseCtx.save();
     for (let i = 0; i < this.layouts.length; i += 1) {
@@ -325,20 +522,70 @@ export class AutocanonizerViz {
       this.baseCtx.stroke();
     }
     this.baseCtx.restore();
-    if (this.sections.length) {
-      const sectionY = topPad + tileHeight - vPad;
+
+    if (isDual) {
+      this.drawSectionBar(
+        this.sections,
+        this.trackDuration,
+        mainSectionY,
+        hPad,
+        spanWidth,
+      );
       this.baseCtx.save();
-      for (let i = 0; i < this.sections.length; i += 1) {
-        const section = this.sections[i];
-        const sectionX =
-          hPad + (spanWidth * section.start) / this.trackDuration;
-        const sectionWidth =
-          (spanWidth * section.duration) / this.trackDuration;
-        this.baseCtx.fillStyle = sectionColor(i);
-        this.baseCtx.fillRect(sectionX, sectionY, sectionWidth, SECTION_HEIGHT);
+      this.baseCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      this.baseCtx.beginPath();
+      this.baseCtx.moveTo(hPad, mainSectionY + SECTION_HEIGHT);
+      this.baseCtx.lineTo(width - hPad, mainSectionY + SECTION_HEIGHT);
+      this.baseCtx.moveTo(hPad, otherSectionY);
+      this.baseCtx.lineTo(width - hPad, otherSectionY);
+      this.baseCtx.stroke();
+      this.baseCtx.restore();
+
+      this.drawSectionBar(
+        this.otherSections,
+        this.otherDuration,
+        otherSectionY,
+        hPad,
+        spanWidth,
+      );
+
+      // Draw Song 2's beat blocks hanging downward from its section strip.
+      this.baseCtx.save();
+      for (let i = 0; i < this.otherLayouts.length; i += 1) {
+        const layout = this.otherLayouts[i];
+        const next = this.otherLayouts[i + 1] ?? null;
+        const override = this.otherTileColorOverrides.get(i);
+        const fillColor = override ?? layout.color;
+        const x = layout.x;
+        const w = layout.width;
+        const h = layout.height;
+        const bottomY = otherBaseY + h;
+        const nextBottom = next
+          ? Math.max(next.y + next.height, otherBaseY)
+          : bottomY;
+        const topRightX = next ? Math.max(next.x, x + w) : x + w;
+        this.baseCtx.fillStyle = fillColor;
+        this.baseCtx.strokeStyle = fillColor;
+        this.baseCtx.beginPath();
+        this.baseCtx.moveTo(x, otherBaseY);
+        this.baseCtx.lineTo(topRightX, otherBaseY);
+        this.baseCtx.lineTo(topRightX, nextBottom);
+        this.baseCtx.lineTo(x, bottomY);
+        this.baseCtx.closePath();
+        this.baseCtx.fill();
+        this.baseCtx.stroke();
       }
       this.baseCtx.restore();
+      return;
     }
+
+    this.drawSectionBar(
+      this.sections,
+      this.trackDuration,
+      topPad + tileHeight - vPad,
+      hPad,
+      spanWidth,
+    );
     if (connectionHeight > 0) {
       this.baseCtx.save();
       this.baseCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
@@ -378,7 +625,15 @@ export class AutocanonizerViz {
     if (!this.visible) {
       return;
     }
-    const { width, fullHeight, tileHeight, topPad, vPad } = this.layoutMetrics;
+    const {
+      width,
+      fullHeight,
+      tileHeight,
+      mainSectionY,
+      otherSectionY,
+      topPad,
+      vPad,
+    } = this.layoutMetrics;
     this.overlayCtx.clearRect(0, 0, width, fullHeight);
     if (!this.layouts.length || this.currentIndex < 0) {
       return;
@@ -388,12 +643,15 @@ export class AutocanonizerViz {
     if (!current || !beat?.other) {
       return;
     }
+    const isDual = this.isDualMode();
     const otherIndex = this.forcedOtherIndex ?? beat.other.which;
-    const otherLayout = this.layouts[otherIndex];
+    const otherLayout = (isDual ? this.otherLayouts : this.layouts)[otherIndex];
     const cursorWidth = CURSOR_SIZE;
     const cursorHeight = CURSOR_SIZE;
-    const sectionY = topPad + tileHeight - vPad;
-    const otherCursorCenterY = sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    const sectionY = isDual ? mainSectionY : topPad + tileHeight - vPad;
+    const otherCursorCenterY = isDual
+      ? otherSectionY + CURSOR_SIZE / 2
+      : sectionY + OTHER_CURSOR_CENTER_OFFSET;
     this.overlayCtx.save();
     this.overlayCtx.fillStyle = "rgba(79, 143, 255, 0.65)";
     this.overlayCtx.fillRect(
@@ -418,6 +676,7 @@ export class AutocanonizerViz {
       cursorWidth,
       cursorHeight,
     );
+    let resolvedOtherCursor: { x: number; y: number } | null = null;
     if (this.forcedOtherIndex !== null && otherLayout) {
       this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
       this.drawCenteredCursor(
@@ -426,10 +685,11 @@ export class AutocanonizerViz {
         cursorWidth,
         cursorHeight,
       );
-      this.lastOtherCursor = {
+      resolvedOtherCursor = {
         x: otherLayout.x,
         y: otherCursorCenterY,
       };
+      this.lastOtherCursor = resolvedOtherCursor;
     } else {
       const otherCursor = this.getAnimatedOtherCursor();
       if (otherCursor) {
@@ -440,7 +700,8 @@ export class AutocanonizerViz {
           cursorWidth,
           cursorHeight,
         );
-        this.lastOtherCursor = { x: otherCursor.x, y: otherCursor.y };
+        resolvedOtherCursor = { x: otherCursor.x, y: otherCursor.y };
+        this.lastOtherCursor = resolvedOtherCursor;
       } else if (this.lastOtherCursor) {
         if (this.otherAnimEndedAt !== null) {
           this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
@@ -450,13 +711,12 @@ export class AutocanonizerViz {
             cursorWidth,
             cursorHeight,
           );
-          this.overlayCtx.restore();
-          return;
-        }
-        if (otherLayout) {
+          resolvedOtherCursor = this.lastOtherCursor;
+        } else if (otherLayout) {
           const follow = { x: otherLayout.x, y: otherCursorCenterY };
           this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
           this.drawCenteredCursor(follow.x, follow.y, cursorWidth, cursorHeight);
+          resolvedOtherCursor = follow;
           this.lastOtherCursor = follow;
         } else {
           this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
@@ -466,6 +726,7 @@ export class AutocanonizerViz {
             cursorWidth,
             cursorHeight,
           );
+          resolvedOtherCursor = this.lastOtherCursor;
         }
       } else if (otherLayout) {
         this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
@@ -479,8 +740,18 @@ export class AutocanonizerViz {
           cursorWidth,
           cursorHeight,
         );
+        resolvedOtherCursor = fallback;
         this.lastOtherCursor = fallback;
       }
+    }
+    if (isDual && resolvedOtherCursor) {
+      // Draw a faint vertical-band pairing connector between Song 1 and Song 2 cursors.
+      this.overlayCtx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+      this.overlayCtx.lineWidth = 1.5;
+      this.overlayCtx.beginPath();
+      this.overlayCtx.moveTo(current.x, sectionY + cursorHeight);
+      this.overlayCtx.lineTo(resolvedOtherCursor.x, resolvedOtherCursor.y);
+      this.overlayCtx.stroke();
     }
     this.overlayCtx.restore();
   }
@@ -553,19 +824,28 @@ export class AutocanonizerViz {
     this.applyTileOverride(index, AUTOCANONIZER_MAIN_COLOR);
     const beat = this.beats[index];
     if (beat?.other) {
-      this.applyTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
+      if (this.isDualMode()) {
+        this.applyOtherTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
+      } else {
+        this.applyTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
+      }
     }
     this.drawOverlay();
   }
 
   setOtherIndex(index: number) {
-    if (!this.layouts[index]) {
+    const targetLayouts = this.isDualMode() ? this.otherLayouts : this.layouts;
+    if (!targetLayouts[index]) {
       return;
     }
     this.forcedOtherIndex = index;
     this.otherAnim = null;
     this.otherAnimEndedAt = null;
-    this.applyTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
+    if (this.isDualMode()) {
+      this.applyOtherTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
+    } else {
+      this.applyTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
+    }
     this.drawOverlay();
   }
 
@@ -577,6 +857,17 @@ export class AutocanonizerViz {
       return;
     }
     this.tileColorOverrides.set(index, color);
+    this.drawBase();
+  }
+
+  private applyOtherTileOverride(index: number, color: string) {
+    if (!this.otherLayouts[index]) {
+      return;
+    }
+    if (this.otherTileColorOverrides.get(index) === color) {
+      return;
+    }
+    this.otherTileColorOverrides.set(index, color);
     this.drawBase();
   }
 
@@ -596,7 +887,40 @@ export class AutocanonizerViz {
         y <= layout.y + layout.height
       ) {
         this.onSelect(i);
-        break;
+        return;
+      }
+    }
+    if (!this.isDualMode()) {
+      return;
+    }
+    // Clicking a beat on Song 2's upside-down lane jumps Song 1 to the beat
+    // paired closest to that Song 2 beat.
+    for (let j = 0; j < this.otherLayouts.length; j += 1) {
+      const layout = this.otherLayouts[j];
+      if (
+        x >= layout.x &&
+        x <= layout.x + layout.width &&
+        y >= layout.y &&
+        y <= layout.y + layout.height
+      ) {
+        let bestMainIndex = 0;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < this.beats.length; i += 1) {
+          const pairedWhich = this.beats[i]?.other?.which;
+          if (pairedWhich === undefined) {
+            continue;
+          }
+          const dist = Math.abs(pairedWhich - j);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestMainIndex = i;
+            if (dist === 0) {
+              break;
+            }
+          }
+        }
+        this.onSelect(bestMainIndex);
+        return;
       }
     }
   };

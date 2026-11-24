@@ -13,6 +13,7 @@ export {
   openExtras,
   openInfo,
   openTuning,
+  setAutocanonizerStreamGains,
   setAutocanonizerStreamPans,
   setMasterVolume,
   syncVolumeUI,
@@ -68,13 +69,20 @@ export {
   maybePrepareWubMachine,
 } from "./wubmachine";
 export { releaseWakeLock, requestWakeLock } from "./wake-lock";
+export { syncPredictedJumps } from "./branch-lookahead";
 export {
   DEFAULT_MIX_TRACK_GAIN_PCT,
+  MAX_AUTOCANONIZER_MIX_TRACKS,
   MAX_MIX_TRACK_GAIN_PCT,
   MIN_MIX_TRACK_GAIN_PCT,
   clearCachedMultiTrackSources,
+  disableAutocanonizerMix,
   disableMultiTrackMix,
+  loadAutocanonizerMix,
   loadMultiTrackMix,
+  setAutocanonizerMixAlignment,
+  setAutocanonizerSongGainPct,
+  swapAutocanonizerMixSongs,
   setCoverSyncEnabled,
   setCrossTrackOnly,
   setMixTrackGainPct,

@@ -1107,4 +1107,147 @@ describe("JukeboxViz", () => {
       expect(fills).toEqual(["#ffd46a"]);
     });
   });
+
+  describe("predicted jump lookahead", () => {
+    function mountLookaheadViz() {
+      const rafCallbacks: Array<{ id: number; cb: FrameRequestCallback }> = [];
+      let nextRafId = 1;
+      const cancelAnimationFrame = vi.fn();
+      (globalThis as any).window.requestAnimationFrame = vi.fn(
+        (cb: FrameRequestCallback) => {
+          const id = nextRafId;
+          nextRafId += 1;
+          rafCallbacks.push({ id, cb });
+          return id;
+        },
+      );
+      (globalThis as any).window.cancelAnimationFrame = cancelAnimationFrame;
+
+      const viz = new JukeboxViz(createContainer());
+      const beats = [0, 1, 2, 3].map((which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [],
+      }));
+      viz.setData({
+        beats,
+        beatVisits: [0, 0, 0, 0],
+        beatColors: ["#111", "#222", "#333", "#444"],
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      const ctx = canvases[0].getContext("2d") as unknown as {
+        stroke: ReturnType<typeof vi.fn>;
+        arc: ReturnType<typeof vi.fn>;
+        clearRect: ReturnType<typeof vi.fn>;
+        lineWidth: number;
+        createLinearGradient?: ReturnType<typeof vi.fn>;
+        setLineDash?: ReturnType<typeof vi.fn>;
+      };
+      ctx.stroke.mockClear();
+      ctx.arc.mockClear();
+      ctx.clearRect.mockClear();
+      return { viz, ctx, rafCallbacks, cancelAnimationFrame };
+    }
+
+    it("draws predicted jumps even when stopped and skips identical updates", () => {
+      const { viz, ctx, rafCallbacks, cancelAnimationFrame } =
+        mountLookaheadViz();
+      const jumps = [
+        { fromIndex: 0, toIndex: 2, edgeId: 10 },
+        { fromIndex: 2, toIndex: 1, edgeId: 11 },
+      ];
+
+      viz.setPredictedJumps(jumps);
+      expect(ctx.stroke).toHaveBeenCalledTimes(4);
+      expect(ctx.arc).toHaveBeenCalledTimes(4);
+      expect(rafCallbacks).toHaveLength(1);
+
+      // Equal predictions do not clear/redraw or restart the animation loop.
+      viz.setPredictedJumps(jumps.map((j) => ({ ...j })));
+      expect(ctx.stroke).toHaveBeenCalledTimes(4);
+      expect(rafCallbacks).toHaveLength(1);
+
+      viz.setPredictedJumps([]);
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    });
+
+    it("rehydrates predicted jumps on layout switches and cancels animation on hide/destroy", () => {
+      const { viz, cancelAnimationFrame } = mountLookaheadViz();
+      const jumps = [{ fromIndex: 0, toIndex: 3, edgeId: 7 }];
+
+      viz.setPredictedJumps(jumps);
+      viz.setActiveIndex(1);
+      expect((viz as any).activeViz.predictedJumps).toEqual(jumps);
+
+      viz.setVisible(false);
+      expect(cancelAnimationFrame).toHaveBeenCalled();
+
+      viz.setVisible(true);
+      viz.destroy();
+      expect(cancelAnimationFrame.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("assigns ROYGBIV hues per branch rank with uniform width and alpha across ranks", () => {
+      const { viz, ctx } = mountLookaheadViz();
+      const addColorStop = vi.fn();
+      ctx.createLinearGradient = vi.fn(() => ({ addColorStop }) as any);
+      ctx.setLineDash = vi.fn();
+      const lineWidths: number[] = [];
+      ctx.stroke.mockImplementation(() => {
+        lineWidths.push(ctx.lineWidth);
+      });
+
+      viz.setPredictedJumps([
+        { fromIndex: 0, toIndex: 2, edgeId: 5 },
+        { fromIndex: 2, toIndex: 1, edgeId: 6 },
+        { fromIndex: 1, toIndex: 3, edgeId: 7 },
+      ]);
+
+      expect(ctx.createLinearGradient).toHaveBeenCalledTimes(9);
+      expect(addColorStop).toHaveBeenCalledTimes(45);
+      expect(ctx.setLineDash).toHaveBeenCalledTimes(6);
+      expect(ctx.setLineDash.mock.calls.at(-1)?.[0]).toEqual([]);
+      expect(ctx.stroke).toHaveBeenCalledTimes(9);
+
+      // Drawn back-to-front: rank 2 (Yellow=50) -> rank 1 (Orange=28) -> rank 0 (Red=4).
+      const stopColors = addColorStop.mock.calls.map(([, color]) => String(color));
+      expect(stopColors[0]).toMatch(/^hsla\(50,/);
+      expect(stopColors[15]).toMatch(/^hsla\(28,/);
+      expect(stopColors[30]).toMatch(/^hsla\(4,/);
+
+      // Verify no width or opacity falloff between 3rd branch (rank 2) and 1st branch (rank 0).
+      expect(lineWidths.slice(0, 3)).toEqual(lineWidths.slice(6, 9));
+      const alphaAt = (idx: number) =>
+        stopColors[idx].match(/,\s*([^,]+)\)$/)?.[1];
+      expect(alphaAt(0)).toBe(alphaAt(30));
+      expect(alphaAt(5)).toBe(alphaAt(35));
+      expect(alphaAt(10)).toBe(alphaAt(40));
+    });
+
+    it("preserves each branch color via sequenceIndex across sliding updates and wraps after 8", () => {
+      const { viz, ctx } = mountLookaheadViz();
+      const addColorStop = vi.fn();
+      ctx.createLinearGradient = vi.fn(() => ({ addColorStop }) as any);
+      ctx.setLineDash = vi.fn();
+
+      // Simulate after 1st (Red) jump completes: upcoming branches have sequenceIndex 1, 2, 3
+      // and wrap around at 8 back to Red (4).
+      viz.setPredictedJumps([
+        { fromIndex: 0, toIndex: 2, edgeId: 6, sequenceIndex: 1 },
+        { fromIndex: 2, toIndex: 1, edgeId: 7, sequenceIndex: 2 },
+        { fromIndex: 1, toIndex: 3, edgeId: 8, sequenceIndex: 8 },
+      ]);
+
+      const stopColors = addColorStop.mock.calls.map(([, color]) => String(color));
+      // Drawn back-to-front: sequenceIndex 8 (Red=4) -> sequenceIndex 2 (Yellow=50) -> sequenceIndex 1 (Orange=28).
+      expect(stopColors[0]).toMatch(/^hsla\(4,/);
+      expect(stopColors[15]).toMatch(/^hsla\(50,/);
+      expect(stopColors[30]).toMatch(/^hsla\(28,/);
+    });
+  });
 });

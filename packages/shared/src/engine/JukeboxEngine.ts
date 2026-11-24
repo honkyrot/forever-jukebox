@@ -6,7 +6,12 @@ import {
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
   selectExistingAnchorSource,
 } from "./graph";
-import { createRng, RandomMode } from "./random";
+import {
+  CloneableRng,
+  createCloneableRng,
+  generateRandomSeed,
+  RandomMode,
+} from "./random";
 import {
   backgroundClearTimeout,
   backgroundSetTimeout,
@@ -20,7 +25,7 @@ import {
   isActiveUserAnchorEdge,
   putBackPinnedEdge,
   createCustomAnchorEdge,
-  selectNextBeatIndex,
+  selectNextBeatWithEdge,
   UserAnchorSelection,
 } from "./selection";
 import {
@@ -28,6 +33,7 @@ import {
   JukeboxConfig,
   JukeboxGraphState,
   JukeboxState,
+  PredictedJump,
   QuantumBase,
   TrackAnalysis,
 } from "./types";
@@ -75,6 +81,7 @@ type PendingAdvance = {
   chosenIndex: number;
   shouldJump: boolean;
   selectedBranch: boolean;
+  selectedEdgeId?: number | null;
   shouldStop?: boolean;
   stopScheduled?: boolean;
   targetTime: number | null;
@@ -145,7 +152,16 @@ export class JukeboxEngine {
   private insertedUserAnchorEdge: Edge | null = null;
   // Lives only in its source beat's neighbors, never in allEdges, so deletion keys skip it.
   private customAnchorEdge: Edge | null = null;
-  private readonly rng: () => number;
+  private readonly randomMode: RandomMode;
+  private rngState: CloneableRng;
+  private readonly rng: () => number = () => this.rngState.next();
+  private lookaheadVersion = 0;
+  private completedBranchJumps = 0;
+  private lookaheadCache: {
+    version: number;
+    count: number;
+    jumps: PredictedJump[];
+  } | null = null;
   private listener: UpdateListener | null = null;
   private readonly branchState: BranchState = {
     curRandomBranchChance: 0,
@@ -155,12 +171,35 @@ export class JukeboxEngine {
   constructor(player: JukeboxPlayer, options: JukeboxEngineOptions = {}) {
     this.player = player;
     this.config = { ...DEFAULT_JUKEBOX_CONFIG, ...options.config };
-    this.rng = createRng(options.randomMode ?? "random", options.seed);
+    this.randomMode = options.randomMode ?? "random";
+    const initialSeed =
+      this.randomMode === "random" ? generateRandomSeed() : options.seed;
+    this.rngState = createCloneableRng(initialSeed);
     this.branchState.curRandomBranchChance = this.config.minRandomBranchChance;
   }
 
   onUpdate(listener: UpdateListener) {
     this.listener = listener;
+  }
+
+  /**
+   * Replaces the internal PRNG with a fresh random seed and invalidates lookahead predictions.
+   */
+  rerollRandomSeed(): void {
+    this.rngState = createCloneableRng(generateRandomSeed());
+    this.completedBranchJumps = 0;
+    this.invalidateLookahead();
+  }
+
+  private maybeRerollRandomSeed(): void {
+    if (this.randomMode === "random") {
+      this.rerollRandomSeed();
+    }
+  }
+
+  private invalidateLookahead(): void {
+    this.lookaheadVersion += 1;
+    this.lookaheadCache = null;
   }
 
   seekToBeat(index: number) {
@@ -182,7 +221,9 @@ export class JukeboxEngine {
     this.lastJumpFromIndex = null;
     this.lastJumpToIndex = null;
     this.lastJumpWasBranch = false;
+    this.completedBranchJumps = 0;
     this.clearPendingAdvance(true);
+    this.invalidateLookahead();
   }
 
   loadAnalysis(data: unknown) {
@@ -204,6 +245,7 @@ export class JukeboxEngine {
     this.beatColors = computeBeatColors(this.beats, this.analysis.segments);
     this.resetState();
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
   }
 
   getGraphState(): JukeboxGraphState | null {
@@ -216,6 +258,8 @@ export class JukeboxEngine {
 
   updateConfig(partial: Partial<JukeboxConfig>) {
     this.config = { ...this.config, ...partial };
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
   }
 
   setUserAnchorEdge(edge: Edge | null) {
@@ -225,6 +269,8 @@ export class JukeboxEngine {
     this.insertUserAnchorEdge();
     this.clearPendingAdvance(true);
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
   }
 
   // Returns false and changes nothing when the pair is not a valid backward loop.
@@ -240,6 +286,8 @@ export class JukeboxEngine {
     this.injectCustomAnchorEdge();
     this.clearPendingAdvance(true);
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
     return true;
   }
 
@@ -250,6 +298,8 @@ export class JukeboxEngine {
     this.removeCustomAnchorEdge();
     this.clearPendingAdvance(true);
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
   }
 
   getCustomAnchor(): CustomAnchor | null {
@@ -308,6 +358,140 @@ export class JukeboxEngine {
     this.injectCustomAnchorEdge();
     this.insertUserAnchorEdge();
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
+  }
+
+  /**
+   * Simulates upcoming playback decisions without mutating live engine or graph state
+   * and returns up to `count` predicted branch jumps in chronological order.
+   */
+  getPredictedJumps(count: number): PredictedJump[] {
+    const limit = Math.max(0, Math.floor(count));
+    if (
+      limit === 0 ||
+      !this.analysis ||
+      !this.graph ||
+      this.beats.length === 0 ||
+      this.bringItHomeMode ||
+      this.freezeCurrentBeat
+    ) {
+      return [];
+    }
+    if (
+      this.lookaheadCache &&
+      this.lookaheadCache.version === this.lookaheadVersion &&
+      this.lookaheadCache.count === limit
+    ) {
+      return this.lookaheadCache.jumps.slice();
+    }
+
+    const predicted: PredictedJump[] = [];
+    let simBeatIndex: number;
+
+    if (this.pendingAdvance) {
+      if (this.pendingAdvance.shouldStop) {
+        this.lookaheadCache = {
+          version: this.lookaheadVersion,
+          count: limit,
+          jumps: [],
+        };
+        return [];
+      }
+      if (
+        this.pendingAdvance.selectedBranch &&
+        this.pendingAdvance.jumpFromIndex !== null
+      ) {
+        predicted.push({
+          fromIndex: this.pendingAdvance.jumpFromIndex,
+          toIndex: this.pendingAdvance.chosenIndex,
+          edgeId: this.pendingAdvance.selectedEdgeId ?? null,
+          sequenceIndex: this.completedBranchJumps + predicted.length,
+        });
+      }
+      simBeatIndex = this.pendingAdvance.chosenIndex;
+    } else if (this.currentBeatIndex >= 0) {
+      simBeatIndex = this.currentBeatIndex;
+    } else {
+      // Before playback starts, beat 0 plays first and the first branch check runs on leaving beat 0.
+      simBeatIndex = 0;
+    }
+
+    const simRng = this.rngState.clone();
+    const simBranchState: BranchState = {
+      curRandomBranchChance: this.curRandomBranchChance,
+      lastDestBySource: this.branchState.lastDestBySource
+        ? new Map(this.branchState.lastDestBySource)
+        : null,
+    };
+    const userAnchor = this.getActiveUserAnchorSelection();
+    // Clone neighbor lists copy-on-write so neighbor rotation during simulation never touches the live graph.
+    const virtualNeighbors = new Map<number, Edge[]>();
+    const tracks = this.analysis.tracks;
+    const isMultiTrack = Boolean(tracks && tracks.length >= 2);
+    const beatsCount = this.beats.length;
+    const maxSteps = Math.max(beatsCount * 8, 2000);
+
+    let steps = 0;
+    while (predicted.length < limit && steps < maxSteps) {
+      steps += 1;
+      const currentBeat = this.beats[simBeatIndex];
+      if (!currentBeat) {
+        break;
+      }
+      const currentTrack = isMultiTrack
+        ? tracks?.[currentBeat.trackIndex ?? 0]
+        : undefined;
+      const trackStartIndex = currentTrack ? currentTrack.startBeatIndex : 0;
+      const trackBeatCount =
+        currentTrack && currentTrack.beatCount > 0
+          ? currentTrack.beatCount
+          : beatsCount;
+      const rawSeedIndex = simBeatIndex + this.playVelocity;
+      const seedIndex = currentTrack
+        ? trackStartIndex +
+          this.wrapBeatIndex(rawSeedIndex - trackStartIndex, trackBeatCount)
+        : this.wrapBeatIndex(rawSeedIndex, beatsCount);
+      const seed = this.beats[seedIndex];
+      if (!seed) {
+        break;
+      }
+
+      let neighbors = virtualNeighbors.get(seed.which);
+      if (!neighbors) {
+        neighbors = seed.neighbors.slice();
+        virtualNeighbors.set(seed.which, neighbors);
+      }
+
+      const selection = selectNextBeatWithEdge(
+        seed,
+        this.graph,
+        this.config,
+        simRng.next,
+        simBranchState,
+        this.forceBranch,
+        userAnchor,
+        neighbors,
+      );
+      if (selection.jumped) {
+        predicted.push({
+          fromIndex: seed.which,
+          toIndex: selection.index,
+          edgeId: selection.edgeId,
+          sequenceIndex: this.completedBranchJumps + predicted.length,
+        });
+        simBeatIndex = selection.index;
+      } else {
+        simBeatIndex = seedIndex;
+      }
+    }
+
+    this.lookaheadCache = {
+      version: this.lookaheadVersion,
+      count: limit,
+      jumps: predicted,
+    };
+    return predicted.slice();
   }
 
   refreshAnchorJump() {
@@ -418,6 +602,7 @@ export class JukeboxEngine {
     this.lastJumpToIndex = null;
     this.lastJumpWasBranch = false;
     this.clearPendingAdvance(true);
+    this.invalidateLookahead();
   }
 
   stopJukebox() {
@@ -449,6 +634,8 @@ export class JukeboxEngine {
     this.clearPendingAdvance(true);
     this.clearEdgeDeletionFlags();
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
   }
 
   deleteEdge(edge: { src: QuantumBase; dest: QuantumBase; deleted: boolean }) {
@@ -462,10 +649,17 @@ export class JukeboxEngine {
     this.clearPendingAdvance(true);
     this.applyDeletedEdges();
     this.syncAnchorJump();
+    this.maybeRerollRandomSeed();
+    this.invalidateLookahead();
   }
 
   setForceBranch(enabled: boolean) {
-    this.forceBranch = this.bringItHomeMode ? false : enabled;
+    const next = this.bringItHomeMode ? false : enabled;
+    if (this.forceBranch === next) {
+      return;
+    }
+    this.forceBranch = next;
+    this.invalidateLookahead();
   }
 
   setBringItHomeMode(enabled: boolean) {
@@ -477,6 +671,7 @@ export class JukeboxEngine {
       this.forceBranch = false;
     }
     this.refreshPendingAdvance();
+    this.invalidateLookahead();
   }
 
   getPlayVelocity(): number {
@@ -500,6 +695,7 @@ export class JukeboxEngine {
     }
     this.playVelocity = nextVelocity;
     this.refreshPendingAdvance();
+    this.invalidateLookahead();
   }
 
   setFreezeCurrentBeat(enabled: boolean) {
@@ -508,6 +704,7 @@ export class JukeboxEngine {
     }
     this.freezeCurrentBeat = enabled;
     this.refreshPendingAdvance();
+    this.invalidateLookahead();
   }
 
   private applyDeletedEdges() {
@@ -726,7 +923,9 @@ export class JukeboxEngine {
     this.lastJumpFromIndex = null;
     this.lastJumpToIndex = null;
     this.lastJumpWasBranch = false;
+    this.completedBranchJumps = 0;
     this.clearPendingAdvance(true);
+    this.invalidateLookahead();
   }
 
   private resetPlaybackControls() {
@@ -745,6 +944,7 @@ export class JukeboxEngine {
     ) {
       this.preparePendingAdvance(this.nextAudioTime);
     }
+    this.invalidateLookahead();
   }
 
   private tick() {
@@ -823,6 +1023,7 @@ export class JukeboxEngine {
       return;
     }
     this.pendingAdvance = this.createPendingAdvance(boundaryAudioTime, true);
+    this.invalidateLookahead();
   }
 
   private createPendingAdvance(
@@ -837,6 +1038,7 @@ export class JukeboxEngine {
     let chosenIndex = 0;
     let shouldJump = false;
     let selectedBranch = false;
+    let selectedEdgeId: number | null = null;
     let jumpFromIndex: number | null = null;
     let sourceBoundaryTime: number | null = null;
     let sequentialIndex = 0;
@@ -901,7 +1103,7 @@ export class JukeboxEngine {
             };
           }
           this.branchState.curRandomBranchChance = this.curRandomBranchChance;
-          const selection = selectNextBeatIndex(
+          const selection = selectNextBeatWithEdge(
             seed,
             this.graph,
             this.config,
@@ -914,6 +1116,7 @@ export class JukeboxEngine {
           chosenIndex = selection.jumped ? selection.index : seedIndex;
           if (selection.jumped) {
             selectedBranch = true;
+            selectedEdgeId = selection.edgeId;
             jumpFromIndex = seed.which;
           }
         }
@@ -973,6 +1176,7 @@ export class JukeboxEngine {
       chosenIndex,
       shouldJump,
       selectedBranch,
+      selectedEdgeId,
       targetTime,
       jumpFromIndex,
       sourceBoundaryTime,
@@ -988,6 +1192,7 @@ export class JukeboxEngine {
     this.lastJumpFromIndex = null;
     this.lastJumpToIndex = null;
     this.lastJumpWasBranch = false;
+    this.invalidateLookahead();
     if (!advance.stopScheduled) {
       this.player.stop();
     }
@@ -1001,6 +1206,9 @@ export class JukeboxEngine {
       this.lastJumpFromIndex = advance.jumpFromIndex;
       this.lastJumpToIndex = advance.chosenIndex;
       this.lastJumpWasBranch = advance.selectedBranch;
+      if (advance.selectedBranch) {
+        this.completedBranchJumps += 1;
+      }
     } else {
       this.lastJumped = false;
       this.lastJumpTime = null;
@@ -1015,6 +1223,7 @@ export class JukeboxEngine {
       advance.boundaryAudioTime + targetBeat.duration / playbackRate;
     this.beatsPlayed += 1;
     this.recordBeatVisit(advance.chosenIndex);
+    this.invalidateLookahead();
   }
 
   private recordBeatVisit(index: number) {
@@ -1034,6 +1243,7 @@ export class JukeboxEngine {
     this.beatsPlayed = Math.max(this.beatsPlayed, beatIndex + 1);
     this.recordBeatVisit(beatIndex);
     this.nextAudioTime = audioTime + remainingInBeat / this.getPlaybackRate();
+    this.invalidateLookahead();
   }
 
   private ensureSyncedToPlaybackPosition() {
@@ -1073,6 +1283,7 @@ export class JukeboxEngine {
     this.lastJumpWasBranch = false;
     this.branchState.lastDestBySource = null;
     this.clearPendingAdvance(true);
+    this.invalidateLookahead();
   }
 
   // The audio clock can advance between reads; reading it after the track
@@ -1098,6 +1309,10 @@ export class JukeboxEngine {
     ) {
       return;
     }
+    if (!this.lastJumpWasBranch) {
+      this.completedBranchJumps += 1;
+      this.invalidateLookahead();
+    }
     this.lastJumped = true;
     this.lastJumpTime = event.targetTime;
     this.lastJumpFromIndex = sourceIndex;
@@ -1115,6 +1330,7 @@ export class JukeboxEngine {
       }
     }
     this.pendingAdvance = null;
+    this.invalidateLookahead();
   }
 
   private wrapBeatIndex(index: number, beatsCount: number): number {

@@ -45,7 +45,7 @@ import {
 } from "../favorites-actions";
 import { addToPlaylist } from "../playlist-actions";
 import { trackEvent } from "../analytics";
-import { loadMultiTrackMix } from "../playback";
+import { loadAutocanonizerMix, loadMultiTrackMix } from "../playback";
 import { getAppContext } from "../runtime";
 import { selectTrack } from "../track-select";
 import i18n from "../i18n";
@@ -1217,6 +1217,12 @@ export function TopTracksPanel() {
   const playlistCount = useAppStore((s) => s.playlist.tracks.length);
   const playlistAddSticky = useAppStore((s) => s.playlistAddSticky);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const playMode = useAppStore((s) => s.playMode);
+  const autocanonizerMixEnabled = useAppStore(
+    (s) => s.autocanonizerMixEnabled,
+  );
+  const isCanonizer = playMode === "autocanonizer";
+  const activeMix = isCanonizer ? autocanonizerMixEnabled : multiTrackEnabled;
   const adminMode = isAdminMode();
   const loadList = useCallback(
     async (tabId: TopSongsListTabId, force = false) => {
@@ -1363,7 +1369,7 @@ export function TopTracksPanel() {
         <FavoritesSyncControls
           visible={subtab === "favorites" && allowSync}
         />
-        {playlistAddSticky && playlistCount >= 2 && !multiTrackEnabled ? (
+        {playlistAddSticky && playlistCount >= 2 && !activeMix ? (
           <button
             type="button"
             id="start-mix-from-tracks"
@@ -1371,10 +1377,12 @@ export function TopTracksPanel() {
             onClick={() => {
               useAppStore.setState({ playlistAddSticky: false });
               useAppStore.getState().selectTab("play");
-              void loadMultiTrackMix(getAppContext());
+              void (isCanonizer
+                ? loadAutocanonizerMix(getAppContext())
+                : loadMultiTrackMix(getAppContext()));
             }}
           >
-            {`Mix Songs (${playlistCount})`}
+            {isCanonizer ? "Mix 2 Songs" : `Mix Songs (${playlistCount})`}
           </button>
         ) : null}
         {subtab === "search" ? (

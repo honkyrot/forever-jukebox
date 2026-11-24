@@ -98,6 +98,18 @@ export function setAutocanonizerStreamPans(
   context.autocanonizer?.setStreamPans(mainPan / 100, otherPan / 100);
 }
 
+/**
+ * Forwards percentage-based stream gain trims (0–200%) to the
+ * AutocanonizerController as linear multipliers.
+ */
+export function setAutocanonizerStreamGains(
+  context: AppContext,
+  mainGainPct: number,
+  otherGainPct: number,
+) {
+  context.autocanonizer?.setStreamGains?.(mainGainPct / 100, otherGainPct / 100);
+}
+
 function openTuningTab(context: AppContext, tab: "tuning" | "extras") {
   syncVolumeUI(context);
   const state = useAppStore.getState();
