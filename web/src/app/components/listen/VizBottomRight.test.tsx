@@ -31,6 +31,7 @@ vi.mock("../../runtime", () => ({
 
 describe("VizBottomRight", () => {
   beforeEach(() => {
+    localStorage.clear();
     act(() => {
       useAppStore.setState({
         playlist: { tracks: [], currentIndex: -1 },
@@ -158,7 +159,7 @@ describe("VizBottomRight", () => {
       0,
     );
     expect(localStorage.getItem("audioBalance")).toBe(
-      JSON.stringify({ blue: -40, green: 0 }),
+      JSON.stringify({ blue: -40, green: 0, pink: 0, gold: 0 }),
     );
     expect(slider.value).toBe("-40");
     expect(
@@ -315,12 +316,18 @@ describe("VizBottomRight", () => {
       45,
       30,
     );
+    expect(localStorage.getItem("audioBalance")).toBe(
+      JSON.stringify({ blue: -20, green: 20, pink: 45, gold: 30 }),
+    );
 
     await userEvent.click(document.getElementById("autocanonizer-balance-reset")!);
     expect(h.setAutocanonizerQuadStreamPans).toHaveBeenCalledWith(
       expect.anything(),
       0,
       0,
+    );
+    expect(localStorage.getItem("audioBalance")).toBe(
+      JSON.stringify({ blue: 0, green: 0, pink: 0, gold: 0 }),
     );
     expect(h.setAutocanonizerQuadSongGainPct).toHaveBeenCalledWith(
       expect.anything(),

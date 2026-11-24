@@ -99,8 +99,12 @@ export function initRuntime(): void {
   const branchLookaheadEnabled = resolveStoredBranchLookaheadEnabled();
   const branchLookaheadCount = resolveStoredBranchLookaheadCount();
   const branchStatsEnabled = resolveStoredBranchStatsEnabled();
-  const { mainPan: autocanonizerMainPan, otherPan: autocanonizerOtherPan } =
-    resolveStoredAudioBalance();
+  const {
+    mainPan: autocanonizerMainPan,
+    otherPan: autocanonizerOtherPan,
+    pinkPan: autocanonizerPinkPan,
+    goldPan: autocanonizerGoldPan,
+  } = resolveStoredAudioBalance();
   const defaultConfig = engine.getConfig();
   // The store holds all app state (defaults live in store.ts); hydrate the
   // persisted bits here, pre-render.
@@ -117,6 +121,8 @@ export function initRuntime(): void {
     volumePct,
     autocanonizerMainPan,
     autocanonizerOtherPan,
+    autocanonizerPinkPan,
+    autocanonizerGoldPan,
   });
   // Controllers need their DOM nodes, which exist only after <VizContainer>
   // renders; attachViz (below) constructs them and fills these slots before
@@ -204,11 +210,19 @@ export function initRuntime(): void {
     context.jukebox = jukebox;
     autocanonizer.setVolume(player.getVolume());
     context.wubmachine.setVolume(player.getVolume());
-    const { autocanonizerMainPan, autocanonizerOtherPan } =
-      useAppStore.getState();
+    const {
+      autocanonizerMainPan,
+      autocanonizerOtherPan,
+      autocanonizerPinkPan,
+      autocanonizerGoldPan,
+    } = useAppStore.getState();
     autocanonizer.setStreamPans(
       autocanonizerMainPan / 100,
       autocanonizerOtherPan / 100,
+    );
+    autocanonizer.setQuadStreamPans(
+      autocanonizerPinkPan / 100,
+      autocanonizerGoldPan / 100,
     );
     jukebox.setAnchorHighlightEnabled(useAppStore.getState().highlightAnchorBranch);
     jukebox.setActiveIndex(DEFAULT_VISUALIZATION_INDEX);

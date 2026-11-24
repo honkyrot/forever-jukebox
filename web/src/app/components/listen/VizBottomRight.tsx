@@ -182,13 +182,14 @@ export function VizBottomRight() {
       autocanonizerOtherPan: nextOther,
     });
     setAutocanonizerStreamPans(getAppContext(), nextMain, nextOther);
-    storeAudioBalance(nextMain, nextOther);
+    storeAudioBalance(nextMain, nextOther, pinkPan, goldPan);
   };
 
   const handleQuadPanChange = (stream: "pink" | "gold", pan: number) => {
     const nextPink = stream === "pink" ? pan : pinkPan;
     const nextGold = stream === "gold" ? pan : goldPan;
     setAutocanonizerQuadStreamPans(getAppContext(), nextPink, nextGold);
+    storeAudioBalance(mainPan, otherPan, nextPink, nextGold);
   };
 
   const handleResetBalance = () => {
@@ -198,7 +199,7 @@ export function VizBottomRight() {
       autocanonizerOtherPan: 0,
     });
     setAutocanonizerStreamPans(ctx, 0, 0);
-    storeAudioBalance(0, 0);
+    storeAudioBalance(0, 0, isQuadMix ? 0 : pinkPan, isQuadMix ? 0 : goldPan);
     setAutocanonizerSongGainPct(ctx, "main", DEFAULT_MIX_TRACK_GAIN_PCT);
     setAutocanonizerSongGainPct(ctx, "other", DEFAULT_MIX_TRACK_GAIN_PCT);
     if (isQuadMix) {
