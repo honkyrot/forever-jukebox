@@ -88,6 +88,8 @@ export function stopPlayback(context: AppContext) {
     beatsPlayedText: "0",
     autocanonizerMainSeconds: 0,
     autocanonizerOtherSeconds: 0,
+    autocanonizerPinkSeconds: 0,
+    autocanonizerGoldSeconds: 0,
     wubMachineSeconds: 0,
   });
   jukebox?.reset();
@@ -173,6 +175,8 @@ export function startJukeboxPlayback(context: AppContext, resetSession: boolean)
     useAppStore.setState({
       autocanonizerMainSeconds: 0,
       autocanonizerOtherSeconds: 0,
+      autocanonizerPinkSeconds: 0,
+      autocanonizerGoldSeconds: 0,
     });
     jukebox.reset();
     pulseVizStats();

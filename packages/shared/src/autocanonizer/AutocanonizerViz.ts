@@ -3,6 +3,10 @@ import type { QuantumBase } from "../engine/types";
 export type CanonizerBeat = QuantumBase & {
   other: CanonizerBeat;
   otherGain: number;
+  pink?: CanonizerBeat;
+  pinkGain?: number;
+  gold?: CanonizerBeat;
+  goldGain?: number;
   section: number;
   volume: number;
   median_volume: number;
@@ -37,6 +41,8 @@ const CONNECTION_LINE_WIDTH = 3;
 
 export const AUTOCANONIZER_MAIN_COLOR = "#4F8FFF";
 export const AUTOCANONIZER_OTHER_COLOR = "#10DF00";
+export const AUTOCANONIZER_PINK_COLOR = "#FF4FA3";
+export const AUTOCANONIZER_GOLD_COLOR = "#FFB800";
 
 export class AutocanonizerViz {
   private readonly container: HTMLElement;
@@ -52,11 +58,13 @@ export class AutocanonizerViz {
   private otherSections: CanonizerSections = [];
   private otherDuration = 0;
   private otherLayouts: BeatLayout[] = [];
+  private quadMode = false;
   private visible = false;
   private currentIndex = -1;
   private maxDelta = 1;
   private onSelect: ((index: number) => void) | null = null;
   private connections: Array<ConnectionPath | null> = [];
+  private goldConnections: Array<ConnectionPath | null> = [];
   private readonly tileColorOverrides = new Map<number, string>();
   private readonly otherTileColorOverrides = new Map<number, string>();
   private otherAnim: {
@@ -64,9 +72,16 @@ export class AutocanonizerViz {
     start: number;
     duration: number;
   } | null = null;
+  private goldAnim: {
+    path: ConnectionPath;
+    start: number;
+    duration: number;
+  } | null = null;
   private forcedOtherIndex: number | null = null;
   private lastOtherCursor: { x: number; y: number } | null = null;
+  private lastGoldCursor: { x: number; y: number } | null = null;
   private otherAnimEndedAt: number | null = null;
+  private goldAnimEndedAt: number | null = null;
   private rafId: number | null = null;
 
   private layoutMetrics = {
@@ -130,12 +145,17 @@ export class AutocanonizerViz {
     this.otherSections = [];
     this.otherDuration = 0;
     this.otherLayouts = [];
+    this.quadMode = false;
+    this.goldConnections = [];
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.otherAnim = null;
+    this.goldAnim = null;
     this.forcedOtherIndex = null;
     this.lastOtherCursor = null;
+    this.lastGoldCursor = null;
     this.otherAnimEndedAt = null;
+    this.goldAnimEndedAt = null;
     this.computeLayout();
     this.drawBase();
     this.drawOverlay();
@@ -144,7 +164,9 @@ export class AutocanonizerViz {
   /**
    * Loads two songs for mirrored dual-lane Autocanonizer mix visualization:
    * Song 1 sits upright on top and Song 2 sits upside-down below, with jump
-   * arcs routed between their section bars.
+   * arcs routed between their section bars. When `quadMode` is enabled, Song 1
+   * renders its own downward Green canon arcs while Song 2 renders upward Gold
+   * canon arcs.
    */
   setDualData(
     mainBeats: CanonizerBeat[],
@@ -153,6 +175,7 @@ export class AutocanonizerViz {
     otherBeats: CanonizerBeat[],
     otherDuration: number,
     otherSections: CanonizerSections,
+    quadMode = false,
   ) {
     this.beats = mainBeats;
     this.trackDuration = mainDuration;
@@ -160,12 +183,16 @@ export class AutocanonizerViz {
     this.otherBeats = otherBeats;
     this.otherDuration = otherDuration;
     this.otherSections = otherSections;
+    this.quadMode = quadMode;
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.otherAnim = null;
+    this.goldAnim = null;
     this.forcedOtherIndex = null;
     this.lastOtherCursor = null;
+    this.lastGoldCursor = null;
     this.otherAnimEndedAt = null;
+    this.goldAnimEndedAt = null;
     this.computeLayout();
     this.drawBase();
     this.drawOverlay();
@@ -175,8 +202,11 @@ export class AutocanonizerViz {
     this.currentIndex = -1;
     this.forcedOtherIndex = null;
     this.otherAnim = null;
+    this.goldAnim = null;
     this.lastOtherCursor = null;
+    this.lastGoldCursor = null;
     this.otherAnimEndedAt = null;
+    this.goldAnimEndedAt = null;
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.clearCanvas(this.overlayCtx);
@@ -217,6 +247,8 @@ export class AutocanonizerViz {
     this.otherBeats = [];
     this.otherSections = [];
     this.otherLayouts = [];
+    this.goldConnections = [];
+    this.quadMode = false;
   }
 
   setOnSelect(handler: ((index: number) => void) | null) {
@@ -263,7 +295,9 @@ export class AutocanonizerViz {
         120,
         availableHeight - vPad * 2 - SECTION_HEIGHT * 2,
       );
-      const laneHeight = Math.floor(contentHeight * 0.38);
+      const laneHeight = Math.floor(
+        contentHeight * (this.quadMode ? 0.34 : 0.38),
+      );
       const arcBandHeight = Math.max(36, contentHeight - laneHeight * 2);
       const mainSectionY = topPad + vPad + laneHeight;
       const otherSectionY = mainSectionY + SECTION_HEIGHT + arcBandHeight;
@@ -284,6 +318,9 @@ export class AutocanonizerViz {
         topPad,
         bottomPad,
       };
+      const otherSpanDuration = this.quadMode
+        ? this.trackDuration
+        : this.otherDuration;
       this.layouts = this.beats.map((beat) => {
         const beatWidth = (spanWidth * beat.duration) / this.trackDuration;
         const x = hPad + (spanWidth * beat.start) / this.trackDuration;
@@ -293,8 +330,7 @@ export class AutocanonizerViz {
         const y = mainSectionY - clampedHeight;
         const otherX =
           hPad +
-          (spanWidth * (beat.other ? beat.other.start : 0)) /
-            this.otherDuration;
+          (spanWidth * (beat.other ? beat.other.start : 0)) / otherSpanDuration;
         return {
           x,
           y,
@@ -321,6 +357,7 @@ export class AutocanonizerViz {
       });
       this.maxDelta = this.computeMaxDelta();
       this.connections = this.computeConnections();
+      this.goldConnections = this.quadMode ? this.computeGoldConnections() : [];
       return;
     }
 
@@ -368,17 +405,21 @@ export class AutocanonizerViz {
     this.otherLayouts = [];
     this.maxDelta = this.computeMaxDelta();
     this.connections = this.computeConnections();
+    this.goldConnections = [];
   }
 
-  private computeMaxDelta() {
+  private computeMaxDelta(
+    pickTarget: (beat: CanonizerBeat) => CanonizerBeat | undefined = (beat) =>
+      beat.other,
+  ) {
     let maxDelta = 1;
     for (let i = 0; i < this.beats.length - 1; i += 1) {
-      const current = this.beats[i];
-      const next = this.beats[i + 1];
-      if (!current?.other || !next?.other) {
+      const current = pickTarget(this.beats[i]);
+      const next = pickTarget(this.beats[i + 1]);
+      if (!current || !next) {
         continue;
       }
-      const delta = Math.abs(next.other.which - current.other.which);
+      const delta = Math.abs(next.which - current.which);
       if (delta > maxDelta) {
         maxDelta = delta;
       }
@@ -400,15 +441,24 @@ export class AutocanonizerViz {
     const spanWidth = Math.max(1, width - hPad * 2);
     const maxDelta = this.maxDelta || 1;
     const isDual = this.isDualMode();
-    const otherDuration = isDual ? this.otherDuration : this.trackDuration;
+    const isQuad = isDual && this.quadMode;
+    const otherDuration =
+      isDual && !isQuad ? this.otherDuration : this.trackDuration;
     const sectionY = topPad + tileHeight - vPad;
-    // In dual mode, anchor arcs to the top edge of Song 2's section strip and
-    // curve upward into the middle band between both songs.
-    const startY = isDual
-      ? otherSectionY + CURSOR_SIZE / 2
-      : sectionY + OTHER_CURSOR_CENTER_OFFSET;
-    const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
-    const maxApexRise = Math.max(12, startY - maxApexY);
+    // In 2-voice dual mode, arcs curve upward from Song 2's section bar.
+    // In 4-voice quad mode, `connections` represents Song 1's Green branch
+    // curving downward from Song 1's section bar into the middle channel.
+    const startY = isQuad
+      ? mainSectionY + OTHER_CURSOR_CENTER_OFFSET
+      : isDual
+        ? otherSectionY + CURSOR_SIZE / 2
+        : sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    const maxApexY = isQuad
+      ? otherSectionY - 6
+      : mainSectionY + SECTION_HEIGHT + 6;
+    const maxApexSpan = isQuad
+      ? Math.max(12, maxApexY - startY)
+      : Math.max(12, startY - maxApexY);
     return this.beats.map((beat, i) => {
       const next = this.beats[i + 1];
       if (!beat?.other || !next?.other) {
@@ -422,12 +472,18 @@ export class AutocanonizerViz {
       const toX = hPad + (spanWidth * next.other.start) / otherDuration;
       const cx = (toX - fromX) / 2 + fromX;
       let cy: number;
-      if (isDual) {
+      if (isQuad) {
+        const apexDrop = Math.max(
+          Math.min(18, maxApexSpan),
+          (Math.abs(delta) / maxDelta) * maxApexSpan,
+        );
+        cy = startY + apexDrop * 2;
+      } else if (isDual) {
         // Quadratic Bezier apex sits at 0.5 * (startY + cy), so pull cy up by
         // twice the desired apex rise to fill the middle band cleanly.
         const apexRise = Math.max(
-          Math.min(18, maxApexRise),
-          (Math.abs(delta) / maxDelta) * maxApexRise,
+          Math.min(18, maxApexSpan),
+          (Math.abs(delta) / maxDelta) * maxApexSpan,
         );
         cy = startY - apexRise * 2;
       } else {
@@ -440,6 +496,51 @@ export class AutocanonizerViz {
           topPad + tileHeight + cy,
         );
       }
+      const samples = sampleQuadraticPath(
+        fromX,
+        startY,
+        cx,
+        cy,
+        toX,
+        startY,
+        80,
+      );
+      const totalLength = samples.length ? samples[samples.length - 1].len : 0;
+      return { fromX, toX, cx, cy, startY, samples, totalLength };
+    });
+  }
+
+  /**
+   * Computes upward connection arcs inside the shared middle channel for Song 2's
+   * Gold branch in 4-voice quad mode.
+   */
+  private computeGoldConnections(): Array<ConnectionPath | null> {
+    if (!this.isDualMode() || !this.quadMode || !this.otherDuration) {
+      return [];
+    }
+    const { width, mainSectionY, otherSectionY, hPad } = this.layoutMetrics;
+    const spanWidth = Math.max(1, width - hPad * 2);
+    const maxDelta = this.computeMaxDelta((beat) => beat.gold) || 1;
+    const startY = otherSectionY + CURSOR_SIZE / 2;
+    const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
+    const maxApexRise = Math.max(12, startY - maxApexY);
+    return this.beats.map((beat, i) => {
+      const next = this.beats[i + 1];
+      if (!beat?.gold || !next?.gold) {
+        return null;
+      }
+      const delta = next.gold.which - beat.gold.which;
+      if (i === 0 || delta === 1) {
+        return null;
+      }
+      const fromX = hPad + (spanWidth * beat.gold.start) / this.otherDuration;
+      const toX = hPad + (spanWidth * next.gold.start) / this.otherDuration;
+      const cx = (toX - fromX) / 2 + fromX;
+      const apexRise = Math.max(
+        Math.min(18, maxApexRise),
+        (Math.abs(delta) / maxDelta) * maxApexRise,
+      );
+      const cy = startY - apexRise * 2;
       const samples = sampleQuadraticPath(
         fromX,
         startY,
@@ -618,6 +719,20 @@ export class AutocanonizerViz {
       this.baseCtx.quadraticCurveTo(path.cx, path.cy, path.toX, path.startY);
       this.baseCtx.stroke();
     }
+    if (this.isDualMode() && this.quadMode) {
+      for (let i = 0; i < this.beats.length - 1; i += 1) {
+        const beat = this.beats[i];
+        const path = this.goldConnections[i];
+        if (!beat?.gold || !path) {
+          continue;
+        }
+        this.baseCtx.strokeStyle = withAlpha(beat.gold.color, 0.6);
+        this.baseCtx.beginPath();
+        this.baseCtx.moveTo(path.fromX, path.startY);
+        this.baseCtx.quadraticCurveTo(path.cx, path.cy, path.toX, path.startY);
+        this.baseCtx.stroke();
+      }
+    }
     this.baseCtx.restore();
   }
 
@@ -644,14 +759,19 @@ export class AutocanonizerViz {
       return;
     }
     const isDual = this.isDualMode();
+    const isQuad = isDual && this.quadMode;
     const otherIndex = this.forcedOtherIndex ?? beat.other.which;
-    const otherLayout = (isDual ? this.otherLayouts : this.layouts)[otherIndex];
+    const otherLayout = (
+      isDual && !isQuad ? this.otherLayouts : this.layouts
+    )[otherIndex];
     const cursorWidth = CURSOR_SIZE;
     const cursorHeight = CURSOR_SIZE;
     const sectionY = isDual ? mainSectionY : topPad + tileHeight - vPad;
-    const otherCursorCenterY = isDual
-      ? otherSectionY + CURSOR_SIZE / 2
-      : sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    const otherCursorCenterY = isQuad
+      ? mainSectionY + OTHER_CURSOR_CENTER_OFFSET
+      : isDual
+        ? otherSectionY + CURSOR_SIZE / 2
+        : sectionY + OTHER_CURSOR_CENTER_OFFSET;
     this.overlayCtx.save();
     this.overlayCtx.fillStyle = "rgba(79, 143, 255, 0.65)";
     this.overlayCtx.fillRect(
@@ -676,81 +796,126 @@ export class AutocanonizerViz {
       cursorWidth,
       cursorHeight,
     );
-    let resolvedOtherCursor: { x: number; y: number } | null = null;
-    if (this.forcedOtherIndex !== null && otherLayout) {
+
+    const resolveAnimatedOrFollowCursor = (
+      animCursor: { x: number; y: number } | null,
+      lastCursor: { x: number; y: number } | null,
+      endedAt: number | null,
+      targetLayout: BeatLayout | undefined,
+      centerY: number,
+      forcedIndex: number | null,
+    ): { cursor: { x: number; y: number } | null; nextLast: { x: number; y: number } | null } => {
+      if (forcedIndex !== null && targetLayout) {
+        const pos = { x: targetLayout.x, y: centerY };
+        return { cursor: pos, nextLast: pos };
+      }
+      if (animCursor) {
+        return { cursor: animCursor, nextLast: animCursor };
+      }
+      if (lastCursor) {
+        if (endedAt !== null) {
+          return { cursor: lastCursor, nextLast: lastCursor };
+        }
+        if (targetLayout) {
+          const follow = { x: targetLayout.x, y: centerY };
+          return { cursor: follow, nextLast: follow };
+        }
+        return { cursor: lastCursor, nextLast: lastCursor };
+      }
+      if (targetLayout) {
+        const fallback = { x: targetLayout.x, y: centerY };
+        return { cursor: fallback, nextLast: fallback };
+      }
+      return { cursor: null, nextLast: null };
+    };
+
+    const otherAnimCursor =
+      this.forcedOtherIndex !== null ? null : this.getAnimatedOtherCursor();
+    const otherResolved = resolveAnimatedOrFollowCursor(
+      otherAnimCursor,
+      this.lastOtherCursor,
+      this.otherAnimEndedAt,
+      otherLayout,
+      otherCursorCenterY,
+      this.forcedOtherIndex,
+    );
+    this.lastOtherCursor = otherResolved.nextLast;
+    if (otherResolved.cursor) {
       this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
       this.drawCenteredCursor(
-        otherLayout.x,
-        otherCursorCenterY,
+        otherResolved.cursor.x,
+        otherResolved.cursor.y,
         cursorWidth,
         cursorHeight,
       );
-      resolvedOtherCursor = {
-        x: otherLayout.x,
-        y: otherCursorCenterY,
-      };
-      this.lastOtherCursor = resolvedOtherCursor;
-    } else {
-      const otherCursor = this.getAnimatedOtherCursor();
-      if (otherCursor) {
-        this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
-        this.drawCenteredCursor(
-          otherCursor.x,
-          otherCursor.y,
-          cursorWidth,
-          cursorHeight,
-        );
-        resolvedOtherCursor = { x: otherCursor.x, y: otherCursor.y };
-        this.lastOtherCursor = resolvedOtherCursor;
-      } else if (this.lastOtherCursor) {
-        if (this.otherAnimEndedAt !== null) {
-          this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
-          this.drawCenteredCursor(
-            this.lastOtherCursor.x,
-            this.lastOtherCursor.y,
-            cursorWidth,
-            cursorHeight,
-          );
-          resolvedOtherCursor = this.lastOtherCursor;
-        } else if (otherLayout) {
-          const follow = { x: otherLayout.x, y: otherCursorCenterY };
-          this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
-          this.drawCenteredCursor(follow.x, follow.y, cursorWidth, cursorHeight);
-          resolvedOtherCursor = follow;
-          this.lastOtherCursor = follow;
-        } else {
-          this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
-          this.drawCenteredCursor(
-            this.lastOtherCursor.x,
-            this.lastOtherCursor.y,
-            cursorWidth,
-            cursorHeight,
-          );
-          resolvedOtherCursor = this.lastOtherCursor;
-        }
-      } else if (otherLayout) {
-        this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
-        const fallback = {
-          x: otherLayout.x,
-          y: otherCursorCenterY,
-        };
-        this.drawCenteredCursor(
-          fallback.x,
-          fallback.y,
-          cursorWidth,
-          cursorHeight,
-        );
-        resolvedOtherCursor = fallback;
-        this.lastOtherCursor = fallback;
-      }
     }
-    if (isDual && resolvedOtherCursor) {
+
+    if (isQuad) {
+      // Draw Song 2's Pink (synced) and Gold (branching) highlights & cursors.
+      const pinkLayout = beat.pink ? this.otherLayouts[beat.pink.which] : undefined;
+      const goldLayout = beat.gold ? this.otherLayouts[beat.gold.which] : undefined;
+      if (pinkLayout) {
+        this.overlayCtx.fillStyle = "rgba(255, 79, 163, 0.6)";
+        this.overlayCtx.fillRect(
+          pinkLayout.x,
+          pinkLayout.y,
+          pinkLayout.width,
+          pinkLayout.height,
+        );
+      }
+      if (goldLayout) {
+        this.overlayCtx.fillStyle = "rgba(255, 184, 0, 0.5)";
+        this.overlayCtx.fillRect(
+          goldLayout.x,
+          goldLayout.y,
+          goldLayout.width,
+          goldLayout.height,
+        );
+      }
+      const pinkCursorTopY = otherSectionY + SECTION_HEIGHT - cursorHeight;
+      if (pinkLayout) {
+        this.overlayCtx.fillStyle = AUTOCANONIZER_PINK_COLOR;
+        this.overlayCtx.fillRect(
+          pinkLayout.x - cursorWidth / 2,
+          pinkCursorTopY,
+          cursorWidth,
+          cursorHeight,
+        );
+        // Connect Blue (Song 1 main) to Pink (Song 2 synced) across the channel.
+        this.overlayCtx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+        this.overlayCtx.lineWidth = 1.5;
+        this.overlayCtx.beginPath();
+        this.overlayCtx.moveTo(current.x, sectionY + cursorHeight);
+        this.overlayCtx.lineTo(pinkLayout.x, pinkCursorTopY);
+        this.overlayCtx.stroke();
+      }
+      const goldCursorCenterY = otherSectionY + CURSOR_SIZE / 2;
+      const goldAnimCursor = this.getAnimatedGoldCursor();
+      const goldResolved = resolveAnimatedOrFollowCursor(
+        goldAnimCursor,
+        this.lastGoldCursor,
+        this.goldAnimEndedAt,
+        goldLayout,
+        goldCursorCenterY,
+        null,
+      );
+      this.lastGoldCursor = goldResolved.nextLast;
+      if (goldResolved.cursor) {
+        this.overlayCtx.fillStyle = AUTOCANONIZER_GOLD_COLOR;
+        this.drawCenteredCursor(
+          goldResolved.cursor.x,
+          goldResolved.cursor.y,
+          cursorWidth,
+          cursorHeight,
+        );
+      }
+    } else if (isDual && otherResolved.cursor) {
       // Draw a faint vertical-band pairing connector between Song 1 and Song 2 cursors.
       this.overlayCtx.strokeStyle = "rgba(255, 255, 255, 0.28)";
       this.overlayCtx.lineWidth = 1.5;
       this.overlayCtx.beginPath();
       this.overlayCtx.moveTo(current.x, sectionY + cursorHeight);
-      this.overlayCtx.lineTo(resolvedOtherCursor.x, resolvedOtherCursor.y);
+      this.overlayCtx.lineTo(otherResolved.cursor.x, otherResolved.cursor.y);
       this.overlayCtx.stroke();
     }
     this.overlayCtx.restore();
@@ -787,10 +952,29 @@ export class AutocanonizerViz {
     const { path } = this.otherAnim;
     const progress = path.totalLength * t;
     const point = pointAtLength(path, progress);
-    const x = point.x;
-    const y = point.y;
     this.requestAnimation();
-    return { x, y };
+    return { x: point.x, y: point.y };
+  }
+
+  private getAnimatedGoldCursor() {
+    if (!this.goldAnim) {
+      return null;
+    }
+    const now = performance.now();
+    const elapsed = now - this.goldAnim.start;
+    if (elapsed >= this.goldAnim.duration) {
+      const endPath = this.goldAnim.path;
+      this.lastGoldCursor = { x: endPath.toX, y: endPath.startY };
+      this.goldAnim = null;
+      this.goldAnimEndedAt = now;
+      return null;
+    }
+    const t = elapsed / this.goldAnim.duration;
+    const { path } = this.goldAnim;
+    const progress = path.totalLength * t;
+    const point = pointAtLength(path, progress);
+    this.requestAnimation();
+    return { x: point.x, y: point.y };
   }
 
   private requestAnimation() {
@@ -807,7 +991,11 @@ export class AutocanonizerViz {
     this.currentIndex = index;
     this.forcedOtherIndex = null;
     this.otherAnim = null;
+    this.goldAnim = null;
     this.otherAnimEndedAt = null;
+    this.goldAnimEndedAt = null;
+    const isDual = this.isDualMode();
+    const isQuad = isDual && this.quadMode;
     if (animate) {
       const path = this.connections[index];
       if (path) {
@@ -820,11 +1008,34 @@ export class AutocanonizerViz {
         };
         this.requestAnimation();
       }
+      if (isQuad) {
+        const goldPath = this.goldConnections[index];
+        if (goldPath) {
+          const beat = this.beats[index];
+          const goldDur = beat.gold?.duration ?? beat.other.duration;
+          this.goldAnim = {
+            path: goldPath,
+            start: performance.now(),
+            duration: Math.max(0, goldDur * 0.75) * 1000,
+          };
+          this.requestAnimation();
+        }
+      }
     }
     this.applyTileOverride(index, AUTOCANONIZER_MAIN_COLOR);
     const beat = this.beats[index];
-    if (beat?.other) {
-      if (this.isDualMode()) {
+    if (isQuad) {
+      if (beat?.other) {
+        this.applyTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
+      }
+      if (beat?.pink) {
+        this.applyOtherTileOverride(beat.pink.which, AUTOCANONIZER_PINK_COLOR);
+      }
+      if (beat?.gold) {
+        this.applyOtherTileOverride(beat.gold.which, AUTOCANONIZER_GOLD_COLOR);
+      }
+    } else if (beat?.other) {
+      if (isDual) {
         this.applyOtherTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
       } else {
         this.applyTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
@@ -834,14 +1045,17 @@ export class AutocanonizerViz {
   }
 
   setOtherIndex(index: number) {
-    const targetLayouts = this.isDualMode() ? this.otherLayouts : this.layouts;
+    const usesOtherLayouts = this.isDualMode() && !this.quadMode;
+    const targetLayouts = usesOtherLayouts ? this.otherLayouts : this.layouts;
     if (!targetLayouts[index]) {
       return;
     }
     this.forcedOtherIndex = index;
     this.otherAnim = null;
+    this.goldAnim = null;
     this.otherAnimEndedAt = null;
-    if (this.isDualMode()) {
+    this.goldAnimEndedAt = null;
+    if (usesOtherLayouts) {
       this.applyOtherTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
     } else {
       this.applyTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
@@ -906,7 +1120,10 @@ export class AutocanonizerViz {
         let bestMainIndex = 0;
         let bestDist = Number.POSITIVE_INFINITY;
         for (let i = 0; i < this.beats.length; i += 1) {
-          const pairedWhich = this.beats[i]?.other?.which;
+          const beat = this.beats[i];
+          const pairedWhich = this.quadMode
+            ? (beat?.pink?.which ?? beat?.gold?.which)
+            : beat?.other?.which;
           if (pairedWhich === undefined) {
             continue;
           }

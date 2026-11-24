@@ -2911,6 +2911,15 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
   min-width: 240px;
 }
 
+.pan-control-panel.is-dual.is-quad {
+  grid-template-columns: repeat(2, minmax(210px, 1fr));
+  min-width: 450px;
+}
+
+.pan-control-panel.is-dual.is-quad .stream-balance-reset {
+  grid-column: 1 / -1;
+}
+
 .viz-actions-divider {
   display: inline-block;
   width: 1px;

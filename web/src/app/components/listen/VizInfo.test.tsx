@@ -24,6 +24,11 @@ describe("VizInfo", () => {
         trackDurationSec: 225,
         autocanonizerMainSeconds: 0,
         autocanonizerOtherSeconds: 0,
+        autocanonizerPinkSeconds: 0,
+        autocanonizerGoldSeconds: 0,
+        autocanonizerMixEnabled: false,
+        autocanonizerQuadMode: false,
+        autocanonizerOtherDurationSec: null,
       });
     });
   });
@@ -161,6 +166,51 @@ describe("VizInfo", () => {
       useAppStore.setState({ bringItHomeMode: true });
     });
     expect(label?.classList.contains("is-hidden")).toBe(false);
+  });
+
+  it("renders and updates Pink and Gold timestamps alongside Song 2 duration in 4-Voice quad mode", () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: true,
+        autocanonizerQuadMode: false,
+        trackDurationSec: 154,
+        autocanonizerOtherDurationSec: 162,
+      });
+    });
+    render(<VizInfo />);
+    expect(document.getElementById("autocanonizer-pink-time")).toBeNull();
+    expect(document.getElementById("autocanonizer-gold-time")).toBeNull();
+
+    act(() => {
+      useAppStore.setState({
+        autocanonizerQuadMode: true,
+        autocanonizerPinkSeconds: 14,
+        autocanonizerGoldSeconds: 75,
+      });
+    });
+    expect(document.getElementById("autocanonizer-pink-time")?.textContent).toBe(
+      "0:14",
+    );
+    expect(document.getElementById("autocanonizer-gold-time")?.textContent).toBe(
+      "1:15",
+    );
+    expect(
+      document.getElementById("autocanonizer-other-total-time")?.textContent,
+    ).toBe("2:42");
+
+    act(() => {
+      useAppStore.setState({
+        autocanonizerPinkSeconds: 19,
+        autocanonizerGoldSeconds: 88,
+      });
+    });
+    expect(document.getElementById("autocanonizer-pink-time")?.textContent).toBe(
+      "0:19",
+    );
+    expect(document.getElementById("autocanonizer-gold-time")?.textContent).toBe(
+      "1:28",
+    );
   });
 });
 

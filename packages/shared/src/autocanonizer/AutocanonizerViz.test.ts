@@ -254,4 +254,67 @@ describe("AutocanonizerViz", () => {
     } as MouseEvent);
     expect(onSelect).toHaveBeenCalledWith(1);
   });
+
+  it("renders downward green arcs and upward gold arcs in 4-voice quad mode", () => {
+    const container = createContainer();
+    const viz = new AutocanonizerViz(container);
+    viz.setVisible(true);
+
+    const otherBeats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(255, 184, 0)",
+      section: which,
+      otherGain: 1,
+    })) as any[];
+    otherBeats.forEach((beat) => {
+      beat.other = beat;
+    });
+
+    const mainBeats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(79, 143, 255)",
+      section: which,
+      otherGain: 1,
+      pink: otherBeats[which],
+      pinkGain: 1,
+      gold: otherBeats[(which + 2) % 4],
+      goldGain: 1,
+    })) as any[];
+    mainBeats[0].other = mainBeats[0];
+    mainBeats[1].other = mainBeats[3];
+    mainBeats[2].other = mainBeats[1];
+    mainBeats[3].other = mainBeats[2];
+    mainBeats[1].gold = otherBeats[3];
+    mainBeats[2].gold = otherBeats[0];
+
+    viz.setDualData(
+      mainBeats,
+      4,
+      mainBeats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+      otherBeats,
+      4,
+      otherBeats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+      true,
+    );
+
+    const inner = viz as unknown as {
+      connections: Array<{ startY: number; cy: number } | null>;
+      goldConnections: Array<{ startY: number; cy: number } | null>;
+    };
+    const greenArc = inner.connections.find(Boolean);
+    const goldArc = inner.goldConnections.find(Boolean);
+    expect(greenArc).toBeTruthy();
+    expect(goldArc).toBeTruthy();
+    // Green arcs curve downward from Song 1; Gold arcs curve upward from Song 2.
+    expect(greenArc!.cy).toBeGreaterThan(greenArc!.startY);
+    expect(goldArc!.cy).toBeLessThan(goldArc!.startY);
+  });
 });

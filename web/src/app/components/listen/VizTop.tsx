@@ -12,6 +12,8 @@ import {
   loadAutocanonizerMix,
   loadMultiTrackMix,
   setAutocanonizerMixAlignment,
+  setAutocanonizerQuadBranchMode,
+  setAutocanonizerQuadMode,
   swapAutocanonizerMixSongs,
 } from "../../playback";
 import { showToast } from "../../ui";
@@ -59,6 +61,10 @@ export function VizTop() {
   );
   const autocanonizerMixAlignment = useAppStore(
     (s) => s.autocanonizerMixAlignment,
+  );
+  const autocanonizerQuadMode = useAppStore((s) => s.autocanonizerQuadMode);
+  const autocanonizerQuadBranchMode = useAppStore(
+    (s) => s.autocanonizerQuadBranchMode,
   );
   const isCanonizer = playMode === "autocanonizer";
   const activeMixEnabled = isCanonizer
@@ -173,45 +179,113 @@ export function VizTop() {
               Flip Songs
             </button>
             <span className="viz-actions-divider" aria-hidden="true" />
-            <div
-              id="canonizer-mix-alignment-group"
-              className="canonizer-alignment-toggle"
-              role="group"
-              aria-label="Mix alignment mode"
+            <button
+              type="button"
+              id="canonizer-quad-toggle"
+              className={
+                autocanonizerQuadMode
+                  ? "custom-anchor-button is-active"
+                  : "custom-anchor-button"
+              }
+              aria-pressed={autocanonizerQuadMode}
+              title="Enable 4-voice quad canon: Song 1 plays Blue + Green while Song 2 plays Pink (synced to Blue) + Gold"
+              onClick={() =>
+                setAutocanonizerQuadMode(
+                  getAppContext(),
+                  !autocanonizerQuadMode,
+                )
+              }
             >
-              <button
-                type="button"
-                id="canonizer-alignment-cover-sync"
-                className={
-                  autocanonizerMixAlignment === "cover-sync"
-                    ? "custom-anchor-button is-active"
-                    : "custom-anchor-button"
-                }
-                aria-pressed={autocanonizerMixAlignment === "cover-sync"}
-                title="Maps Song 1's canon jumps onto the matching sections of Song 2 using cover-sync alignment (best for covers with different vocals or mixes)"
-                onClick={() =>
-                  setAutocanonizerMixAlignment(getAppContext(), "cover-sync")
-                }
+              4-Voice
+            </button>
+            <span className="viz-actions-divider" aria-hidden="true" />
+            {autocanonizerQuadMode ? (
+              <div
+                id="canonizer-quad-branch-group"
+                className="canonizer-alignment-toggle"
+                role="group"
+                aria-label="Quad branch mode"
               >
-                Cover Sync
-              </button>
-              <button
-                type="button"
-                id="canonizer-alignment-section-fold"
-                className={
-                  autocanonizerMixAlignment === "section-fold"
-                    ? "custom-anchor-button is-active"
-                    : "custom-anchor-button"
-                }
-                aria-pressed={autocanonizerMixAlignment === "section-fold"}
-                title="Matches each section of Song 1 directly to the closest non-unison section of Song 2 by audio similarity"
-                onClick={() =>
-                  setAutocanonizerMixAlignment(getAppContext(), "section-fold")
-                }
+                <button
+                  type="button"
+                  id="canonizer-quad-branch-synced"
+                  className={
+                    autocanonizerQuadBranchMode === "synced"
+                      ? "custom-anchor-button is-active"
+                      : "custom-anchor-button"
+                  }
+                  aria-pressed={autocanonizerQuadBranchMode === "synced"}
+                  title="Synced: Gold mirrors Green's section jumps inside Song 2 (2 musical moments doubled across both covers)"
+                  onClick={() =>
+                    setAutocanonizerQuadBranchMode(getAppContext(), "synced")
+                  }
+                >
+                  Synced
+                </button>
+                <button
+                  type="button"
+                  id="canonizer-quad-branch-independent"
+                  className={
+                    autocanonizerQuadBranchMode === "independent"
+                      ? "custom-anchor-button is-active"
+                      : "custom-anchor-button"
+                  }
+                  aria-pressed={autocanonizerQuadBranchMode === "independent"}
+                  title="Independent: Green follows Song 1's own canon while Gold follows Song 2's own canon (up to 3 simultaneous parts)"
+                  onClick={() =>
+                    setAutocanonizerQuadBranchMode(
+                      getAppContext(),
+                      "independent",
+                    )
+                  }
+                >
+                  Independent
+                </button>
+              </div>
+            ) : (
+              <div
+                id="canonizer-mix-alignment-group"
+                className="canonizer-alignment-toggle"
+                role="group"
+                aria-label="Mix alignment mode"
               >
-                Section Fold
-              </button>
-            </div>
+                <button
+                  type="button"
+                  id="canonizer-alignment-cover-sync"
+                  className={
+                    autocanonizerMixAlignment === "cover-sync"
+                      ? "custom-anchor-button is-active"
+                      : "custom-anchor-button"
+                  }
+                  aria-pressed={autocanonizerMixAlignment === "cover-sync"}
+                  title="Maps Song 1's canon jumps onto the matching sections of Song 2 using cover-sync alignment (best for covers with different vocals or mixes)"
+                  onClick={() =>
+                    setAutocanonizerMixAlignment(getAppContext(), "cover-sync")
+                  }
+                >
+                  Cover Sync
+                </button>
+                <button
+                  type="button"
+                  id="canonizer-alignment-section-fold"
+                  className={
+                    autocanonizerMixAlignment === "section-fold"
+                      ? "custom-anchor-button is-active"
+                      : "custom-anchor-button"
+                  }
+                  aria-pressed={autocanonizerMixAlignment === "section-fold"}
+                  title="Matches each section of Song 1 directly to the closest non-unison section of Song 2 by audio similarity"
+                  onClick={() =>
+                    setAutocanonizerMixAlignment(
+                      getAppContext(),
+                      "section-fold",
+                    )
+                  }
+                >
+                  Section Fold
+                </button>
+              </div>
+            )}
           </>
         ) : null}
       </div>

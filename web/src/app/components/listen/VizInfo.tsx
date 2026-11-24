@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef } from "react";
 import {
+  AUTOCANONIZER_GOLD_COLOR,
   AUTOCANONIZER_MAIN_COLOR,
   AUTOCANONIZER_OTHER_COLOR,
+  AUTOCANONIZER_PINK_COLOR,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
 import { formatCursorTime, formatPlaybackTitle } from "../../format";
 import { useMarquee } from "../../hooks/useMarquee";
@@ -19,6 +21,14 @@ export function VizInfo() {
   const bringItHomeMode = useAppStore((s) => s.bringItHomeMode);
   const shiftBranching = useAppStore((s) => s.shiftBranching);
   const trackDurationSec = useAppStore((s) => s.trackDurationSec);
+  const autocanonizerMixEnabled = useAppStore(
+    (s) => s.autocanonizerMixEnabled,
+  );
+  const autocanonizerQuadMode = useAppStore((s) => s.autocanonizerQuadMode);
+  const autocanonizerOtherDurationSec = useAppStore(
+    (s) => s.autocanonizerOtherDurationSec,
+  );
+  const isQuadMix = autocanonizerMixEnabled && autocanonizerQuadMode;
   const wubMachineDurationSec = useAppStore((s) => s.wubMachineDurationSec);
   const titleRef = useRef<HTMLDivElement | null>(null);
   const listenTimeRef = useRef<HTMLSpanElement | null>(null);
@@ -27,6 +37,8 @@ export function VizInfo() {
   const jukeboxCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const mainCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const otherCursorTimeRef = useRef<HTMLSpanElement | null>(null);
+  const pinkCursorTimeRef = useRef<HTMLSpanElement | null>(null);
+  const goldCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const wubCursorTimeRef = useRef<HTMLSpanElement | null>(null);
 
   // listenTimeText (~5Hz) and beatsPlayedText (engine-rate) change far too
@@ -60,6 +72,16 @@ export function VizInfo() {
     if (otherCursorTimeRef.current) {
       otherCursorTimeRef.current.textContent = formatCursorTime(
         seed.autocanonizerOtherSeconds,
+      );
+    }
+    if (pinkCursorTimeRef.current) {
+      pinkCursorTimeRef.current.textContent = formatCursorTime(
+        seed.autocanonizerPinkSeconds,
+      );
+    }
+    if (goldCursorTimeRef.current) {
+      goldCursorTimeRef.current.textContent = formatCursorTime(
+        seed.autocanonizerGoldSeconds,
       );
     }
     if (wubCursorTimeRef.current) {
@@ -114,6 +136,22 @@ export function VizInfo() {
         );
       }
       if (
+        state.autocanonizerPinkSeconds !== prev.autocanonizerPinkSeconds &&
+        pinkCursorTimeRef.current
+      ) {
+        pinkCursorTimeRef.current.textContent = formatCursorTime(
+          state.autocanonizerPinkSeconds,
+        );
+      }
+      if (
+        state.autocanonizerGoldSeconds !== prev.autocanonizerGoldSeconds &&
+        goldCursorTimeRef.current
+      ) {
+        goldCursorTimeRef.current.textContent = formatCursorTime(
+          state.autocanonizerGoldSeconds,
+        );
+      }
+      if (
         state.wubMachineSeconds !== prev.wubMachineSeconds &&
         wubCursorTimeRef.current
       ) {
@@ -122,7 +160,7 @@ export function VizInfo() {
         );
       }
     });
-  }, []);
+  }, [isQuadMix]);
 
   const displayTitle =
     trackTitle || trackArtist
@@ -184,6 +222,30 @@ export function VizInfo() {
           <span id="autocanonizer-total-time">
             {formatCursorTime(trackDurationSec ?? 0)}
           </span>
+          {isQuadMix ? (
+            <>
+              <span className="viz-divider" aria-hidden="true">
+                ·
+              </span>
+              <span
+                id="autocanonizer-pink-time"
+                ref={pinkCursorTimeRef}
+                style={{ color: AUTOCANONIZER_PINK_COLOR }}
+              ></span>
+              <span aria-hidden="true">–</span>
+              <span
+                id="autocanonizer-gold-time"
+                ref={goldCursorTimeRef}
+                style={{ color: AUTOCANONIZER_GOLD_COLOR }}
+              ></span>
+              <span aria-hidden="true">/</span>
+              <span id="autocanonizer-other-total-time">
+                {formatCursorTime(
+                  autocanonizerOtherDurationSec ?? trackDurationSec ?? 0,
+                )}
+              </span>
+            </>
+          ) : null}
         </span>
         <span
           id="wubmachine-times"

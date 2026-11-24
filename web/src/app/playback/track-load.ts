@@ -213,12 +213,17 @@ export function resetForNewTrack(
   useAppStore.setState({ multiTrackEnabled: false });
   useAppStore.setState({
     autocanonizerMixEnabled: false,
+    autocanonizerQuadMode: false,
     autocanonizerMixTrackTitles: null,
     autocanonizerOtherDurationSec: null,
     autocanonizerMainGainPct: 100,
     autocanonizerOtherGainPct: 100,
+    autocanonizerPinkGainPct: 100,
+    autocanonizerGoldGainPct: 100,
   });
+  autocanonizer?.setQuadMode?.(false);
   autocanonizer?.setStreamGains?.(1, 1);
+  autocanonizer?.setQuadStreamGains?.(1, 1);
   player.clearPostMixTrackGains?.();
   player.setPostMixNormalization?.(false);
   useAppStore.setState({ lastJobId: null });
@@ -233,6 +238,8 @@ export function resetForNewTrack(
     lastBeatIndex: null,
     autocanonizerMainSeconds: 0,
     autocanonizerOtherSeconds: 0,
+    autocanonizerPinkSeconds: 0,
+    autocanonizerGoldSeconds: 0,
   });
   updateListenTimeDisplay();
   useAppStore.setState({ beatsPlayedText: "0" });

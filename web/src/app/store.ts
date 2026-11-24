@@ -443,12 +443,20 @@ const createPlaybackSlice: Slice<
     | "lastBeatIndex"
     | "autocanonizerMainSeconds"
     | "autocanonizerOtherSeconds"
+    | "autocanonizerPinkSeconds"
+    | "autocanonizerGoldSeconds"
     | "autocanonizerMainPan"
     | "autocanonizerOtherPan"
+    | "autocanonizerPinkPan"
+    | "autocanonizerGoldPan"
     | "autocanonizerMainGainPct"
     | "autocanonizerOtherGainPct"
+    | "autocanonizerPinkGainPct"
+    | "autocanonizerGoldGainPct"
     | "autocanonizerMixEnabled"
     | "autocanonizerMixAlignment"
+    | "autocanonizerQuadMode"
+    | "autocanonizerQuadBranchMode"
     | "autocanonizerMixTrackTitles"
     | "autocanonizerOtherDurationSec"
     | "wubMachineSeconds"
@@ -476,12 +484,20 @@ const createPlaybackSlice: Slice<
   lastBeatIndex: null,
   autocanonizerMainSeconds: 0,
   autocanonizerOtherSeconds: 0,
+  autocanonizerPinkSeconds: 0,
+  autocanonizerGoldSeconds: 0,
   autocanonizerMainPan: 0,
   autocanonizerOtherPan: 0,
+  autocanonizerPinkPan: 0,
+  autocanonizerGoldPan: 0,
   autocanonizerMainGainPct: 100,
   autocanonizerOtherGainPct: 100,
+  autocanonizerPinkGainPct: 100,
+  autocanonizerGoldGainPct: 100,
   autocanonizerMixEnabled: false,
   autocanonizerMixAlignment: "cover-sync",
+  autocanonizerQuadMode: false,
+  autocanonizerQuadBranchMode: "synced",
   autocanonizerMixTrackTitles: null,
   autocanonizerOtherDurationSec: null,
   wubMachineSeconds: 0,

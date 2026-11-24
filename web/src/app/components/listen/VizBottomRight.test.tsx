@@ -7,6 +7,8 @@ import { VizBottomRight } from "./VizBottomRight";
 const h = vi.hoisted(() => ({
   setAutocanonizerStreamPans: vi.fn(),
   setAutocanonizerSongGainPct: vi.fn(),
+  setAutocanonizerQuadStreamPans: vi.fn(),
+  setAutocanonizerQuadSongGainPct: vi.fn(),
   setMasterVolume: vi.fn(),
   toggleFullscreen: vi.fn(),
 }));
@@ -15,6 +17,8 @@ vi.mock("../../playback", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../playback")>()),
   setAutocanonizerStreamPans: h.setAutocanonizerStreamPans,
   setAutocanonizerSongGainPct: h.setAutocanonizerSongGainPct,
+  setAutocanonizerQuadStreamPans: h.setAutocanonizerQuadStreamPans,
+  setAutocanonizerQuadSongGainPct: h.setAutocanonizerQuadSongGainPct,
   setMasterVolume: h.setMasterVolume,
 }));
 vi.mock("../../fullscreen", async (importOriginal) => ({
@@ -34,9 +38,14 @@ describe("VizBottomRight", () => {
         playMode: "jukebox",
         autocanonizerMainPan: 0,
         autocanonizerOtherPan: 0,
+        autocanonizerPinkPan: 0,
+        autocanonizerGoldPan: 0,
         autocanonizerMainGainPct: 100,
         autocanonizerOtherGainPct: 100,
+        autocanonizerPinkGainPct: 100,
+        autocanonizerGoldGainPct: 100,
         autocanonizerMixEnabled: false,
+        autocanonizerQuadMode: false,
         autocanonizerMixTrackTitles: null,
         isFullscreen: false,
         playlistModalOpen: false,
@@ -262,6 +271,65 @@ describe("VizBottomRight", () => {
     expect(h.setAutocanonizerSongGainPct).toHaveBeenCalledWith(
       expect.anything(),
       "other",
+      100,
+    );
+  });
+
+  it("shows all four pan and gain sliders and resets all four in 4-voice quad mode", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: true,
+        autocanonizerQuadMode: true,
+        autocanonizerMixTrackTitles: ["Cover A", "Cover B"],
+        autocanonizerMainPan: -20,
+        autocanonizerOtherPan: 20,
+        autocanonizerPinkPan: -30,
+        autocanonizerGoldPan: 30,
+        autocanonizerMainGainPct: 100,
+        autocanonizerOtherGainPct: 90,
+        autocanonizerPinkGainPct: 110,
+        autocanonizerGoldGainPct: 85,
+      });
+    });
+    render(<VizBottomRight />);
+    await userEvent.click(document.getElementById("autocanonizer-pan-button")!);
+
+    const panel = document.getElementById("autocanonizer-pan-control-panel")!;
+    expect(panel.classList.contains("is-quad")).toBe(true);
+    const pinkPan = document.getElementById("autocanonizer-pink-pan") as HTMLInputElement;
+    const goldGain = document.getElementById("autocanonizer-gold-gain") as HTMLInputElement;
+    expect(pinkPan.value).toBe("-30");
+    expect(goldGain.value).toBe("85");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(pinkPan, "45");
+      pinkPan.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(h.setAutocanonizerQuadStreamPans).toHaveBeenCalledWith(
+      expect.anything(),
+      45,
+      30,
+    );
+
+    await userEvent.click(document.getElementById("autocanonizer-balance-reset")!);
+    expect(h.setAutocanonizerQuadStreamPans).toHaveBeenCalledWith(
+      expect.anything(),
+      0,
+      0,
+    );
+    expect(h.setAutocanonizerQuadSongGainPct).toHaveBeenCalledWith(
+      expect.anything(),
+      "pink",
+      100,
+    );
+    expect(h.setAutocanonizerQuadSongGainPct).toHaveBeenCalledWith(
+      expect.anything(),
+      "gold",
       100,
     );
   });

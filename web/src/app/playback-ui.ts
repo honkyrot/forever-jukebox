@@ -267,6 +267,8 @@ export function initializePlayback(): void {
         lastBeatIndex: index,
         autocanonizerMainSeconds: cursorTimes.mainSeconds,
         autocanonizerOtherSeconds: cursorTimes.otherSeconds,
+        autocanonizerPinkSeconds: cursorTimes.pinkSeconds ?? 0,
+        autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
       pulseVizStats();
     });
@@ -812,6 +814,8 @@ export function setPlayMode(mode: PlayMode): void {
       playMode: mode,
       autocanonizerMainSeconds: 0,
       autocanonizerOtherSeconds: 0,
+      autocanonizerPinkSeconds: 0,
+      autocanonizerGoldSeconds: 0,
     });
     if (prevMode === "autocanonizer" && useAppStore.getState().autocanonizerMixEnabled) {
       void disableAutocanonizerMix(context);

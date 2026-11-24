@@ -10,6 +10,7 @@ import type { AppConfig } from "./api";
 import type {
   AutocanonizerController,
   AutocanonizerMixAlignmentMode,
+  AutocanonizerQuadBranchMode,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import type { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
@@ -40,12 +41,20 @@ export type AppState = {
   lastBeatIndex: number | null;
   autocanonizerMainSeconds: number;
   autocanonizerOtherSeconds: number;
+  autocanonizerPinkSeconds: number;
+  autocanonizerGoldSeconds: number;
   autocanonizerMainPan: number;
   autocanonizerOtherPan: number;
+  autocanonizerPinkPan: number;
+  autocanonizerGoldPan: number;
   autocanonizerMainGainPct: number;
   autocanonizerOtherGainPct: number;
+  autocanonizerPinkGainPct: number;
+  autocanonizerGoldGainPct: number;
   autocanonizerMixEnabled: boolean;
   autocanonizerMixAlignment: AutocanonizerMixAlignmentMode;
+  autocanonizerQuadMode: boolean;
+  autocanonizerQuadBranchMode: AutocanonizerQuadBranchMode;
   autocanonizerMixTrackTitles: [string, string] | null;
   autocanonizerOtherDurationSec: number | null;
   wubMachineSeconds: number;

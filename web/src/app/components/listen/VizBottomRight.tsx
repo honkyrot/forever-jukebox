@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AUTOCANONIZER_GOLD_COLOR,
   AUTOCANONIZER_MAIN_COLOR,
   AUTOCANONIZER_OTHER_COLOR,
+  AUTOCANONIZER_PINK_COLOR,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
 import {
   DEFAULT_MIX_TRACK_GAIN_PCT,
   MAX_MIX_TRACK_GAIN_PCT,
   MIN_MIX_TRACK_GAIN_PCT,
+  setAutocanonizerQuadSongGainPct,
+  setAutocanonizerQuadStreamPans,
   setAutocanonizerSongGainPct,
   setAutocanonizerStreamPans,
   setMasterVolume,
@@ -22,6 +26,79 @@ import { storeVolumePct } from "../../volume";
 import { storeAudioBalance } from "../../audioBalance";
 import { useTranslation } from "react-i18next";
 
+function VoiceBalanceControls({
+  panId,
+  gainId,
+  panLabel,
+  gainAriaLabel,
+  leftLabel,
+  rightLabel,
+  color,
+  pan,
+  gainPct,
+  showGain,
+  onPanChange,
+  onGainChange,
+}: {
+  panId: string;
+  gainId: string;
+  panLabel: string;
+  gainAriaLabel: string;
+  leftLabel: string;
+  rightLabel: string;
+  color: string;
+  pan: number;
+  gainPct: number;
+  showGain: boolean;
+  onPanChange: (value: number) => void;
+  onGainChange: (value: number) => void;
+}) {
+  return (
+    <>
+      <label className="stream-pan-control">
+        <div className="label-line">
+          <span className="pan-end-label">{leftLabel}</span>
+          <span style={{ color }}>{panLabel}</span>
+          <span className="pan-end-label">{rightLabel}</span>
+        </div>
+        <input
+          className="pan-slider stream-pan-slider"
+          id={panId}
+          type="range"
+          aria-label={panLabel}
+          min={-100}
+          max={100}
+          step={1}
+          list="autocanonizer-pan-ticks"
+          value={pan}
+          style={{ accentColor: color }}
+          onChange={(event) => onPanChange(Number(event.target.value))}
+        />
+      </label>
+      {showGain ? (
+        <label className="stream-pan-control">
+          <div className="label-line stream-gain-line">
+            <span style={{ color }}>Volume</span>
+            <span className="stream-gain-value">{gainPct}%</span>
+          </div>
+          <input
+            className="pan-slider stream-pan-slider"
+            id={gainId}
+            type="range"
+            aria-label={gainAriaLabel}
+            min={MIN_MIX_TRACK_GAIN_PCT}
+            max={MAX_MIX_TRACK_GAIN_PCT}
+            step={1}
+            value={gainPct}
+            style={{ accentColor: color }}
+            onChange={(event) => onGainChange(Number(event.target.value))}
+          />
+        </label>
+      ) : null}
+    </>
+  );
+}
+
 // The right-hand cluster of the viz bottom bar: playlist-open button,
 // volume panel, fullscreen toggle. Rendered into the .viz-bottom-right
 // container.
@@ -32,11 +109,16 @@ export function VizBottomRight() {
   const playMode = useAppStore((s) => s.playMode);
   const mainPan = useAppStore((s) => s.autocanonizerMainPan);
   const otherPan = useAppStore((s) => s.autocanonizerOtherPan);
+  const pinkPan = useAppStore((s) => s.autocanonizerPinkPan);
+  const goldPan = useAppStore((s) => s.autocanonizerGoldPan);
   const mainGainPct = useAppStore((s) => s.autocanonizerMainGainPct);
   const otherGainPct = useAppStore((s) => s.autocanonizerOtherGainPct);
+  const pinkGainPct = useAppStore((s) => s.autocanonizerPinkGainPct);
+  const goldGainPct = useAppStore((s) => s.autocanonizerGoldGainPct);
   const autocanonizerMixEnabled = useAppStore(
     (s) => s.autocanonizerMixEnabled,
   );
+  const autocanonizerQuadMode = useAppStore((s) => s.autocanonizerQuadMode);
   const autocanonizerMixTrackTitles = useAppStore(
     (s) => s.autocanonizerMixTrackTitles,
   );
@@ -103,6 +185,12 @@ export function VizBottomRight() {
     storeAudioBalance(nextMain, nextOther);
   };
 
+  const handleQuadPanChange = (stream: "pink" | "gold", pan: number) => {
+    const nextPink = stream === "pink" ? pan : pinkPan;
+    const nextGold = stream === "gold" ? pan : goldPan;
+    setAutocanonizerQuadStreamPans(getAppContext(), nextPink, nextGold);
+  };
+
   const handleResetBalance = () => {
     const ctx = getAppContext();
     useAppStore.setState({
@@ -113,15 +201,34 @@ export function VizBottomRight() {
     storeAudioBalance(0, 0);
     setAutocanonizerSongGainPct(ctx, "main", DEFAULT_MIX_TRACK_GAIN_PCT);
     setAutocanonizerSongGainPct(ctx, "other", DEFAULT_MIX_TRACK_GAIN_PCT);
+    if (isQuadMix) {
+      setAutocanonizerQuadStreamPans(ctx, 0, 0);
+      setAutocanonizerQuadSongGainPct(ctx, "pink", DEFAULT_MIX_TRACK_GAIN_PCT);
+      setAutocanonizerQuadSongGainPct(ctx, "gold", DEFAULT_MIX_TRACK_GAIN_PCT);
+    }
   };
 
+  const isQuadMix = autocanonizerMixEnabled && autocanonizerQuadMode;
   const hasNonDefaultDualBalance =
     mainPan !== 0 ||
     otherPan !== 0 ||
     mainGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT ||
-    otherGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT;
+    otherGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT ||
+    (isQuadMix &&
+      (pinkPan !== 0 ||
+        goldPan !== 0 ||
+        pinkGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT ||
+        goldGainPct !== DEFAULT_MIX_TRACK_GAIN_PCT));
   const mainSongLabel = autocanonizerMixTrackTitles?.[0] ?? "Song 1";
   const otherSongLabel = autocanonizerMixTrackTitles?.[1] ?? "Song 2";
+  const panelClasses = [
+    "pan-control-panel",
+    panOpen ? "" : "is-hidden",
+    autocanonizerMixEnabled ? "is-dual" : "",
+    isQuadMix ? "is-quad" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <>
@@ -146,14 +253,7 @@ export function VizBottomRight() {
       </button>
       {isCanonizer ? (
         <div className="pan-control-wrap" ref={panWrapRef}>
-          <div
-            className={
-              panOpen
-                ? `pan-control-panel${autocanonizerMixEnabled ? " is-dual" : ""}`
-                : `pan-control-panel is-hidden${autocanonizerMixEnabled ? " is-dual" : ""}`
-            }
-            id="autocanonizer-pan-control-panel"
-          >
+          <div className={panelClasses} id="autocanonizer-pan-control-panel">
             <div className={autocanonizerMixEnabled ? "stream-balance-group" : undefined}>
               {autocanonizerMixEnabled ? (
                 <div
@@ -164,126 +264,124 @@ export function VizBottomRight() {
                   {mainSongLabel}
                 </div>
               ) : null}
-              <label className="stream-pan-control">
-                <div className="label-line">
-                  <span className="pan-end-label">{t("playback.balanceLeft")}</span>
-                  <span style={{ color: AUTOCANONIZER_MAIN_COLOR }}>
-                    {t("playback.blueBalance")}
-                  </span>
-                  <span className="pan-end-label">
-                    {t("playback.balanceRight")}
-                  </span>
-                </div>
-                <input
-                  className="pan-slider stream-pan-slider"
-                  id="autocanonizer-main-pan"
-                  type="range"
-                  aria-label={t("playback.blueBalance")}
-                  min={-100}
-                  max={100}
-                  step={1}
-                  list="autocanonizer-pan-ticks"
-                  value={mainPan}
-                  style={{ accentColor: AUTOCANONIZER_MAIN_COLOR }}
-                  onChange={(event) =>
-                    handleStreamPanChange("main", Number(event.target.value))
+              <VoiceBalanceControls
+                panId="autocanonizer-main-pan"
+                gainId="autocanonizer-main-gain"
+                panLabel={
+                  isQuadMix
+                    ? `${t("playback.blueBalance")} (Main)`
+                    : t("playback.blueBalance")
+                }
+                gainAriaLabel={`${mainSongLabel} Blue volume`}
+                leftLabel={t("playback.balanceLeft")}
+                rightLabel={t("playback.balanceRight")}
+                color={AUTOCANONIZER_MAIN_COLOR}
+                pan={mainPan}
+                gainPct={mainGainPct}
+                showGain={autocanonizerMixEnabled}
+                onPanChange={(value) => handleStreamPanChange("main", value)}
+                onGainChange={(value) =>
+                  setAutocanonizerSongGainPct(getAppContext(), "main", value)
+                }
+              />
+              {isQuadMix ? (
+                <VoiceBalanceControls
+                  panId="autocanonizer-other-pan"
+                  gainId="autocanonizer-other-gain"
+                  panLabel={`${t("playback.greenBalance")} (Branch)`}
+                  gainAriaLabel={`${mainSongLabel} Green volume`}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={AUTOCANONIZER_OTHER_COLOR}
+                  pan={otherPan}
+                  gainPct={otherGainPct}
+                  showGain
+                  onPanChange={(value) => handleStreamPanChange("other", value)}
+                  onGainChange={(value) =>
+                    setAutocanonizerSongGainPct(getAppContext(), "other", value)
                   }
                 />
-              </label>
-              {autocanonizerMixEnabled ? (
-                <label className="stream-pan-control">
-                  <div className="label-line stream-gain-line">
-                    <span style={{ color: AUTOCANONIZER_MAIN_COLOR }}>
-                      Volume
-                    </span>
-                    <span className="stream-gain-value">{mainGainPct}%</span>
-                  </div>
-                  <input
-                    className="pan-slider stream-pan-slider"
-                    id="autocanonizer-main-gain"
-                    type="range"
-                    aria-label={`${mainSongLabel} volume`}
-                    min={MIN_MIX_TRACK_GAIN_PCT}
-                    max={MAX_MIX_TRACK_GAIN_PCT}
-                    step={1}
-                    value={mainGainPct}
-                    style={{ accentColor: AUTOCANONIZER_MAIN_COLOR }}
-                    onChange={(event) =>
-                      setAutocanonizerSongGainPct(
-                        getAppContext(),
-                        "main",
-                        Number(event.target.value),
-                      )
-                    }
-                  />
-                </label>
               ) : null}
             </div>
-            <div className={autocanonizerMixEnabled ? "stream-balance-group" : undefined}>
-              {autocanonizerMixEnabled ? (
+            {isQuadMix ? (
+              <div className="stream-balance-group">
                 <div
                   className="stream-balance-song-title"
-                  style={{ color: AUTOCANONIZER_OTHER_COLOR }}
+                  style={{ color: AUTOCANONIZER_PINK_COLOR }}
                   title={otherSongLabel}
                 >
                   {otherSongLabel}
                 </div>
-              ) : null}
-              <label className="stream-pan-control">
-                <div className="label-line">
-                  <span className="pan-end-label">{t("playback.balanceLeft")}</span>
-                  <span style={{ color: AUTOCANONIZER_OTHER_COLOR }}>
-                    {t("playback.greenBalance")}
-                  </span>
-                  <span className="pan-end-label">
-                    {t("playback.balanceRight")}
-                  </span>
-                </div>
-                <input
-                  className="pan-slider stream-pan-slider"
-                  id="autocanonizer-other-pan"
-                  type="range"
-                  aria-label={t("playback.greenBalance")}
-                  min={-100}
-                  max={100}
-                  step={1}
-                  list="autocanonizer-pan-ticks"
-                  value={otherPan}
-                  style={{ accentColor: AUTOCANONIZER_OTHER_COLOR }}
-                  onChange={(event) =>
-                    handleStreamPanChange("other", Number(event.target.value))
+                <VoiceBalanceControls
+                  panId="autocanonizer-pink-pan"
+                  gainId="autocanonizer-pink-gain"
+                  panLabel="Pink balance (Synced)"
+                  gainAriaLabel={`${otherSongLabel} Pink volume`}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={AUTOCANONIZER_PINK_COLOR}
+                  pan={pinkPan}
+                  gainPct={pinkGainPct}
+                  showGain
+                  onPanChange={(value) => handleQuadPanChange("pink", value)}
+                  onGainChange={(value) =>
+                    setAutocanonizerQuadSongGainPct(
+                      getAppContext(),
+                      "pink",
+                      value,
+                    )
                   }
                 />
-              </label>
-              {autocanonizerMixEnabled ? (
-                <label className="stream-pan-control">
-                  <div className="label-line stream-gain-line">
-                    <span style={{ color: AUTOCANONIZER_OTHER_COLOR }}>
-                      Volume
-                    </span>
-                    <span className="stream-gain-value">{otherGainPct}%</span>
+                <VoiceBalanceControls
+                  panId="autocanonizer-gold-pan"
+                  gainId="autocanonizer-gold-gain"
+                  panLabel="Gold balance (Branch)"
+                  gainAriaLabel={`${otherSongLabel} Gold volume`}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={AUTOCANONIZER_GOLD_COLOR}
+                  pan={goldPan}
+                  gainPct={goldGainPct}
+                  showGain
+                  onPanChange={(value) => handleQuadPanChange("gold", value)}
+                  onGainChange={(value) =>
+                    setAutocanonizerQuadSongGainPct(
+                      getAppContext(),
+                      "gold",
+                      value,
+                    )
+                  }
+                />
+              </div>
+            ) : (
+              <div className={autocanonizerMixEnabled ? "stream-balance-group" : undefined}>
+                {autocanonizerMixEnabled ? (
+                  <div
+                    className="stream-balance-song-title"
+                    style={{ color: AUTOCANONIZER_OTHER_COLOR }}
+                    title={otherSongLabel}
+                  >
+                    {otherSongLabel}
                   </div>
-                  <input
-                    className="pan-slider stream-pan-slider"
-                    id="autocanonizer-other-gain"
-                    type="range"
-                    aria-label={`${otherSongLabel} volume`}
-                    min={MIN_MIX_TRACK_GAIN_PCT}
-                    max={MAX_MIX_TRACK_GAIN_PCT}
-                    step={1}
-                    value={otherGainPct}
-                    style={{ accentColor: AUTOCANONIZER_OTHER_COLOR }}
-                    onChange={(event) =>
-                      setAutocanonizerSongGainPct(
-                        getAppContext(),
-                        "other",
-                        Number(event.target.value),
-                      )
-                    }
-                  />
-                </label>
-              ) : null}
-            </div>
+                ) : null}
+                <VoiceBalanceControls
+                  panId="autocanonizer-other-pan"
+                  gainId="autocanonizer-other-gain"
+                  panLabel={t("playback.greenBalance")}
+                  gainAriaLabel={`${otherSongLabel} volume`}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={AUTOCANONIZER_OTHER_COLOR}
+                  pan={otherPan}
+                  gainPct={otherGainPct}
+                  showGain={autocanonizerMixEnabled}
+                  onPanChange={(value) => handleStreamPanChange("other", value)}
+                  onGainChange={(value) =>
+                    setAutocanonizerSongGainPct(getAppContext(), "other", value)
+                  }
+                />
+              </div>
+            )}
             {autocanonizerMixEnabled && hasNonDefaultDualBalance ? (
               <button
                 type="button"

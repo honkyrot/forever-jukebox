@@ -12,7 +12,10 @@ import {
 	combineAudioBuffers,
 	prepareDualAudioBuffers,
 } from "@forever-jukebox/shared/audio/multiTrackBuffer";
-import type { AutocanonizerMixAlignmentMode } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import type {
+	AutocanonizerMixAlignmentMode,
+	AutocanonizerQuadBranchMode,
+} from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { detectTrackBeatsPerBar } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import {
 	isAnalysisComplete,
@@ -83,12 +86,12 @@ type LoadedMixTrackSource = {
 
 let cachedMixSources: LoadedMixTrackSource[] | null = null;
 let cachedAutocanonizerMixSources:
-  | [LoadedMixTrackSource, LoadedMixTrackSource]
-  | null = null;
+	| [LoadedMixTrackSource, LoadedMixTrackSource]
+	| null = null;
 
 export function clearCachedMultiTrackSources(): void {
 	cachedMixSources = null;
-  cachedAutocanonizerMixSources = null;
+	cachedAutocanonizerMixSources = null;
 }
 
 async function resolveTrackAnalysis(
@@ -650,10 +653,16 @@ function applyLoadedAutocanonizerMixSources(
 	const [mainSource, otherSource] = sources;
 	const {
 		autocanonizerMixAlignment,
+		autocanonizerQuadMode,
+		autocanonizerQuadBranchMode,
 		autocanonizerMainPan,
 		autocanonizerOtherPan,
+		autocanonizerPinkPan,
+		autocanonizerGoldPan,
 		autocanonizerMainGainPct,
 		autocanonizerOtherGainPct,
+		autocanonizerPinkGainPct,
+		autocanonizerGoldGainPct,
 	} = useAppStore.getState();
 
 	const otherTempoRatio = computeTempoSyncRatio(
@@ -684,6 +693,8 @@ function applyLoadedAutocanonizerMixSources(
 			otherDuration: prepared.otherDurationSec,
 			otherTempoRatio,
 			alignmentMode: autocanonizerMixAlignment,
+			quadMode: autocanonizerQuadMode,
+			quadBranchMode: autocanonizerQuadBranchMode,
 		},
 	);
 	context.autocanonizer?.setStreamPans?.(
@@ -693,6 +704,14 @@ function applyLoadedAutocanonizerMixSources(
 	context.autocanonizer?.setStreamGains?.(
 		autocanonizerMainGainPct / 100,
 		autocanonizerOtherGainPct / 100,
+	);
+	context.autocanonizer?.setQuadStreamPans?.(
+		autocanonizerPinkPan / 100,
+		autocanonizerGoldPan / 100,
+	);
+	context.autocanonizer?.setQuadStreamGains?.(
+		autocanonizerPinkGainPct / 100,
+		autocanonizerGoldGainPct / 100,
 	);
 
 	const title1 = mainSource.track.title || i18n.t("common.untitled");
@@ -710,6 +729,8 @@ function applyLoadedAutocanonizerMixSources(
 		trackDurationSec: prepared.mainDurationSec,
 		autocanonizerMainSeconds: 0,
 		autocanonizerOtherSeconds: 0,
+		autocanonizerPinkSeconds: 0,
+		autocanonizerGoldSeconds: 0,
 	});
 	updateVizVisibility();
 	updateTrackInfo(context);
@@ -787,29 +808,29 @@ export async function loadAutocanonizerMix(
 			return false;
 		}
 
-    const pair: [LoadedMixTrackSource, LoadedMixTrackSource] = [
-      sources[0],
-      sources[1],
-    ];
-    cachedAutocanonizerMixSources = pair;
-    applyLoadedAutocanonizerMixSources(context, pair);
-    return true;
-  } catch (err) {
-    if (!isStaleLoad(generation)) {
-      cachedAutocanonizerMixSources = null;
-      useAppStore.setState({
-        autocanonizerMixEnabled: false,
-        autocanonizerMixTrackTitles: null,
-        autocanonizerOtherDurationSec: null,
-      });
-      const message = formatErrorForDisplay(err, {
-        fallback: i18n.t("status.loadingFailed"),
-      });
-      setAnalysisStatus(context, () => message);
-      showToast(message, { tone: "error" });
-    }
-    return false;
-  }
+		const pair: [LoadedMixTrackSource, LoadedMixTrackSource] = [
+			sources[0],
+			sources[1],
+		];
+		cachedAutocanonizerMixSources = pair;
+		applyLoadedAutocanonizerMixSources(context, pair);
+		return true;
+	} catch (err) {
+		if (!isStaleLoad(generation)) {
+			cachedAutocanonizerMixSources = null;
+			useAppStore.setState({
+				autocanonizerMixEnabled: false,
+				autocanonizerMixTrackTitles: null,
+				autocanonizerOtherDurationSec: null,
+			});
+			const message = formatErrorForDisplay(err, {
+				fallback: i18n.t("status.loadingFailed"),
+			});
+			setAnalysisStatus(context, () => message);
+			showToast(message, { tone: "error" });
+		}
+		return false;
+	}
 }
 
 /**
@@ -819,16 +840,21 @@ export async function loadAutocanonizerMix(
 export async function disableAutocanonizerMix(
 	context: AppContext,
 ): Promise<boolean> {
-  cachedAutocanonizerMixSources = null;
+	cachedAutocanonizerMixSources = null;
 	stopPlayback(context);
 	useAppStore.setState({
 		autocanonizerMixEnabled: false,
+		autocanonizerQuadMode: false,
 		autocanonizerMixTrackTitles: null,
 		autocanonizerOtherDurationSec: null,
 		autocanonizerMainGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
 		autocanonizerOtherGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
+		autocanonizerPinkGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
+		autocanonizerGoldGainPct: DEFAULT_MIX_TRACK_GAIN_PCT,
 	});
+	context.autocanonizer?.setQuadMode?.(false);
 	context.autocanonizer?.setStreamGains?.(1, 1);
+	context.autocanonizer?.setQuadStreamGains?.(1, 1);
 
 	const { playlist } = useAppStore.getState();
 	const activeTrack =
@@ -895,21 +921,94 @@ export function setAutocanonizerSongGainPct(
  * using the cached dual mix sources, resuming playback if already running.
  */
 export function swapAutocanonizerMixSongs(context: AppContext): boolean {
-  if (
-    !useAppStore.getState().autocanonizerMixEnabled ||
-    !cachedAutocanonizerMixSources
-  ) {
-    return false;
-  }
-  const wasRunning = useAppStore.getState().isRunning;
-  stopPlayback(context);
-  cachedAutocanonizerMixSources = [
-    cachedAutocanonizerMixSources[1],
-    cachedAutocanonizerMixSources[0],
-  ];
-  applyLoadedAutocanonizerMixSources(context, cachedAutocanonizerMixSources);
-  if (wasRunning) {
-    startAutocanonizerPlayback(context, 0, { resetSession: true });
-  }
-  return true;
+	if (
+		!useAppStore.getState().autocanonizerMixEnabled ||
+		!cachedAutocanonizerMixSources
+	) {
+		return false;
+	}
+	const wasRunning = useAppStore.getState().isRunning;
+	stopPlayback(context);
+	cachedAutocanonizerMixSources = [
+		cachedAutocanonizerMixSources[1],
+		cachedAutocanonizerMixSources[0],
+	];
+	applyLoadedAutocanonizerMixSources(context, cachedAutocanonizerMixSources);
+	if (wasRunning) {
+		startAutocanonizerPlayback(context, 0, { resetSession: true });
+	}
+	return true;
+}
+
+/**
+ * Toggles 4-voice quad mode (Song 1 on Blue+Green, Song 2 on Pink+Gold) for
+ * an active 2-song Autocanonizer mix.
+ */
+export function setAutocanonizerQuadMode(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	useAppStore.setState({ autocanonizerQuadMode: enabled });
+	if (!useAppStore.getState().autocanonizerMixEnabled) {
+		return;
+	}
+	context.autocanonizer?.setQuadMode?.(enabled);
+}
+
+/**
+ * Switches whether Gold mirrors Green ("synced") or follows Song 2's own
+ * canon ("independent") when 4-voice quad mode is active.
+ */
+export function setAutocanonizerQuadBranchMode(
+	context: AppContext,
+	mode: AutocanonizerQuadBranchMode,
+): void {
+	useAppStore.setState({ autocanonizerQuadBranchMode: mode });
+	if (
+		!useAppStore.getState().autocanonizerMixEnabled ||
+		!useAppStore.getState().autocanonizerQuadMode
+	) {
+		return;
+	}
+	context.autocanonizer?.setQuadBranchMode?.(mode);
+}
+
+/**
+ * Sets L/R pan percentages (-100 to 100) for Song 2's Pink and Gold streams
+ * in 4-voice quad mode.
+ */
+export function setAutocanonizerQuadStreamPans(
+	context: AppContext,
+	pinkPanPct: number,
+	goldPanPct: number,
+): void {
+	const clampPanPct = (pan: number) =>
+		Number.isFinite(pan) ? Math.max(-100, Math.min(100, Math.round(pan))) : 0;
+	const nextPink = clampPanPct(pinkPanPct);
+	const nextGold = clampPanPct(goldPanPct);
+	useAppStore.setState({
+		autocanonizerPinkPan: nextPink,
+		autocanonizerGoldPan: nextGold,
+	});
+	context.autocanonizer?.setQuadStreamPans?.(nextPink / 100, nextGold / 100);
+}
+
+/**
+ * Sets Song 2's Pink or Gold stream live volume percentage (0–200%) in 4-voice
+ * quad mode without interrupting playback.
+ */
+export function setAutocanonizerQuadSongGainPct(
+	context: AppContext,
+	stream: "pink" | "gold",
+	gainPct: number,
+): void {
+	const clamped = clampMixTrackGainPct(gainPct);
+	const state = useAppStore.getState();
+	const nextPink = stream === "pink" ? clamped : state.autocanonizerPinkGainPct;
+	const nextGold = stream === "gold" ? clamped : state.autocanonizerGoldGainPct;
+	useAppStore.setState({
+		autocanonizerPinkGainPct: nextPink,
+		autocanonizerGoldGainPct: nextGold,
+	});
+	context.autocanonizer?.setQuadStreamGains?.(nextPink / 100, nextGold / 100);
 }

@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   loadAutocanonizerMix: vi.fn(),
   disableAutocanonizerMix: vi.fn(),
   setAutocanonizerMixAlignment: vi.fn(),
+  setAutocanonizerQuadMode: vi.fn(),
+  setAutocanonizerQuadBranchMode: vi.fn(),
   swapAutocanonizerMixSongs: vi.fn(),
   trackEvent: vi.fn(),
   getCount: vi.fn(() => 6),
@@ -27,6 +29,8 @@ vi.mock("../../playback", async (importOriginal) => ({
   loadAutocanonizerMix: h.loadAutocanonizerMix,
   disableAutocanonizerMix: h.disableAutocanonizerMix,
   setAutocanonizerMixAlignment: h.setAutocanonizerMixAlignment,
+  setAutocanonizerQuadMode: h.setAutocanonizerQuadMode,
+  setAutocanonizerQuadBranchMode: h.setAutocanonizerQuadBranchMode,
   swapAutocanonizerMixSongs: h.swapAutocanonizerMixSongs,
 }));
 vi.mock("../../analytics", () => ({
@@ -51,6 +55,8 @@ describe("VizTop", () => {
         multiTrackEnabled: false,
         autocanonizerMixEnabled: false,
         autocanonizerMixAlignment: "cover-sync",
+        autocanonizerQuadMode: false,
+        autocanonizerQuadBranchMode: "synced",
         playlistAddSticky: false,
         playlist: { tracks: [], currentIndex: -1 },
       });
@@ -153,5 +159,40 @@ describe("VizTop", () => {
 
     await userEvent.click(mixBtn);
     expect(h.disableAutocanonizerMix).toHaveBeenCalled();
+  });
+
+  it("toggles 4-Voice quad mode and switches between Synced and Independent branching", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: true,
+        autocanonizerQuadMode: false,
+        autocanonizerQuadBranchMode: "synced",
+      });
+    });
+    render(<VizTop />);
+    const quadToggle = document.getElementById("canonizer-quad-toggle")!;
+    expect(quadToggle.getAttribute("aria-pressed")).toBe("false");
+    expect(document.getElementById("canonizer-mix-alignment-group")).not.toBeNull();
+    expect(document.getElementById("canonizer-quad-branch-group")).toBeNull();
+
+    await userEvent.click(quadToggle);
+    expect(h.setAutocanonizerQuadMode).toHaveBeenCalledWith(expect.anything(), true);
+
+    act(() => {
+      useAppStore.setState({ autocanonizerQuadMode: true });
+    });
+    expect(quadToggle.classList.contains("is-active")).toBe(true);
+    expect(document.getElementById("canonizer-mix-alignment-group")).toBeNull();
+    const syncedBtn = document.getElementById("canonizer-quad-branch-synced")!;
+    const indepBtn = document.getElementById("canonizer-quad-branch-independent")!;
+    expect(syncedBtn.classList.contains("is-active")).toBe(true);
+    expect(indepBtn.classList.contains("is-active")).toBe(false);
+
+    await userEvent.click(indepBtn);
+    expect(h.setAutocanonizerQuadBranchMode).toHaveBeenCalledWith(
+      expect.anything(),
+      "independent",
+    );
   });
 });

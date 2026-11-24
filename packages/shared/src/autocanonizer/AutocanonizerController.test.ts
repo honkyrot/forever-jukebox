@@ -487,4 +487,133 @@ describe("AutocanonizerController", () => {
       otherSeconds: 20,
     });
   });
+
+  it("plays 4 voices across Song 1 and Song 2 in quad mode with synced and independent Gold branching", () => {
+    const pA = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pB = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pC = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pD = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    const buildAnalysis = (
+      specs: Array<{ pitches: number[][]; timbreVal: number; loudness: number }>,
+    ) => {
+      const dur = 0.5;
+      const beats: Array<{ start: number; duration: number; confidence: number }> = [];
+      const bars: Array<{ start: number; duration: number; confidence: number }> = [];
+      const sections: Array<{ start: number; duration: number; confidence: number }> = [];
+      const segments: Array<{
+        start: number;
+        duration: number;
+        confidence: number;
+        loudness_start: number;
+        loudness_max: number;
+        loudness_max_time: number;
+        pitches: number[];
+        timbre: number[];
+      }> = [];
+      let beatIdx = 0;
+      for (const spec of specs) {
+        sections.push({
+          start: beatIdx * dur,
+          duration: spec.pitches.length * dur,
+          confidence: 1,
+        });
+        bars.push({
+          start: beatIdx * dur,
+          duration: spec.pitches.length * dur,
+          confidence: 1,
+        });
+        for (const pitches of spec.pitches) {
+          const start = beatIdx * dur;
+          beats.push({ start, duration: dur, confidence: 1 });
+          segments.push({
+            start,
+            duration: dur,
+            confidence: 1,
+            loudness_start: spec.loudness - 2,
+            loudness_max: spec.loudness,
+            loudness_max_time: 0.1,
+            pitches,
+            timbre: Array.from({ length: 12 }, (_, k) =>
+              k === 0 ? spec.timbreVal : 0,
+            ),
+          });
+          beatIdx += 1;
+        }
+      }
+      return {
+        track: { duration: beatIdx * dur },
+        sections,
+        bars,
+        beats,
+        tatums: [],
+        segments,
+      };
+    };
+
+    const mainRaw = buildAnalysis([
+      { pitches: [pA, pB, pC, pD], timbreVal: 10, loudness: -5 },
+      { pitches: [pD, pC, pB, pA], timbreVal: -10, loudness: -20 },
+      { pitches: [pA, pB, pC, pD], timbreVal: 10, loudness: -5 },
+      { pitches: [pD, pC, pB, pA], timbreVal: -10, loudness: -20 },
+    ]);
+    // Second cover shares overall form but swaps sections 1 and 3 slightly so independent mode diverges.
+    const otherRaw = buildAnalysis([
+      { pitches: [pA, pB, pC, pD], timbreVal: 10, loudness: -5 },
+      { pitches: [pD, pC, pB, pA], timbreVal: -10, loudness: -20 },
+      { pitches: [pD, pC, pB, pA], timbreVal: -10, loudness: -20 },
+      { pitches: [pA, pB, pC, pD], timbreVal: 10, loudness: -5 },
+    ]);
+
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains, sources } = createAudioContext();
+    const mainBuffer = { duration: 20 } as AudioBuffer;
+    const otherBuffer = { duration: 20 } as AudioBuffer;
+
+    controller.setDualAudio(mainBuffer, otherBuffer, context);
+    controller.setDualAnalysis(mainRaw, otherRaw, {
+      quadMode: true,
+      quadBranchMode: "synced",
+    });
+
+    // Quad gain scaling: 0.28 / 0.22 / 0.28 / 0.22
+    expect(gains[0].gain.value).toBeCloseTo(0.28);
+    expect(gains[1].gain.value).toBeCloseTo(0.22);
+    expect(gains[2].gain.value).toBeCloseTo(0.28);
+    expect(gains[3].gain.value).toBeCloseTo(0.22);
+
+    const onBeat = vi.fn();
+    controller.setOnBeat(onBeat);
+    controller.startAtIndex(0);
+    controller.stop();
+
+    // 4 sources spawned: Blue & Green from mainBuffer, Pink & Gold from otherBuffer.
+    expect(sources).toHaveLength(4);
+    expect(sources[0].buffer).toBe(mainBuffer);
+    expect(sources[1].buffer).toBe(mainBuffer);
+    expect(sources[2].buffer).toBe(otherBuffer);
+    expect(sources[3].buffer).toBe(otherBuffer);
+    expect(onBeat).toHaveBeenCalledWith(
+      0,
+      expect.anything(),
+      expect.objectContaining({
+        mainSeconds: expect.any(Number),
+        otherSeconds: expect.any(Number),
+        pinkSeconds: expect.any(Number),
+        goldSeconds: expect.any(Number),
+      }),
+    );
+
+    const inner = controller as unknown as {
+      beats: Array<CanonizerBeat & { pink?: CanonizerBeat; gold?: CanonizerBeat }>;
+      otherBeats: CanonizerBeat[];
+    };
+    const syncedGoldWhich = inner.beats.map((b) => b.gold?.which);
+
+    controller.setQuadBranchMode("independent");
+    const independentGoldWhich = inner.beats.map((b) => b.gold?.which);
+    expect(independentGoldWhich).not.toEqual(syncedGoldWhich);
+    expect(inner.beats.every((b) => inner.otherBeats.includes(b.gold!))).toBe(
+      true,
+    );
+  });
 });
