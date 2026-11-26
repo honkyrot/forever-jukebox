@@ -7,8 +7,34 @@ import {
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
 import { formatCursorTime, formatPlaybackTitle } from "../../format";
 import { useMarquee } from "../../hooks/useMarquee";
+import type { BpmTrend } from "../../liveBpm";
 import { useAppStore } from "../../store";
 import { useTranslation } from "react-i18next";
+
+/**
+ * Synchronizes the BPM readout value, directional arrow, and highlight class
+ * directly onto DOM nodes without triggering a React render.
+ */
+function syncBpmDom(
+  groupEl: HTMLSpanElement | null,
+  valueEl: HTMLSpanElement | null,
+  arrowEl: HTMLSpanElement | null,
+  bpmText: string,
+  bpmTrend: BpmTrend,
+) {
+  if (valueEl) {
+    valueEl.textContent = bpmText;
+  }
+  const hasChange = bpmTrend !== null;
+  if (groupEl) {
+    groupEl.classList.toggle("is-bpm-changed", hasChange);
+  }
+  if (arrowEl) {
+    arrowEl.textContent =
+      bpmTrend === "up" ? "↑" : bpmTrend === "down" ? "↓" : "";
+    arrowEl.classList.toggle("is-hidden", !hasChange);
+  }
+}
 
 // Viz-bottom track info: marquee title, listen time and beat counters.
 // Rendered into the .viz-info container.
@@ -34,12 +60,22 @@ export function VizInfo() {
   const listenTimeRef = useRef<HTMLSpanElement | null>(null);
   const beatsPlayedRef = useRef<HTMLSpanElement | null>(null);
   const branchChanceRef = useRef<HTMLSpanElement | null>(null);
+  const bpmGroupRef = useRef<HTMLSpanElement | null>(null);
+  const bpmValueRef = useRef<HTMLSpanElement | null>(null);
+  const bpmArrowRef = useRef<HTMLSpanElement | null>(null);
   const jukeboxCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const mainCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const otherCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const pinkCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const goldCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const wubCursorTimeRef = useRef<HTMLSpanElement | null>(null);
+
+  const isJukebox = playMode === "jukebox";
+  const isCanonizer = playMode === "autocanonizer";
+  const isWubMachine = playMode === "wubmachine";
+  const hideBeats = playMode !== "jukebox";
+  const hideBpm = playMode === "wubmachine";
+  const bringHomeVisible = playMode === "jukebox" && bringItHomeMode;
 
   // listenTimeText (~5Hz) and beatsPlayedText (engine-rate) change far too
   // often to drive React renders — each would re-run the title/marquee work
@@ -59,6 +95,13 @@ export function VizInfo() {
         ? "100%"
         : seed.branchChanceText;
     }
+    syncBpmDom(
+      bpmGroupRef.current,
+      bpmValueRef.current,
+      bpmArrowRef.current,
+      seed.bpmText,
+      seed.bpmTrend,
+    );
     if (jukeboxCursorTimeRef.current) {
       jukeboxCursorTimeRef.current.textContent = formatCursorTime(
         seed.jukeboxCurrentSeconds,
@@ -111,6 +154,15 @@ export function VizInfo() {
           ? "100%"
           : state.branchChanceText;
       }
+      if (state.bpmText !== prev.bpmText || state.bpmTrend !== prev.bpmTrend) {
+        syncBpmDom(
+          bpmGroupRef.current,
+          bpmValueRef.current,
+          bpmArrowRef.current,
+          state.bpmText,
+          state.bpmTrend,
+        );
+      }
       if (
         state.jukeboxCurrentSeconds !== prev.jukeboxCurrentSeconds &&
         jukeboxCursorTimeRef.current
@@ -160,7 +212,7 @@ export function VizInfo() {
         );
       }
     });
-  }, [isQuadMix]);
+  }, [isQuadMix, hideBpm]);
 
   const displayTitle =
     trackTitle || trackArtist
@@ -175,11 +227,6 @@ export function VizInfo() {
       : t("common.appName");
   useMarquee(titleRef, displayTitle);
 
-  const isJukebox = playMode === "jukebox";
-  const isCanonizer = playMode === "autocanonizer";
-  const isWubMachine = playMode === "wubmachine";
-  const hideBeats = playMode !== "jukebox";
-  const bringHomeVisible = playMode === "jukebox" && bringItHomeMode;
   const beatsLabel =
     audioMode === "cowbell"
       ? t("playback.totalCowbells")
@@ -304,6 +351,26 @@ export function VizInfo() {
             }
             ref={branchChanceRef}
           ></span>
+          <span
+            id="viz-bpm-divider"
+            className={hideBpm ? "viz-divider is-hidden" : "viz-divider"}
+          >
+            ·
+          </span>
+          <span
+            id="viz-bpm"
+            className={hideBpm ? "viz-bpm is-hidden" : "viz-bpm"}
+            ref={bpmGroupRef}
+          >
+            <span id="viz-bpm-label">{t("playback.bpm")}</span>
+            <span id="viz-bpm-value" ref={bpmValueRef}></span>
+            <span
+              id="viz-bpm-arrow"
+              className="viz-bpm-arrow is-hidden"
+              ref={bpmArrowRef}
+              aria-hidden="true"
+            ></span>
+          </span>
         </span>
         <span
           id="bring-home-fullscreen-label"

@@ -35,6 +35,7 @@ import {
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { trackEvent, trackModeEnabled } from "../analytics";
 import {
+  syncLiveBpmForPlaybackRate,
   updatePlayButton,
   updateTrackInfo,
 } from "./status-ui";
@@ -266,11 +267,15 @@ export function applyExtrasChanges(
         nextAudioMode,
         previousAudioIntensity,
         nextAudioIntensity,
-      ) &&
-      useAppStore.getState().playMode === "jukebox" &&
-      (useAppStore.getState().isRunning || useAppStore.getState().isPaused)
+      )
     ) {
-      engine.syncToPlaybackPosition();
+      syncLiveBpmForPlaybackRate(player.getPlaybackRate?.());
+      if (
+        useAppStore.getState().playMode === "jukebox" &&
+        (useAppStore.getState().isRunning || useAppStore.getState().isPaused)
+      ) {
+        engine.syncToPlaybackPosition();
+      }
     }
     updatePlayButton();
   }
@@ -314,6 +319,7 @@ export function resetExtrasDefaults(context: AppContext) {
   resetAudioModeToOff(player);
   if (previousAudioMode !== "off") {
     trackAudioModeChange("off", useAppStore.getState().audioIntensity);
+    syncLiveBpmForPlaybackRate(player.getPlaybackRate?.());
   }
   updatePlayButton();
   if (

@@ -19,6 +19,7 @@ import {
   type BpmBarStyle,
   type BpmBarTimeSignatureMode,
 } from "./bpmBarTimeSignature";
+import type { BpmTrend } from "./liveBpm";
 import i18n from "./i18n";
 import type { SpotifySearchItem, YoutubeSearchItem } from "./api";
 import type { AppState, SleepTimerState, TabId } from "./context";
@@ -174,6 +175,9 @@ type ShellSlice = {
   jukeboxCurrentSeconds: number;
   beatsPlayedText: string;
   branchChanceText: string;
+  trackTempoBpm: number | null;
+  bpmText: string;
+  bpmTrend: BpmTrend;
   bpmBarEnabled: boolean;
   bpmBarStyle: BpmBarStyle;
   bpmBarTimeSignatureMode: BpmBarTimeSignatureMode;
@@ -281,6 +285,9 @@ const createUiSlice: Slice<
     | "jukeboxCurrentSeconds"
     | "beatsPlayedText"
     | "branchChanceText"
+    | "trackTempoBpm"
+    | "bpmText"
+    | "bpmTrend"
     | "bpmBarEnabled"
     | "bpmBarStyle"
     | "bpmBarTimeSignatureMode"
@@ -356,6 +363,9 @@ const createUiSlice: Slice<
     jukeboxCurrentSeconds: 0,
     beatsPlayedText: "0",
     branchChanceText: "0%",
+    trackTempoBpm: null,
+    bpmText: "--",
+    bpmTrend: null,
     bpmBarEnabled:
       typeof localStorage === "undefined" ||
       localStorage.getItem("bpmBarEnabled") !== "false",

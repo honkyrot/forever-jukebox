@@ -37,6 +37,7 @@ import {
   type PlaylistTrack,
 } from "../playlist";
 import { resolveStoredBpmBarBeatOffsetForTrack } from "../bpmBarTimeSignature";
+import { resolveTrackBaseTempoBpm } from "../liveBpm";
 import { getCurrentTrackId, useAppStore } from "../store";
 import {
   bumpLoadGeneration,
@@ -54,6 +55,7 @@ import {
 import {
   closeInfo,
   closeTuning,
+  resetLiveBpm,
   syncVolumeUI,
   updateListenTimeDisplay,
   updateTrackInfo,
@@ -273,6 +275,7 @@ export function resetForNewTrack(
   useAppStore.setState({ deleteEligible: false });
   useAppStore.setState({ deleteEligibilityJobId: null });
   useAppStore.setState({ vizData: null });
+  resetLiveBpm(null);
   if (shouldPreserveTuning) {
     useAppStore.setState({ tuningParams: preservedTuningParams });
   } else {
@@ -382,6 +385,11 @@ export function applyAnalysisResult(
   if (data) {
     jukebox.setData(data);
   }
+  const baseTempo = resolveTrackBaseTempoBpm(
+    response.result.track?.tempo,
+    data?.beats,
+  );
+  resetLiveBpm(baseTempo);
   useAppStore.setState({ selectedEdge: null });
   jukebox.setSelectedEdge(null);
   useAppStore.setState({ branchStats: null });

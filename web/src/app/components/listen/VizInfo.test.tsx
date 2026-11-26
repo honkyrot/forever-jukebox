@@ -20,6 +20,8 @@ describe("VizInfo", () => {
         jukeboxAudioMode: "off",
         listenTimeText: "00:00:00",
         beatsPlayedText: "0",
+        bpmText: "--",
+        bpmTrend: null,
         bringItHomeMode: false,
         trackDurationSec: 225,
         autocanonizerMainSeconds: 0,
@@ -124,6 +126,8 @@ describe("VizInfo", () => {
       useAppStore.setState({
         listenTimeText: "00:00:05",
         beatsPlayedText: "7",
+        bpmText: "132",
+        bpmTrend: "up",
         autocanonizerMainSeconds: 62,
         autocanonizerOtherSeconds: 125,
       });
@@ -134,6 +138,11 @@ describe("VizInfo", () => {
       "00:00:05",
     );
     expect(document.getElementById("beats-played")?.textContent).toBe("7");
+    expect(document.getElementById("viz-bpm-value")?.textContent).toBe("132");
+    expect(document.getElementById("viz-bpm-arrow")?.textContent).toBe("↑");
+    expect(
+      document.getElementById("viz-bpm")?.classList.contains("is-bpm-changed"),
+    ).toBe(true);
     expect(
       document.getElementById("autocanonizer-main-time")?.textContent,
     ).toBe("1:02");
@@ -211,6 +220,61 @@ describe("VizInfo", () => {
     expect(document.getElementById("autocanonizer-gold-time")?.textContent).toBe(
       "1:28",
     );
+  });
+
+  it("renders BPM readout and change arrow in jukebox and autocanonizer, hiding in wubmachine", () => {
+    act(() => {
+      useAppStore.setState({ bpmText: "125", bpmTrend: null });
+    });
+    render(<VizInfo />);
+
+    const bpmEl = document.getElementById("viz-bpm")!;
+    const dividerEl = document.getElementById("viz-bpm-divider")!;
+    const labelEl = document.getElementById("viz-bpm-label")!;
+    const valueEl = document.getElementById("viz-bpm-value")!;
+    const arrowEl = document.getElementById("viz-bpm-arrow")!;
+
+    expect(labelEl.textContent).toBe("BPM:");
+    expect(valueEl.textContent).toBe("125");
+    expect(bpmEl.classList.contains("is-hidden")).toBe(false);
+    expect(dividerEl.classList.contains("is-hidden")).toBe(false);
+    expect(bpmEl.classList.contains("is-bpm-changed")).toBe(false);
+    expect(arrowEl.classList.contains("is-hidden")).toBe(true);
+
+    act(() => {
+      useAppStore.setState({ bpmText: "142", bpmTrend: "up" });
+    });
+    expect(valueEl.textContent).toBe("142");
+    expect(arrowEl.textContent).toBe("↑");
+    expect(arrowEl.classList.contains("is-hidden")).toBe(false);
+    expect(bpmEl.classList.contains("is-bpm-changed")).toBe(true);
+
+    // Switching to autocanonizer keeps BPM visible and preserves highlight state.
+    act(() => {
+      useAppStore.setState({ playMode: "autocanonizer" });
+    });
+    expect(bpmEl.classList.contains("is-hidden")).toBe(false);
+    expect(bpmEl.classList.contains("is-bpm-changed")).toBe(true);
+
+    act(() => {
+      useAppStore.setState({ bpmText: "110", bpmTrend: "down" });
+    });
+    expect(valueEl.textContent).toBe("110");
+    expect(arrowEl.textContent).toBe("↓");
+    expect(bpmEl.classList.contains("is-bpm-changed")).toBe(true);
+
+    act(() => {
+      useAppStore.setState({ bpmTrend: null });
+    });
+    expect(arrowEl.classList.contains("is-hidden")).toBe(true);
+    expect(bpmEl.classList.contains("is-bpm-changed")).toBe(false);
+
+    // Wub Machine hides the BPM readout.
+    act(() => {
+      useAppStore.setState({ playMode: "wubmachine" });
+    });
+    expect(bpmEl.classList.contains("is-hidden")).toBe(true);
+    expect(dividerEl.classList.contains("is-hidden")).toBe(true);
   });
 });
 

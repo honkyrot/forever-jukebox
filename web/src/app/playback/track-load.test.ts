@@ -11,6 +11,7 @@ vi.mock("../cache", () => ({
 vi.mock("./status-ui", () => ({
   closeInfo: vi.fn(),
   closeTuning: vi.fn(),
+  resetLiveBpm: vi.fn(),
   syncVolumeUI: vi.fn(),
   updateListenTimeDisplay: vi.fn(),
   updateTrackInfo: vi.fn(),

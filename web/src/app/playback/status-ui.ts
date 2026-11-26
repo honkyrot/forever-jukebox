@@ -1,10 +1,155 @@
 import { countTuningBranches } from "@forever-jukebox/shared";
 import type { BpmBarPulseBeat } from "../bpmBarTimeSignature";
+import {
+  BPM_CHANGE_CLEAR_TIMEOUT_MS,
+  clearBpmTrackerTrend,
+  createBpmTrackerState,
+  formatBpmText,
+  resolveEffectivePlaybackRate,
+  resolveLocalBeatBpm,
+  stepBpmTracker,
+  type BpmBeatSample,
+  type BpmTrackerState,
+} from "../liveBpm";
 import type { AppContext } from "../context";
 import { formatDuration } from "@forever-jukebox/shared/ui/format";
 import { useAppStore } from "../store";
 
 export type TuningModalTab = "tuning" | "extras";
+
+let bpmTrackerState: BpmTrackerState = createBpmTrackerState();
+let bpmTrendClearTimerId: number | null = null;
+
+/**
+ * Cancels any pending fallback timeout for clearing the BPM trend arrow.
+ */
+function clearBpmTrendTimer(): void {
+  if (bpmTrendClearTimerId !== null && typeof window !== "undefined") {
+    window.clearTimeout(bpmTrendClearTimerId);
+  }
+  bpmTrendClearTimerId = null;
+}
+
+/**
+ * Commits the tracker's formatted BPM string and trend direction to the store
+ * only when the displayed values have changed.
+ */
+function commitBpmToStore(): void {
+  const bpmText = formatBpmText(bpmTrackerState.currentBpm);
+  const bpmTrend = bpmTrackerState.trend;
+  const current = useAppStore.getState();
+  if (current.bpmText !== bpmText || current.bpmTrend !== bpmTrend) {
+    useAppStore.setState({ bpmText, bpmTrend });
+  }
+}
+
+/**
+ * Schedules a fallback timeout so a detected tempo-change arrow clears even if
+ * playback pauses or stops emitting beat updates.
+ */
+function scheduleBpmTrendClear(): void {
+  clearBpmTrendTimer();
+  if (typeof window === "undefined") {
+    return;
+  }
+  bpmTrendClearTimerId = window.setTimeout(() => {
+    bpmTrendClearTimerId = null;
+    bpmTrackerState = clearBpmTrackerTrend(bpmTrackerState);
+    commitBpmToStore();
+  }, BPM_CHANGE_CLEAR_TIMEOUT_MS);
+}
+
+/**
+ * Steps the live BPM tracker with a new effective BPM reading and keeps the
+ * fallback clear timer and store values synchronized.
+ */
+function applyLiveBpmSample(rawBpm: number | null, advanceBeat: boolean): void {
+  const prev = bpmTrackerState;
+  const next = stepBpmTracker(prev, rawBpm, { advanceBeat });
+  bpmTrackerState = next;
+  if (next.trend === null) {
+    clearBpmTrendTimer();
+  } else if (
+    next.trend !== prev.trend ||
+    (next.currentBpm !== prev.currentBpm && next.beatsSinceChange === 0)
+  ) {
+    scheduleBpmTrendClear();
+  }
+  commitBpmToStore();
+}
+
+/**
+ * Resets live BPM tracking to the track's baseline tempo scaled by the active
+ * playback rate, clearing any active change arrow.
+ */
+export function resetLiveBpm(baseTempoBpm?: number | null): void {
+  clearBpmTrendTimer();
+  const state = useAppStore.getState();
+  const resolvedBase =
+    baseTempoBpm !== undefined ? baseTempoBpm : state.trackTempoBpm;
+  if (baseTempoBpm !== undefined && state.trackTempoBpm !== baseTempoBpm) {
+    useAppStore.setState({ trackTempoBpm: baseTempoBpm });
+  }
+  const rate = resolveEffectivePlaybackRate(
+    state.playMode,
+    state.jukeboxAudioMode,
+    state.audioIntensity,
+  );
+  bpmTrackerState = createBpmTrackerState(
+    resolvedBase !== null ? resolvedBase * rate : null,
+  );
+  commitBpmToStore();
+}
+
+/**
+ * Updates the live BPM readout from the newly entered beat and current playback
+ * rate, triggering an arrow when BPM shifts by more than 10 BPM.
+ */
+export function updateLiveBpmForBeat(
+  beat: BpmBeatSample | null | undefined,
+  options?: {
+    beats?: readonly BpmBeatSample[] | null;
+    beatIndex?: number | null;
+    playbackRate?: number | null;
+  },
+): void {
+  const state = useAppStore.getState();
+  const localBpm =
+    resolveLocalBeatBpm(beat, options?.beats, options?.beatIndex) ??
+    state.trackTempoBpm;
+  const rate = resolveEffectivePlaybackRate(
+    state.playMode,
+    state.jukeboxAudioMode,
+    state.audioIntensity,
+    options?.playbackRate,
+  );
+  applyLiveBpmSample(localBpm !== null ? localBpm * rate : null, true);
+}
+
+/**
+ * Recomputes the displayed live BPM when the audio mode or playback rate
+ * changes mid-track without advancing the beat-hold counter.
+ */
+export function syncLiveBpmForPlaybackRate(
+  playbackRate?: number | null,
+): void {
+  const state = useAppStore.getState();
+  const beats = state.vizData?.beats;
+  const activeBeat =
+    state.lastBeatIndex !== null && beats
+      ? beats[state.lastBeatIndex]
+      : undefined;
+  const baseBpm =
+    resolveLocalBeatBpm(activeBeat, beats, state.lastBeatIndex) ??
+    state.trackTempoBpm;
+  const rate = resolveEffectivePlaybackRate(
+    state.playMode,
+    state.jukeboxAudioMode,
+    state.audioIntensity,
+    playbackRate,
+  );
+  applyLiveBpmSample(baseBpm !== null ? baseBpm * rate : null, false);
+}
 
 export function updateListenTimeDisplay() {
   const { playTimerMs, lastPlayStamp } = useAppStore.getState();

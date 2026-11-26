@@ -219,6 +219,7 @@
     "listenTime": "Hörzeit:",
     "totalBeats": "Beats insgesamt:",
     "totalCowbells": "Kuhglocken insgesamt:",
+    "bpm": "BPM:",
     "volume": "Lautstärke",
     "audioBalance": "Audiobalance",
     "blueBalance": "Blaue Balance",

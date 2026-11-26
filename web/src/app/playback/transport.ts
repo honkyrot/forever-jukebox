@@ -5,6 +5,7 @@ import { getCurrentTrackId, useAppStore } from "../store";
 import { showToast } from "../ui";
 import {
   pulseVizStats,
+  resetLiveBpm,
   updateListenTimeDisplay,
   updatePlayButton,
 } from "./status-ui";
@@ -106,6 +107,7 @@ export function stopPlayback(context: AppContext) {
   }
   syncPredictedJumps(context);
   stopListenTimer();
+  resetLiveBpm();
   updateListenTimeDisplay();
   updatePlayButton();
 }
@@ -182,6 +184,7 @@ export function startJukeboxPlayback(context: AppContext, resetSession: boolean)
       autocanonizerGoldSeconds: 0,
     });
     jukebox.reset();
+    resetLiveBpm();
     pulseVizStats();
   } else {
     engine.syncToPlaybackPosition();
@@ -296,6 +299,7 @@ export function startAutocanonizerPlayback(
     updateListenTimeDisplay();
     useAppStore.setState({ beatsPlayedText: "0" });
     useAppStore.setState({ lastBeatIndex: null });
+    resetLiveBpm();
     pulseVizStats();
     autocanonizer.resetVisualization();
   }

@@ -55,6 +55,7 @@ import {
   resetPlaybackUiForTest,
 } from "./playback-ui";
 import { setWindowUrl } from "./__tests__/test-utils";
+import { BPM_CHANGE_HOLD_BEATS } from "./liveBpm";
 
 vi.mock("./ui", async (importActual) => {
   const actual = await importActual<typeof import("./ui")>();
@@ -3525,5 +3526,131 @@ describe("playback loading", () => {
     ]);
     expect(context.engine.loadAnalysis).not.toHaveBeenCalled();
     expect(useAppStore.getState().analysisLoaded).toBe(false);
+  });
+});
+
+describe("live BPM tracking", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    resetPlaybackUiForTest();
+    setWindowUrl("http://localhost/listen/abc");
+  });
+
+  it("seeds bpmText from track.tempo on analysis load and tracks >10 BPM shifts", () => {
+    const context = createContext();
+    const beats = [
+      ...Array.from({ length: 4 }, (_, i) => ({
+        start: i * 0.5,
+        duration: 0.5,
+        which: i,
+      })),
+      ...Array.from({ length: BPM_CHANGE_HOLD_BEATS + 2 }, (_, i) => ({
+        start: 2 + i * 0.4,
+        duration: 0.4,
+        which: i + 4,
+      })),
+    ];
+    vi.mocked(context.engine.getVisualizationData).mockReturnValue({
+      beats,
+      edges: [],
+    } as never);
+
+    applyAnalysisResult(context, {
+      status: "complete",
+      id: "job-bpm",
+      result: {
+        sections: [],
+        bars: [],
+        beats,
+        tatums: [],
+        segments: [],
+        track: { title: "Tempo Track", duration: 6, tempo: 120 },
+      },
+    } as unknown as AnalysisComplete);
+
+    expect(useAppStore.getState().bpmText).toBe("120");
+    expect(useAppStore.getState().bpmTrend).toBeNull();
+
+    initializePlayback();
+    const onUpdate = vi.mocked(context.engine.onUpdate).mock.calls[0]?.[0] as (
+      state: {
+        beatsPlayed: number;
+        currentBeatIndex: number;
+        currentTime: number;
+        lastJumped: boolean;
+        lastJumpTime: number | null;
+        lastJumpFromIndex: number | null;
+        lastJumpToIndex: number | null;
+        currentThreshold: number;
+        lastBranchPoint: number;
+        curRandomBranchChance: number;
+      },
+    ) => void;
+
+    const emitBeat = (beatsPlayed: number, beatIndex: number) => {
+      onUpdate({
+        beatsPlayed,
+        currentBeatIndex: beatIndex,
+        currentTime: beats[beatIndex].start,
+        lastJumped: false,
+        lastJumpTime: null,
+        lastJumpFromIndex: null,
+        lastJumpToIndex: null,
+        currentThreshold: 20,
+        lastBranchPoint: 1,
+        curRandomBranchChance: 0.2,
+      });
+    };
+
+    // Entering beat 5 puts the 5-beat median cleanly inside the 150 BPM section.
+    emitBeat(1, 0);
+    expect(useAppStore.getState().bpmTrend).toBeNull();
+    emitBeat(2, 6);
+    expect(useAppStore.getState().bpmText).toBe("150");
+    expect(useAppStore.getState().bpmTrend).toBe("up");
+
+    for (let i = 0; i < BPM_CHANGE_HOLD_BEATS; i += 1) {
+      emitBeat(3 + i, 6);
+    }
+    expect(useAppStore.getState().bpmTrend).toBeNull();
+  });
+
+  it("scales BPM when Nightcore mode is toggled and resets to default", () => {
+    const context = createContext();
+    useAppStore.setState({
+      playMode: "jukebox",
+      jukeboxAudioMode: "off",
+      audioIntensity: 100,
+    });
+    applyAnalysisResult(context, {
+      status: "complete",
+      id: "job-nightcore",
+      result: {
+        sections: [],
+        bars: [],
+        beats: [],
+        tatums: [],
+        segments: [],
+        track: { title: "NC Track", duration: 6, tempo: 100 },
+      },
+    } as unknown as AnalysisComplete);
+    expect(useAppStore.getState().bpmText).toBe("100");
+
+    applyExtrasChanges(context, {
+      bringItHomeMode: false,
+      branchStatsEnabled: false,
+      customAnchorEnabled: false,
+      audioMode: "nightcore",
+      audioIntensity: 100,
+      metronomeVolumePct: 100,
+      metronomeBeatsPerBar: null,
+      metronomeBeatOffset: 0,
+    });
+    expect(useAppStore.getState().bpmText).toBe("120");
+    expect(useAppStore.getState().bpmTrend).toBe("up");
+
+    resetExtrasDefaults(context);
+    expect(useAppStore.getState().bpmText).toBe("100");
+    expect(useAppStore.getState().bpmTrend).toBe("down");
   });
 });

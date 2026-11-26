@@ -2841,6 +2841,33 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
   color: var(--muted);
 }
 
+.viz-bpm {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 0.2s ease,
+    text-shadow 0.2s ease;
+}
+
+.viz-bpm.is-bpm-changed {
+  color: #ffffff;
+  font-weight: 600;
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.35);
+}
+
+body.theme-light .viz-bpm.is-bpm-changed {
+  color: var(--text);
+  text-shadow: 0 0 6px rgba(var(--text-rgb), 0.2);
+}
+
+.viz-bpm-arrow {
+  display: inline-block;
+  line-height: 1;
+}
+
 .viz-controls {
   display: inline-flex;
   align-items: center;

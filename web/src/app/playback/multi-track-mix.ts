@@ -45,6 +45,7 @@ import {
 	resolveStoredBpmBarBeatOffsetForTrack,
 	storeBpmBarBeatOffsetForTrack,
 } from "../bpmBarTimeSignature";
+import { resolveTrackBaseTempoBpm } from "../liveBpm";
 import { getPlaybackDeps } from "../runtime";
 import { getCurrentTrackId, useAppStore } from "../store";
 import {
@@ -58,7 +59,11 @@ import {
 	getLoadGeneration,
 	isStaleLoad,
 } from "./load-generation";
-import { updateTrackInfo, updateVizVisibility } from "./status-ui";
+import {
+	resetLiveBpm,
+	updateTrackInfo,
+	updateVizVisibility,
+} from "./status-ui";
 import { delay, loadTrackById, loadTrackByJobId } from "./track-load";
 import { startAutocanonizerPlayback, stopPlayback } from "./transport";
 import { syncPredictedJumps } from "./branch-lookahead";
@@ -287,6 +292,11 @@ function applyLoadedMixSources(
 	if (vizData) {
 		context.jukebox?.setData(vizData);
 	}
+	const baseTempo = resolveTrackBaseTempoBpm(
+		mergedAnalysis.tracks?.[0]?.tempo ?? mergedAnalysis.track?.tempo,
+		vizData?.beats,
+	);
+	resetLiveBpm(baseTempo);
 	context.jukebox?.setSelectedEdge(null);
 	syncPredictedJumps(context);
 	updateVizVisibility();
@@ -917,6 +927,14 @@ function applyLoadedAutocanonizerMixSources(
 	});
 	updateVizVisibility();
 	updateTrackInfo(context);
+	const rawMainBeats = Array.isArray(mainSource.analysisResult?.beats)
+		? (mainSource.analysisResult.beats as Array<{ duration: number }>)
+		: undefined;
+	const baseTempo = resolveTrackBaseTempoBpm(
+		mainSource.tempo ?? mainSource.analysisResult?.track?.tempo,
+		rawMainBeats,
+	);
+	resetLiveBpm(baseTempo);
 }
 
 /**

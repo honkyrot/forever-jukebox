@@ -219,6 +219,7 @@
     "listenTime": "Listen Time:",
     "totalBeats": "Total Beats:",
     "totalCowbells": "Total Cowbells:",
+    "bpm": "BPM:",
     "volume": "Volume",
     "audioBalance": "Audio balance",
     "blueBalance": "Blue balance",

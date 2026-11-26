@@ -34,7 +34,11 @@ import {
   type ExtrasApplyResult,
   type ExtrasFormValues,
 } from "./playback";
-import { pulseVizStats } from "./playback/status-ui";
+import {
+  pulseVizStats,
+  resetLiveBpm,
+  updateLiveBpmForBeat,
+} from "./playback/status-ui";
 import {
   advancePlaylistOnAutocanonizerEnded,
   getAttachedAppContext,
@@ -53,6 +57,7 @@ let lastCowbellBeatsPlayed = 0;
 
 export function resetPlaybackUiForTest(): void {
   lastCowbellBeatsPlayed = 0;
+  resetLiveBpm(null);
 }
 
 function formatSignedDuration(seconds: number) {
@@ -271,6 +276,7 @@ export function initializePlayback(): void {
         autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
       pulseVizStats(index, beat);
+      updateLiveBpmForBeat(beat, { beatIndex: index, playbackRate: 1 });
     });
     // A track that plays to its end hands over to the next playlist track.
     const handleLinearTrackEnded = () => {
@@ -346,13 +352,19 @@ export function initializePlayback(): void {
       if (engineState.currentBeatIndex >= 0) {
         if (engineState.beatsPlayed !== lastCowbellBeatsPlayed) {
           lastCowbellBeatsPlayed = engineState.beatsPlayed;
-          const beat = useAppStore.getState().vizData?.beats[engineState.currentBeatIndex];
+          const vizBeats = useAppStore.getState().vizData?.beats;
+          const beat = vizBeats?.[engineState.currentBeatIndex];
           pulseVizStats(engineState.currentBeatIndex, beat);
+          updateLiveBpmForBeat(beat, {
+            beats: vizBeats,
+            beatIndex: engineState.currentBeatIndex,
+            playbackRate: context.player.getPlaybackRate?.(),
+          });
           if (beat) {
             context.cowbellOverlay.handleBeatEnter(
               engineState.currentBeatIndex,
               beat,
-              useAppStore.getState().vizData?.beats[engineState.currentBeatIndex + 1],
+              vizBeats?.[engineState.currentBeatIndex + 1],
             );
             context.metronomeOverlay.handleBeatEnter(
               engineState.currentBeatIndex,
@@ -817,6 +829,7 @@ export function setPlayMode(mode: PlayMode): void {
       autocanonizerPinkSeconds: 0,
       autocanonizerGoldSeconds: 0,
     });
+    resetLiveBpm();
     if (prevMode === "autocanonizer" && useAppStore.getState().autocanonizerMixEnabled) {
       void disableAutocanonizerMix(context);
     } else if (prevMode === "jukebox" && useAppStore.getState().multiTrackEnabled) {
