@@ -1,5 +1,8 @@
 import { useLayoutEffect, useState } from "react";
 import {
+  clampTimeSignatureDenominator,
+  clampTimeSignatureNumerator,
+  clampTimeSignatureTrackOffset,
   hasNonDefaultExtras,
   MAX_MAX_BRANCHES,
   MAX_TIME_SIGNATURE_NUMERATOR,
@@ -9,6 +12,7 @@ import {
   MIN_TIME_SIGNATURE_TRACK_OFFSET,
   TIME_SIGNATURE_DENOMINATOR_OPTIONS,
   resolveTimeSignatureBranchStepBeats,
+  type TimeSignatureBranchMode,
 } from "@forever-jukebox/shared";
 import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import type {
@@ -45,8 +49,12 @@ import {
   setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
   setTimeSignatureBranchingEnabled,
+  setTimeSignatureBranchMode,
   setTimeSignatureDenominator,
   setTimeSignatureNumerator,
+  setTimeSignatureSimilarityDenominator,
+  setTimeSignatureSimilarityNumerator,
+  setTimeSignatureSimilarityRestrictEnabled,
   setTimeSignatureTrackOffset,
   type ExtrasFormValues,
   type TuningFormValues,
@@ -60,9 +68,22 @@ import {
   storeBranchLookaheadCount,
   storeBranchLookaheadEnabled,
 } from "../../branchLookahead";
+import {
+  MAX_BPM_BAR_SEGMENTS,
+  isSmoothBpmBarStyle,
+  normalizeBpmBarStyle,
+  normalizeBpmBarTimeSignatureMode,
+  storeBpmBarBeatOffsetForTrack,
+  storeBpmBarDenominator,
+  storeBpmBarNumerator,
+  storeBpmBarStyle,
+  storeBpmBarTimeSignatureMode,
+  type BpmBarStyle,
+  type BpmBarTimeSignatureMode,
+} from "../../bpmBarTimeSignature";
 import { isInstrumentalModeAvailable } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import { getAppContext } from "../../runtime";
-import { useAppStore } from "../../store";
+import { getCurrentTrackId, useAppStore } from "../../store";
 import { Modal } from "../Modal";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -185,6 +206,18 @@ export function TuningModal() {
   const open = useAppStore((s) => s.tuningModalOpen);
   const playMode = useAppStore((s) => s.playMode);
   const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
+  const bpmBarStyle = useAppStore((s) => s.bpmBarStyle);
+  const bpmBarTimeSignatureMode = useAppStore((s) => s.bpmBarTimeSignatureMode);
+  const bpmBarNumerator = useAppStore((s) => s.bpmBarNumerator);
+  const bpmBarDenominator = useAppStore((s) => s.bpmBarDenominator);
+  const bpmBarBeatOffset = useAppStore((s) => s.bpmBarBeatOffset);
+  const bpmBarSegmentCount = Math.min(
+    MAX_BPM_BAR_SEGMENTS,
+    Math.max(
+      1,
+      resolveTimeSignatureBranchStepBeats(bpmBarNumerator, bpmBarDenominator),
+    ),
+  );
   const metronomeDetectedBeatsPerBar = useAppStore(
     (s) => s.metronomeDetectedBeatsPerBar,
   );
@@ -197,6 +230,9 @@ export function TuningModal() {
   const timeSignatureBranchingEnabled = useAppStore(
     (s) => s.timeSignatureBranchingEnabled,
   );
+  const timeSignatureBranchMode = useAppStore((s) => s.timeSignatureBranchMode);
+  const isTimeSignatureOverwrite =
+    timeSignatureBranchingEnabled && timeSignatureBranchMode === "overwrite";
   const timeSignatureNumerator = useAppStore((s) => s.timeSignatureNumerator);
   const timeSignatureDenominator = useAppStore(
     (s) => s.timeSignatureDenominator,
@@ -207,6 +243,19 @@ export function TuningModal() {
   const timeSignatureStepBeats = resolveTimeSignatureBranchStepBeats(
     timeSignatureNumerator,
     timeSignatureDenominator,
+  );
+  const timeSignatureSimilarityRestrictEnabled = useAppStore(
+    (s) => s.timeSignatureSimilarityRestrictEnabled,
+  );
+  const timeSignatureSimilarityNumerator = useAppStore(
+    (s) => s.timeSignatureSimilarityNumerator,
+  );
+  const timeSignatureSimilarityDenominator = useAppStore(
+    (s) => s.timeSignatureSimilarityDenominator,
+  );
+  const timeSignatureSimilarityStepBeats = resolveTimeSignatureBranchStepBeats(
+    timeSignatureSimilarityNumerator,
+    timeSignatureSimilarityDenominator,
   );
   const tempoSyncEnabled = useAppStore((s) => s.tempoSyncEnabled);
   const normalizeVolumeEnabled = useAppStore((s) => s.normalizeVolumeEnabled);
@@ -399,6 +448,39 @@ export function TuningModal() {
     useAppStore.setState({ bpmBarEnabled: enabled });
   };
 
+  /**
+   * Normalizes, persists, and applies the selected BPM bar display style.
+   */
+  const updateBpmBarStyle = (style: BpmBarStyle) => {
+    const normalized = normalizeBpmBarStyle(style);
+    storeBpmBarStyle(normalized);
+    useAppStore.setState({ bpmBarStyle: normalized });
+  };
+
+  const updateBpmBarTimeSignatureMode = (mode: BpmBarTimeSignatureMode) => {
+    const normalized = normalizeBpmBarTimeSignatureMode(mode);
+    storeBpmBarTimeSignatureMode(normalized);
+    useAppStore.setState({ bpmBarTimeSignatureMode: normalized });
+  };
+
+  const updateBpmBarNumerator = (numerator: number) => {
+    const clamped = clampTimeSignatureNumerator(numerator);
+    storeBpmBarNumerator(clamped);
+    useAppStore.setState({ bpmBarNumerator: clamped });
+  };
+
+  const updateBpmBarDenominator = (denominator: number) => {
+    const clamped = clampTimeSignatureDenominator(denominator);
+    storeBpmBarDenominator(clamped);
+    useAppStore.setState({ bpmBarDenominator: clamped });
+  };
+
+  const updateBpmBarBeatOffset = (offset: number) => {
+    const clamped = clampTimeSignatureTrackOffset(offset);
+    storeBpmBarBeatOffsetForTrack(getCurrentTrackId(), clamped);
+    useAppStore.setState({ bpmBarBeatOffset: clamped });
+  };
+
   const toggleBranchLookahead = (enabled: boolean) => {
     storeBranchLookaheadEnabled(enabled);
     useAppStore.setState({ branchLookaheadEnabled: enabled });
@@ -433,6 +515,150 @@ export function TuningModal() {
       {t(option.labelKey)}
     </label>
   );
+
+  const renderSimilarityRestrictGroup = (includeSingleTrackOffset: boolean) => {
+    const singleTrackOffset = timeSignatureTrackOffsets[0] ?? 0;
+    return (
+      <div className="multi-time-sig-group">
+        <label>
+          <input
+            id="time-signature-similarity-restrict-enabled"
+            type="checkbox"
+            checked={timeSignatureSimilarityRestrictEnabled}
+            onChange={(event) => {
+              setTimeSignatureSimilarityRestrictEnabled(
+                getAppContext(),
+                event.target.checked,
+              );
+              refreshTuningForm();
+            }}
+          />{" "}
+          {t("tuning.timeSignatureSimilarityRestrict")}
+        </label>
+        {timeSignatureSimilarityRestrictEnabled ? (
+          <div
+            id="multi-time-sig-restrict-controls"
+            className="multi-time-sig-controls"
+          >
+            <div className="multi-time-sig-fraction">
+              <input
+                id="time-signature-similarity-numerator"
+                type="number"
+                min={MIN_TIME_SIGNATURE_NUMERATOR}
+                max={MAX_TIME_SIGNATURE_NUMERATOR}
+                step={1}
+                aria-label={t("tuning.timeSignatureNumeratorAria")}
+                value={timeSignatureSimilarityNumerator}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10);
+                  if (!Number.isFinite(parsed)) {
+                    return;
+                  }
+                  setTimeSignatureSimilarityNumerator(getAppContext(), parsed);
+                  refreshTuningForm();
+                }}
+              />
+              <span className="multi-time-sig-slash">/</span>
+              <select
+                id="time-signature-similarity-denominator"
+                aria-label={t("tuning.timeSignatureDenominatorAria")}
+                value={timeSignatureSimilarityDenominator}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10);
+                  if (!Number.isFinite(parsed)) {
+                    return;
+                  }
+                  setTimeSignatureSimilarityDenominator(
+                    getAppContext(),
+                    parsed,
+                  );
+                  refreshTuningForm();
+                }}
+              >
+                {TIME_SIGNATURE_DENOMINATOR_OPTIONS.map((den) => (
+                  <option key={den} value={den}>
+                    {den}
+                  </option>
+                ))}
+              </select>
+              <span id="time-signature-similarity-step-beats" className="hint">
+                {t("tuning.timeSignatureEveryBeats", {
+                  count: timeSignatureSimilarityStepBeats,
+                })}
+              </span>
+            </div>
+            {includeSingleTrackOffset ? (
+              <div className="multi-time-sig-offset-row">
+                <div className="multi-time-sig-offset-header">
+                  <span>{t("tuning.bpmBarBeatOffset")}</span>
+                </div>
+                <div className="multi-time-sig-stepper">
+                  <button
+                    type="button"
+                    id="time-signature-track-offset-dec-0"
+                    aria-label="-"
+                    disabled={
+                      singleTrackOffset <= MIN_TIME_SIGNATURE_TRACK_OFFSET
+                    }
+                    onClick={() => {
+                      setTimeSignatureTrackOffset(
+                        getAppContext(),
+                        0,
+                        singleTrackOffset - 1,
+                      );
+                      refreshTuningForm();
+                    }}
+                  >
+                    -
+                  </button>
+                  <input
+                    id="time-signature-track-offset-0"
+                    type="number"
+                    min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
+                    max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
+                    step={1}
+                    aria-label={t("tuning.bpmBarBeatOffset")}
+                    value={singleTrackOffset}
+                    onChange={(event) => {
+                      const parsed = Number.parseInt(event.target.value, 10);
+                      if (!Number.isFinite(parsed)) {
+                        return;
+                      }
+                      setTimeSignatureTrackOffset(getAppContext(), 0, parsed);
+                      refreshTuningForm();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    id="time-signature-track-offset-inc-0"
+                    aria-label="+"
+                    disabled={
+                      singleTrackOffset >= MAX_TIME_SIGNATURE_TRACK_OFFSET
+                    }
+                    onClick={() => {
+                      setTimeSignatureTrackOffset(
+                        getAppContext(),
+                        0,
+                        singleTrackOffset + 1,
+                      );
+                      refreshTuningForm();
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="hint">
+              {isTimeSignatureOverwrite
+                ? t("tuning.timeSignatureOverriddenHint")
+                : t("tuning.timeSignatureSimilarityRestrictHint")}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <Modal id="tuning-modal" open={open} onClose={close} inline>
@@ -484,6 +710,9 @@ export function TuningModal() {
                   </span>
                   {multiTrackEnabled && crossTrackOnly ? (
                     <div>{t("tuning.sameSongThresholdDisabledHint")}</div>
+                  ) : !multiTrackEnabled &&
+                    timeSignatureSimilarityRestrictEnabled ? (
+                    <div>{t("tuning.timeSignatureRestrictedHint")}</div>
                   ) : null}
                 </div>
               }
@@ -613,6 +842,9 @@ export function TuningModal() {
                 {t("tuning.highlightAnchor")}
               </label>
             </div>
+            {!multiTrackEnabled && playMode === "jukebox"
+              ? renderSimilarityRestrictGroup(true)
+              : null}
             {multiTrackEnabled ? (
               <div id="tuning-panel-multi" className="tuning-multi-section">
                 <h3>{t("tuning.multiTuning")}</h3>
@@ -697,7 +929,7 @@ export function TuningModal() {
                   max={100}
                   step={1}
                   value={form?.crossThreshold ?? 2}
-                  disabled={timeSignatureBranchingEnabled}
+                  disabled={isTimeSignatureOverwrite}
                   onChange={(value) => setFormField("crossThreshold", value)}
                   hint={
                     <div className="hint">
@@ -708,8 +940,15 @@ export function TuningModal() {
                           ? "-"
                           : `${form.computedCrossThreshold}`}
                       </span>
-                      {timeSignatureBranchingEnabled ? (
+                      {isTimeSignatureOverwrite ? (
                         <div>{t("tuning.timeSignatureOverriddenHint")}</div>
+                      ) : timeSignatureSimilarityRestrictEnabled &&
+                        timeSignatureBranchingEnabled ? (
+                        <div>{t("tuning.timeSignatureBothHint")}</div>
+                      ) : timeSignatureSimilarityRestrictEnabled ? (
+                        <div>{t("tuning.timeSignatureRestrictedHint")}</div>
+                      ) : timeSignatureBranchingEnabled ? (
+                        <div>{t("tuning.timeSignatureCombinedHint")}</div>
                       ) : null}
                     </div>
                   }
@@ -733,6 +972,7 @@ export function TuningModal() {
                     />
                   );
                 })}
+                {renderSimilarityRestrictGroup(false)}
                 <div className="multi-time-sig-group">
                   <label>
                     <input
@@ -754,6 +994,30 @@ export function TuningModal() {
                       id="multi-time-sig-controls"
                       className="multi-time-sig-controls"
                     >
+                      <div className="multi-time-sig-mode">
+                        <label htmlFor="time-signature-branch-mode">
+                          {t("tuning.timeSignatureModeLabel")}
+                        </label>
+                        <select
+                          id="time-signature-branch-mode"
+                          aria-label={t("tuning.timeSignatureModeLabel")}
+                          value={timeSignatureBranchMode}
+                          onChange={(event) => {
+                            setTimeSignatureBranchMode(
+                              getAppContext(),
+                              event.target.value as TimeSignatureBranchMode,
+                            );
+                            refreshTuningForm();
+                          }}
+                        >
+                          <option value="overwrite">
+                            {t("tuning.timeSignatureModeOverwrite")}
+                          </option>
+                          <option value="combine">
+                            {t("tuning.timeSignatureModeCombine")}
+                          </option>
+                        </select>
+                      </div>
                       <div className="multi-time-sig-fraction">
                         <input
                           id="time-signature-numerator"
@@ -807,6 +1071,14 @@ export function TuningModal() {
                           })}
                         </span>
                       </div>
+                    </div>
+                  ) : null}
+                  {timeSignatureBranchingEnabled ||
+                  timeSignatureSimilarityRestrictEnabled ? (
+                    <div
+                      id="multi-time-sig-offsets-panel"
+                      className="multi-time-sig-controls"
+                    >
                       <div className="hint">
                         {coverSyncEnabled
                           ? t("tuning.timeSignatureCoverSyncHint")
@@ -958,6 +1230,162 @@ export function TuningModal() {
               Show upcoming branches
             </label>
           </div>
+          {bpmBarEnabled ? (
+            <div
+              id="bpm-bar-time-sig-controls"
+              className="multi-time-sig-controls"
+            >
+              <div className="multi-time-sig-mode">
+                <label htmlFor="bpm-bar-style">
+                  {t("tuning.bpmBarStyleLabel")}
+                </label>
+                <select
+                  id="bpm-bar-style"
+                  aria-label={t("tuning.bpmBarStyleLabel")}
+                  value={bpmBarStyle}
+                  onChange={(event) =>
+                    updateBpmBarStyle(event.target.value as BpmBarStyle)
+                  }
+                >
+                  <option value="pulse">{t("tuning.bpmBarStylePulse")}</option>
+                  <option value="smooth">
+                    {t("tuning.bpmBarStyleSmooth")}
+                  </option>
+                  <option value="smooth-pulse">
+                    {t("tuning.bpmBarStyleSmoothPulse")}
+                  </option>
+                </select>
+              </div>
+              <div className="multi-time-sig-mode">
+                <label htmlFor="bpm-bar-time-sig-mode">
+                  {t("tuning.bpmBarTimeSignatureLabel")}
+                </label>
+                <select
+                  id="bpm-bar-time-sig-mode"
+                  aria-label={t("tuning.bpmBarTimeSignatureLabel")}
+                  value={bpmBarTimeSignatureMode}
+                  onChange={(event) =>
+                    updateBpmBarTimeSignatureMode(
+                      event.target.value as BpmBarTimeSignatureMode,
+                    )
+                  }
+                >
+                  <option value="auto">
+                    {t("tuning.bpmBarTimeSignatureAuto")}
+                  </option>
+                  <option value="off">
+                    {t("tuning.bpmBarTimeSignatureOff")}
+                  </option>
+                  <option value="custom">
+                    {t("tuning.bpmBarTimeSignatureCustom")}
+                  </option>
+                </select>
+              </div>
+              {bpmBarTimeSignatureMode === "custom" ? (
+                <>
+                  <div className="multi-time-sig-fraction">
+                    <input
+                      id="bpm-bar-numerator"
+                      type="number"
+                      min={MIN_TIME_SIGNATURE_NUMERATOR}
+                      max={MAX_TIME_SIGNATURE_NUMERATOR}
+                      step={1}
+                      aria-label={t("tuning.timeSignatureNumeratorAria")}
+                      value={bpmBarNumerator}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateBpmBarNumerator(parsed);
+                      }}
+                    />
+                    <span className="multi-time-sig-slash">/</span>
+                    <select
+                      id="bpm-bar-denominator"
+                      aria-label={t("tuning.timeSignatureDenominatorAria")}
+                      value={bpmBarDenominator}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        updateBpmBarDenominator(parsed);
+                      }}
+                    >
+                      {TIME_SIGNATURE_DENOMINATOR_OPTIONS.map((den) => (
+                        <option key={den} value={den}>
+                          {den}
+                        </option>
+                      ))}
+                    </select>
+                    <span id="bpm-bar-step-beats" className="hint">
+                      {t(
+                        isSmoothBpmBarStyle(bpmBarStyle)
+                          ? "tuning.bpmBarBeats"
+                          : "tuning.bpmBarSegments",
+                        {
+                          count: bpmBarSegmentCount,
+                        },
+                      )}
+                    </span>
+                  </div>
+                  <div className="multi-time-sig-offset-row">
+                    <div className="multi-time-sig-offset-header">
+                      <span>{t("tuning.bpmBarBeatOffset")}</span>
+                    </div>
+                    <div className="multi-time-sig-stepper">
+                      <button
+                        type="button"
+                        id="bpm-bar-beat-offset-dec"
+                        aria-label="-"
+                        disabled={
+                          bpmBarBeatOffset <= MIN_TIME_SIGNATURE_TRACK_OFFSET
+                        }
+                        onClick={() =>
+                          updateBpmBarBeatOffset(bpmBarBeatOffset - 1)
+                        }
+                      >
+                        -
+                      </button>
+                      <input
+                        id="bpm-bar-beat-offset"
+                        type="number"
+                        min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
+                        max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
+                        step={1}
+                        aria-label={t("tuning.bpmBarBeatOffset")}
+                        value={bpmBarBeatOffset}
+                        onChange={(event) => {
+                          const parsed = Number.parseInt(
+                            event.target.value,
+                            10,
+                          );
+                          if (!Number.isFinite(parsed)) {
+                            return;
+                          }
+                          updateBpmBarBeatOffset(parsed);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        id="bpm-bar-beat-offset-inc"
+                        aria-label="+"
+                        disabled={
+                          bpmBarBeatOffset >= MAX_TIME_SIGNATURE_TRACK_OFFSET
+                        }
+                        onClick={() =>
+                          updateBpmBarBeatOffset(bpmBarBeatOffset + 1)
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           {branchLookaheadEnabled ? (
             <RangeRow
               id="branch-lookahead-count"

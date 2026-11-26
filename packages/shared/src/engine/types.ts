@@ -50,12 +50,20 @@ export interface Segment {
   which: number;
 }
 
+export type TimeSignatureBranchMode = "overwrite" | "combine";
+
 export interface Edge {
   id: number;
   src: QuantumBase;
   dest: QuantumBase;
   distance: number;
   deleted: boolean;
+  // Marks cross-track edges tied to a time-signature bar boundary so they
+  // bypass threshold, direction, jump-span, sequential, and anchor-tail filters.
+  timeSignature?: boolean;
+  // Marks time-signature bar edges synthesized outside the similarity pool so
+  // auto-threshold sweeps skip them and preserve the base similarity default.
+  timeSignatureForced?: boolean;
 }
 
 export interface TrackAnalysis {
@@ -87,15 +95,25 @@ export interface JukeboxConfig {
   crossTrackOnly?: boolean;
   // Aligns cross-song branches across covers using chroma/dynamics DTW.
   coverSync?: boolean;
-  // Overwrites similarity-based branches in multi-track mixes with cross-song
-  // branches placed on time-signature bar boundaries.
+  // Overwrites or combines similarity-based branches in multi-track mixes with
+  // cross-song branches placed on time-signature bar boundaries.
   timeSignatureBranching?: boolean;
+  // Controls whether time-signature bar edges overwrite similarity branches or
+  // combine with them (default: "overwrite").
+  timeSignatureBranchMode?: TimeSignatureBranchMode;
   // Time signature numerator (default 4) for multi-track boundary branching.
   timeSignatureNumerator?: number;
   // Time signature denominator (default 4) for multi-track boundary branching.
   timeSignatureDenominator?: number;
   // Per-track integer beat offsets for multi-track time-signature branching.
   timeSignatureTrackOffsets?: number[];
+  // Restricts similarity-based branches in multi-track mixes strictly to
+  // time-signature bar boundaries.
+  timeSignatureSimilarityRestrict?: boolean;
+  // Time signature numerator (default 4) for similarity bar-boundary restriction.
+  timeSignatureSimilarityNumerator?: number;
+  // Time signature denominator (default 4) for similarity bar-boundary restriction.
+  timeSignatureSimilarityDenominator?: number;
 }
 
 export interface JukeboxGraphState {

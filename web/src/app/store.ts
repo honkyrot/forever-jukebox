@@ -10,6 +10,15 @@ import {
   resolveStoredBranchLookaheadCount,
   resolveStoredBranchLookaheadEnabled,
 } from "./branchLookahead";
+import {
+  resolveStoredBpmBarDenominator,
+  resolveStoredBpmBarNumerator,
+  resolveStoredBpmBarStyle,
+  resolveStoredBpmBarTimeSignatureMode,
+  type BpmBarPulseBeat,
+  type BpmBarStyle,
+  type BpmBarTimeSignatureMode,
+} from "./bpmBarTimeSignature";
 import i18n from "./i18n";
 import type { SpotifySearchItem, YoutubeSearchItem } from "./api";
 import type { AppState, SleepTimerState, TabId } from "./context";
@@ -20,6 +29,7 @@ import { DEFAULT_VISUALIZATION_INDEX } from "./constants";
 import { emptyPlaylist } from "./playlist";
 import { buildSearchParams, pathForTab, pathForTrack } from "./tabs";
 import {
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   DEFAULT_TIME_SIGNATURE_NUMERATOR,
 } from "@forever-jukebox/shared";
@@ -131,6 +141,8 @@ type ShellSlice = {
   navigationRequest: NavigationRequest | null;
   isPlayTabPulsing: boolean;
   vizStatsPulseId: number;
+  vizStatsPulseBeatIndex: number | null;
+  vizStatsPulseBeat: BpmBarPulseBeat | null;
   footerCredit: FooterCredit | null;
   toasts: ToastItem[];
   searchQuery: string;
@@ -163,6 +175,11 @@ type ShellSlice = {
   beatsPlayedText: string;
   branchChanceText: string;
   bpmBarEnabled: boolean;
+  bpmBarStyle: BpmBarStyle;
+  bpmBarTimeSignatureMode: BpmBarTimeSignatureMode;
+  bpmBarNumerator: number;
+  bpmBarDenominator: number;
+  bpmBarBeatOffset: number;
   visualPreferences: VisualPreferences;
   branchLookaheadEnabled: boolean;
   branchLookaheadCount: number;
@@ -235,6 +252,8 @@ const createUiSlice: Slice<
     | "navigationRequest"
     | "isPlayTabPulsing"
     | "vizStatsPulseId"
+    | "vizStatsPulseBeatIndex"
+    | "vizStatsPulseBeat"
     | "footerCredit"
     | "toasts"
     | "searchQuery"
@@ -263,6 +282,11 @@ const createUiSlice: Slice<
     | "beatsPlayedText"
     | "branchChanceText"
     | "bpmBarEnabled"
+    | "bpmBarStyle"
+    | "bpmBarTimeSignatureMode"
+    | "bpmBarNumerator"
+    | "bpmBarDenominator"
+    | "bpmBarBeatOffset"
     | "visualPreferences"
     | "branchLookaheadEnabled"
     | "branchLookaheadCount"
@@ -298,6 +322,8 @@ const createUiSlice: Slice<
     navigationRequest: null,
     isPlayTabPulsing: false,
     vizStatsPulseId: 0,
+    vizStatsPulseBeatIndex: null,
+    vizStatsPulseBeat: null,
     footerCredit: null,
     toasts: [],
     searchQuery: "",
@@ -333,6 +359,11 @@ const createUiSlice: Slice<
     bpmBarEnabled:
       typeof localStorage === "undefined" ||
       localStorage.getItem("bpmBarEnabled") !== "false",
+    bpmBarStyle: resolveStoredBpmBarStyle(),
+    bpmBarTimeSignatureMode: resolveStoredBpmBarTimeSignatureMode(),
+    bpmBarNumerator: resolveStoredBpmBarNumerator(),
+    bpmBarDenominator: resolveStoredBpmBarDenominator(),
+    bpmBarBeatOffset: 0,
     visualPreferences: readStoredVisualPreferences(),
     branchLookaheadEnabled: resolveStoredBranchLookaheadEnabled(),
     branchLookaheadCount: resolveStoredBranchLookaheadCount(),
@@ -553,9 +584,13 @@ const createTuningSlice: Slice<
     | "crossTrackOnly"
     | "coverSyncEnabled"
     | "timeSignatureBranchingEnabled"
+    | "timeSignatureBranchMode"
     | "timeSignatureNumerator"
     | "timeSignatureDenominator"
     | "timeSignatureTrackOffsets"
+    | "timeSignatureSimilarityRestrictEnabled"
+    | "timeSignatureSimilarityNumerator"
+    | "timeSignatureSimilarityDenominator"
     | "tempoSyncEnabled"
     | "normalizeVolumeEnabled"
     | "postMixNormalizeVolumeEnabled"
@@ -572,9 +607,13 @@ const createTuningSlice: Slice<
   crossTrackOnly: true,
   coverSyncEnabled: false,
   timeSignatureBranchingEnabled: false,
+  timeSignatureBranchMode: DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
   timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   timeSignatureTrackOffsets: [],
+  timeSignatureSimilarityRestrictEnabled: false,
+  timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   tempoSyncEnabled: true,
   normalizeVolumeEnabled: true,
   postMixNormalizeVolumeEnabled: false,

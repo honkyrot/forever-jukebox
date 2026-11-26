@@ -86,6 +86,9 @@ export function stopPlayback(context: AppContext) {
   useAppStore.setState({
     lastBeatIndex: null,
     beatsPlayedText: "0",
+    vizStatsPulseId: 0,
+    vizStatsPulseBeatIndex: null,
+    vizStatsPulseBeat: null,
     autocanonizerMainSeconds: 0,
     autocanonizerOtherSeconds: 0,
     autocanonizerPinkSeconds: 0,

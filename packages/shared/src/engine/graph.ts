@@ -1,7 +1,10 @@
 import { buildCoverSyncCrossEdges } from "./coverSync";
 import {
+  buildTimeSignatureBranchGrid,
   buildTimeSignatureCrossEdges,
   clampTimeSignatureTrackOffset,
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
+  normalizeTimeSignatureBranchMode,
   resolveTimeSignatureBranchStepBeats,
 } from "./timeSignatureBranching";
 import {
@@ -10,6 +13,7 @@ import {
   JukeboxGraphState,
   QuantumBase,
   Segment,
+  TimeSignatureBranchMode,
   TrackAnalysis,
 } from "./types";
 
@@ -145,7 +149,11 @@ function isMultiTrackAnalysis(analysis: TrackAnalysis): boolean {
 }
 
 // The branch distance between two beats: segment likeness plus 100 when their positions in the bar differ.
-export function beatPairDistance(q1: QuantumBase, q2: QuantumBase): number {
+export function beatPairDistance(
+  q1: QuantumBase,
+  q2: QuantumBase,
+  ignoreBarPositionPenalty = false,
+): number {
   if (q1.overlappingSegments.length === 0) {
     return Number.POSITIVE_INFINITY;
   }
@@ -169,9 +177,10 @@ export function beatPairDistance(q1: QuantumBase, q2: QuantumBase): number {
     sum += distance;
   }
   const pdistance =
-    q1.indexInParent !== undefined &&
-    q2.indexInParent !== undefined &&
-    q1.indexInParent === q2.indexInParent
+    ignoreBarPositionPenalty ||
+    (q1.indexInParent !== undefined &&
+      q2.indexInParent !== undefined &&
+      q1.indexInParent === q2.indexInParent)
       ? 0
       : 100;
   return sum / q1.overlappingSegments.length + pdistance;
@@ -220,13 +229,18 @@ function calculateNearestNeighborsForQuantum(
   crossTrackOnly = false,
   isMultiTrack = false,
   sameTrackOnly = false,
+  allowedBeatIndices?: ReadonlySet<number>,
 ) {
-  if (q1.overlappingSegments.length === 0) {
+  if (
+    q1.overlappingSegments.length === 0 ||
+    (allowedBeatIndices && !allowedBeatIndices.has(q1.which))
+  ) {
     q1.allNeighbors = [];
     return;
   }
 
   const separatePools = isMultiTrack && !crossTrackOnly && !sameTrackOnly;
+  const ignoreBarPositionPenalty = Boolean(allowedBeatIndices);
   const edges: Edge[] = [];
   const crossEdges: Edge[] = [];
 
@@ -236,6 +250,9 @@ function calculateNearestNeighborsForQuantum(
     }
 
     const q2 = quanta[i];
+    if (allowedBeatIndices && !allowedBeatIndices.has(q2.which)) {
+      continue;
+    }
     const isCrossTrack = isCrossTrackPair(q1, q2);
     if (
       crossTrackOnly &&
@@ -248,7 +265,7 @@ function calculateNearestNeighborsForQuantum(
     if (sameTrackOnly && isCrossTrack) {
       continue;
     }
-    const totalDistance = beatPairDistance(q1, q2);
+    const totalDistance = beatPairDistance(q1, q2, ignoreBarPositionPenalty);
     if (totalDistance < maxThreshold) {
       const edge: Edge = {
         id: -1,
@@ -295,8 +312,12 @@ const cachedNeighborParams = new WeakMap<
     isMultiTrack: boolean;
     coverSync: boolean;
     timeSignatureBranching: boolean;
+    timeSignatureBranchMode: TimeSignatureBranchMode;
     timeSignatureStepBeats: number;
+    timeSignatureSimilarityRestrict: boolean;
+    timeSignatureSimilarityStepBeats: number;
     timeSignatureOffsetsKey: string;
+    eligibleBeatCount?: number;
   }
 >();
 
@@ -309,24 +330,38 @@ function precalculateNearestNeighbors(
   isMultiTrack = false,
   coverSync = false,
   timeSignatureBranching = false,
+  timeSignatureBranchMode: TimeSignatureBranchMode = DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   timeSignatureNumerator?: number,
   timeSignatureDenominator?: number,
   timeSignatureTrackOffsets?: readonly number[],
-) {
+  timeSignatureSimilarityRestrict = false,
+  timeSignatureSimilarityNumerator?: number,
+  timeSignatureSimilarityDenominator?: number,
+): number | undefined {
   if (quanta.length === 0) {
-    return;
+    return undefined;
   }
+  const normalizedMode = normalizeTimeSignatureBranchMode(
+    timeSignatureBranchMode,
+  );
   const timeSignatureStepBeats = timeSignatureBranching
     ? resolveTimeSignatureBranchStepBeats(
         timeSignatureNumerator,
         timeSignatureDenominator,
       )
     : 0;
-  const timeSignatureOffsetsKey = timeSignatureBranching
-    ? (timeSignatureTrackOffsets ?? [])
-        .map((offset) => clampTimeSignatureTrackOffset(offset))
-        .join(",")
-    : "";
+  const timeSignatureSimilarityStepBeats = timeSignatureSimilarityRestrict
+    ? resolveTimeSignatureBranchStepBeats(
+        timeSignatureSimilarityNumerator,
+        timeSignatureSimilarityDenominator,
+      )
+    : 0;
+  const timeSignatureOffsetsKey =
+    timeSignatureBranching || timeSignatureSimilarityRestrict
+      ? (timeSignatureTrackOffsets ?? [])
+          .map((offset) => clampTimeSignatureTrackOffset(offset))
+          .join(",")
+      : "";
   const cached = cachedNeighborParams.get(quanta);
   // Reuse precalculated neighbors when they were manually seeded (no cache entry)
   // or when the neighbor cap, distance ceiling, and multi-track modes match.
@@ -338,7 +373,11 @@ function precalculateNearestNeighbors(
     cached.isMultiTrack === isMultiTrack &&
     cached.coverSync === coverSync &&
     cached.timeSignatureBranching === timeSignatureBranching &&
+    cached.timeSignatureBranchMode === normalizedMode &&
     cached.timeSignatureStepBeats === timeSignatureStepBeats &&
+    cached.timeSignatureSimilarityRestrict === timeSignatureSimilarityRestrict &&
+    cached.timeSignatureSimilarityStepBeats ===
+      timeSignatureSimilarityStepBeats &&
     cached.timeSignatureOffsetsKey === timeSignatureOffsetsKey;
   const canReuseCached =
     paramsMatch || (!cached && quanta[0].allNeighbors.length > 0);
@@ -349,10 +388,15 @@ function precalculateNearestNeighbors(
         allEdges.push(edge);
       }
     }
-    return;
+    return cached?.eligibleBeatCount;
   }
   allEdges.length = 0;
-  if (isMultiTrack && timeSignatureBranching) {
+  let eligibleBeatCount: number | undefined;
+  if (
+    isMultiTrack &&
+    timeSignatureBranching &&
+    normalizedMode === "overwrite"
+  ) {
     // Overwrite similarity-based cross-track edges with time-signature
     // boundary cross-track edges while keeping same-track branches unless
     // crossTrackOnly is enabled.
@@ -384,41 +428,98 @@ function precalculateNearestNeighbors(
         q.allNeighbors.push(edge);
       }
     }
-  } else if (isMultiTrack && coverSync) {
-    const coverEdgesByBeat = buildCoverSyncCrossEdges(quanta, maxThreshold);
-    for (const q of quanta) {
-      if (crossTrackOnly) {
-        q.allNeighbors = [];
-      } else {
+  } else {
+    const restrictGrid = timeSignatureSimilarityRestrict
+      ? buildTimeSignatureBranchGrid(quanta, {
+          numerator: timeSignatureSimilarityNumerator,
+          denominator: timeSignatureSimilarityDenominator,
+          trackOffsets: timeSignatureTrackOffsets,
+          useCoverSync: isMultiTrack && coverSync,
+        })
+      : null;
+    const allowedBeatIndices = restrictGrid?.boundaryBeatIndices;
+    eligibleBeatCount = allowedBeatIndices?.size;
+
+    if (isMultiTrack && coverSync) {
+      const coverEdgesByBeat = buildCoverSyncCrossEdges(quanta, maxThreshold);
+      for (const q of quanta) {
+        if (
+          crossTrackOnly ||
+          (allowedBeatIndices && !allowedBeatIndices.has(q.which))
+        ) {
+          q.allNeighbors = [];
+        } else {
+          calculateNearestNeighborsForQuantum(
+            quanta,
+            maxNeighbors,
+            maxThreshold,
+            q,
+            allEdges,
+            false,
+            true,
+            true,
+            allowedBeatIndices,
+          );
+        }
+        if (allowedBeatIndices && !allowedBeatIndices.has(q.which)) {
+          continue;
+        }
+        const coverEdges = coverEdgesByBeat.get(q.which) ?? [];
+        for (const edge of coverEdges) {
+          if (allowedBeatIndices && !allowedBeatIndices.has(edge.dest.which)) {
+            continue;
+          }
+          edge.id = allEdges.length;
+          allEdges.push(edge);
+          q.allNeighbors.push(edge);
+        }
+      }
+    } else {
+      for (const q of quanta) {
         calculateNearestNeighborsForQuantum(
           quanta,
           maxNeighbors,
           maxThreshold,
           q,
           allEdges,
+          crossTrackOnly,
+          isMultiTrack,
           false,
-          true,
-          true,
+          allowedBeatIndices,
         );
       }
-      const coverEdges = coverEdgesByBeat.get(q.which) ?? [];
-      for (const edge of coverEdges) {
-        edge.id = allEdges.length;
-        allEdges.push(edge);
-        q.allNeighbors.push(edge);
-      }
     }
-  } else {
-    for (const q of quanta) {
-      calculateNearestNeighborsForQuantum(
-        quanta,
-        maxNeighbors,
-        maxThreshold,
-        q,
-        allEdges,
-        crossTrackOnly,
-        isMultiTrack,
-      );
+    if (isMultiTrack && timeSignatureBranching && normalizedMode === "combine") {
+      // Layer auto-created time-signature bar edges using their own signature
+      // grid onto the similarity neighbor pool without duplicating edges or
+      // distorting auto-threshold sweeps.
+      const autoGrid = buildTimeSignatureBranchGrid(quanta, {
+        numerator: timeSignatureNumerator,
+        denominator: timeSignatureDenominator,
+        trackOffsets: timeSignatureTrackOffsets,
+        useCoverSync: coverSync,
+      });
+      for (const q of quanta) {
+        const tsEdges = autoGrid.edgesByBeat.get(q.which) ?? [];
+        for (const tsEdge of tsEdges) {
+          const existing = q.allNeighbors.find(
+            (edge) => edge.dest.which === tsEdge.dest.which,
+          );
+          if (existing) {
+            existing.timeSignature = true;
+            continue;
+          }
+          const rawDist = beatPairDistance(tsEdge.src, tsEdge.dest, true);
+          tsEdge.distance = Number.isFinite(rawDist)
+            ? Math.max(0, Math.min(maxThreshold, rawDist))
+            : maxThreshold;
+          tsEdge.timeSignature = true;
+          tsEdge.timeSignatureForced = true;
+          tsEdge.id = allEdges.length;
+          allEdges.push(tsEdge);
+          q.allNeighbors.push(tsEdge);
+        }
+      }
     }
   }
   cachedNeighborParams.set(quanta, {
@@ -428,9 +529,14 @@ function precalculateNearestNeighbors(
     isMultiTrack,
     coverSync,
     timeSignatureBranching,
+    timeSignatureBranchMode: normalizedMode,
     timeSignatureStepBeats,
+    timeSignatureSimilarityRestrict,
+    timeSignatureSimilarityStepBeats,
     timeSignatureOffsetsKey,
+    eligibleBeatCount,
   });
+  return eligibleBeatCount;
 }
 
 /**
@@ -482,10 +588,14 @@ function extractNearestNeighbors(
   totalBeats: number,
   crossTrackThreshold?: number,
   edgeFilter: EdgeFilter = "all",
+  forThresholdSweep = false,
 ): Edge[] {
   const neighbors: Edge[] = [];
   for (const neighbor of q.allNeighbors) {
     if (neighbor.deleted) {
+      continue;
+    }
+    if (forThresholdSweep && neighbor.timeSignatureForced) {
       continue;
     }
     const isCrossTrack = isCrossTrackPair(q, neighbor.dest);
@@ -498,9 +608,13 @@ function extractNearestNeighbors(
     if (config.crossTrackOnly && q.trackIndex !== undefined && !isCrossTrack) {
       continue;
     }
-    // Cover-sync and time-signature jumps connect parallel moments across tracks,
-    // so direction and timeline-span filters only apply to standard same-track edges.
-    if (!((config.coverSync || config.timeSignatureBranching) && isCrossTrack)) {
+    if (!forThresholdSweep && neighbor.timeSignature && isCrossTrack) {
+      neighbors.push(neighbor);
+      continue;
+    }
+    // Cover-sync jumps connect parallel moments across tracks, so direction
+    // and timeline-span filters only apply to standard similarity edges.
+    if (!(config.coverSync && isCrossTrack)) {
       const { distance, isForward } = resolveEdgeJumpDistanceAndDirection(
         q,
         neighbor.dest,
@@ -541,6 +655,7 @@ function collectNearestNeighbors(
   config: JukeboxConfig,
   crossTrackThreshold?: number,
   edgeFilter: EdgeFilter = "all",
+  forThresholdSweep = false,
 ): number {
   let branchingCount = 0;
   const totalBeats = quanta.length;
@@ -552,6 +667,7 @@ function collectNearestNeighbors(
       totalBeats,
       crossTrackThreshold,
       edgeFilter,
+      forThresholdSweep,
     );
     if (q.neighbors.length > 0) {
       branchingCount += 1;
@@ -966,7 +1082,7 @@ function insertBestBackwardBranch(
       continue;
     }
     for (const neighbor of q.allNeighbors) {
-      if (neighbor.deleted) {
+      if (neighbor.deleted || neighbor.timeSignature) {
         continue;
       }
       const isCrossTrack = isCrossTrackPair(q, neighbor.dest);
@@ -1228,7 +1344,7 @@ function filterOutBadBranches(quanta: QuantumBase[], lastIndex: number) {
   for (let i = 0; i < lastIndex; i += 1) {
     const q = quanta[i];
     q.neighbors = q.neighbors.filter(
-      (neighbor) => neighbor.dest.which < lastIndex,
+      (neighbor) => Boolean(neighbor.timeSignature) || neighbor.dest.which < lastIndex,
     );
   }
 }
@@ -1264,6 +1380,7 @@ function filterOutSequentialBranches(
     const q = quanta[i];
     q.neighbors = q.neighbors.filter(
       (neighbor) =>
+        Boolean(neighbor.timeSignature) ||
         (skipCrossTrack && isCrossTrackPair(q, neighbor.dest)) ||
         !hasSequentialBranch(q, neighbor, lastBranchPoint),
     );
@@ -1278,8 +1395,9 @@ function computeDefaultThreshold(
   quanta: QuantumBase[],
   config: JukeboxConfig,
   edgeFilter: EdgeFilter = "all",
+  eligibleBeatCount?: number,
 ): number {
-  const targetBranchCount = quanta.length / 6;
+  const targetBranchCount = Math.max(1, eligibleBeatCount ?? quanta.length) / 6;
   const densityConfig = {
     ...config,
     justBackwards: false,
@@ -1293,6 +1411,7 @@ function computeDefaultThreshold(
       densityConfig,
       t,
       edgeFilter,
+      true,
     );
     if (count >= targetBranchCount) {
       return t;
@@ -1429,7 +1548,12 @@ export function buildJumpGraph(
   const useCoverSync = isMultiTrack && Boolean(config.coverSync);
   const useTimeSignatureBranching =
     isMultiTrack && Boolean(config.timeSignatureBranching);
-  precalculateNearestNeighbors(
+  const timeSignatureBranchMode = normalizeTimeSignatureBranchMode(
+    config.timeSignatureBranchMode,
+  );
+  const useTimeSignatureOverwrite =
+    useTimeSignatureBranching && timeSignatureBranchMode === "overwrite";
+  const eligibleBeatCount = precalculateNearestNeighbors(
     quanta,
     clampMaxBranches(config.maxBranches),
     config.maxBranchThreshold,
@@ -1438,13 +1562,22 @@ export function buildJumpGraph(
     isMultiTrack,
     useCoverSync,
     useTimeSignatureBranching,
+    timeSignatureBranchMode,
     config.timeSignatureNumerator,
     config.timeSignatureDenominator,
     config.timeSignatureTrackOffsets,
+    Boolean(config.timeSignatureSimilarityRestrict),
+    config.timeSignatureSimilarityNumerator,
+    config.timeSignatureSimilarityDenominator,
   );
 
   if (!isMultiTrack) {
-    const computedThreshold = computeDefaultThreshold(quanta, config);
+    const computedThreshold = computeDefaultThreshold(
+      quanta,
+      config,
+      "all",
+      eligibleBeatCount,
+    );
     const threshold =
       config.currentThreshold !== 0
         ? config.currentThreshold
@@ -1467,7 +1600,7 @@ export function buildJumpGraph(
     };
   }
 
-  if (useTimeSignatureBranching) {
+  if (useTimeSignatureOverwrite) {
     // Time-signature bar-boundary cross edges overwrite cross-track similarity
     // branches while allowing same-track branches when crossTrackOnly is false.
     const computedThreshold = config.crossTrackOnly
@@ -1500,10 +1633,16 @@ export function buildJumpGraph(
     quanta,
     config,
     "cross-track",
+    eligibleBeatCount,
   );
   const computedThreshold = config.crossTrackOnly
     ? computedCrossThreshold
-    : computeDefaultThreshold(quanta, config, "same-track");
+    : computeDefaultThreshold(
+        quanta,
+        config,
+        "same-track",
+        eligibleBeatCount,
+      );
   const threshold =
     config.currentThreshold !== 0
       ? config.currentThreshold

@@ -15,6 +15,7 @@ import {
 import { clearModeLoadingStep, showToast } from "../ui";
 import {
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   DEFAULT_TIME_SIGNATURE_NUMERATOR,
   clampMaxBranches,
@@ -563,9 +564,13 @@ export function resetTuningDefaults(context: AppContext) {
     crossTrackOnly,
     coverSyncEnabled,
     timeSignatureBranchingEnabled,
+    timeSignatureBranchMode,
     timeSignatureNumerator,
     timeSignatureDenominator,
     timeSignatureTrackOffsets,
+    timeSignatureSimilarityRestrictEnabled,
+    timeSignatureSimilarityNumerator,
+    timeSignatureSimilarityDenominator,
   } = useAppStore.getState();
   engine.updateConfig({
     ...context.defaultConfig,
@@ -575,6 +580,9 @@ export function resetTuningDefaults(context: AppContext) {
     timeSignatureBranching: multiTrackEnabled
       ? timeSignatureBranchingEnabled
       : false,
+    timeSignatureBranchMode: multiTrackEnabled
+      ? timeSignatureBranchMode
+      : DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
     timeSignatureNumerator: multiTrackEnabled
       ? timeSignatureNumerator
       : DEFAULT_TIME_SIGNATURE_NUMERATOR,
@@ -584,7 +592,24 @@ export function resetTuningDefaults(context: AppContext) {
     timeSignatureTrackOffsets: multiTrackEnabled
       ? [...timeSignatureTrackOffsets]
       : [],
+    timeSignatureSimilarityRestrict: multiTrackEnabled
+      ? timeSignatureSimilarityRestrictEnabled
+      : false,
+    timeSignatureSimilarityNumerator: multiTrackEnabled
+      ? timeSignatureSimilarityNumerator
+      : DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureSimilarityDenominator: multiTrackEnabled
+      ? timeSignatureSimilarityDenominator
+      : DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   });
+  if (!multiTrackEnabled) {
+    useAppStore.setState({
+      timeSignatureSimilarityRestrictEnabled: false,
+      timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+      timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+      timeSignatureTrackOffsets: [],
+    });
+  }
   engine.rebuildGraph();
   useAppStore.setState({ vizData: engine.getVisualizationData() });
   const data = useAppStore.getState().vizData;

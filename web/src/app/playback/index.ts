@@ -94,7 +94,11 @@ export {
   setPostMixNormalizeVolumeEnabled,
   setTempoSyncEnabled,
   setTimeSignatureBranchingEnabled,
+  setTimeSignatureBranchMode,
   setTimeSignatureDenominator,
   setTimeSignatureNumerator,
+  setTimeSignatureSimilarityDenominator,
+  setTimeSignatureSimilarityNumerator,
+  setTimeSignatureSimilarityRestrictEnabled,
   setTimeSignatureTrackOffset,
 } from "./multi-track-mix";

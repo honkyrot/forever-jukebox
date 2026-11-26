@@ -261,7 +261,7 @@ export function initializePlayback(): void {
       stopPlayback(context);
     });
 
-    autocanonizer.setOnBeat((index, _beat, cursorTimes) => {
+    autocanonizer.setOnBeat((index, beat, cursorTimes) => {
       useAppStore.setState({
         beatsPlayedText: `${index + 1}`,
         lastBeatIndex: index,
@@ -270,7 +270,7 @@ export function initializePlayback(): void {
         autocanonizerPinkSeconds: cursorTimes.pinkSeconds ?? 0,
         autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
-      pulseVizStats();
+      pulseVizStats(index, beat);
     });
     // A track that plays to its end hands over to the next playlist track.
     const handleLinearTrackEnded = () => {
@@ -346,8 +346,8 @@ export function initializePlayback(): void {
       if (engineState.currentBeatIndex >= 0) {
         if (engineState.beatsPlayed !== lastCowbellBeatsPlayed) {
           lastCowbellBeatsPlayed = engineState.beatsPlayed;
-          pulseVizStats();
           const beat = useAppStore.getState().vizData?.beats[engineState.currentBeatIndex];
+          pulseVizStats(engineState.currentBeatIndex, beat);
           if (beat) {
             context.cowbellOverlay.handleBeatEnter(
               engineState.currentBeatIndex,

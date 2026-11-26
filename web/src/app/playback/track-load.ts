@@ -36,7 +36,8 @@ import {
   type PlaylistSourceType,
   type PlaylistTrack,
 } from "../playlist";
-import { useAppStore } from "../store";
+import { resolveStoredBpmBarBeatOffsetForTrack } from "../bpmBarTimeSignature";
+import { getCurrentTrackId, useAppStore } from "../store";
 import {
   bumpLoadGeneration,
   getLoadGeneration,
@@ -60,6 +61,7 @@ import {
 } from "./status-ui";
 import { maybePrepareInstrumentalMode } from "./instrumental";
 import {
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   DEFAULT_TIME_SIGNATURE_NUMERATOR,
 } from "@forever-jukebox/shared";
@@ -242,9 +244,23 @@ export function resetForNewTrack(
     crossTrackThreshold: 0,
     coverSync: false,
     timeSignatureBranching: false,
+    timeSignatureBranchMode: DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
     timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
     timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
     timeSignatureTrackOffsets: [],
+    timeSignatureSimilarityRestrict: false,
+    timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  });
+  useAppStore.setState({
+    timeSignatureSimilarityRestrictEnabled: false,
+    timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    timeSignatureTrackOffsets: [],
+    bpmBarBeatOffset: 0,
+    vizStatsPulseId: 0,
+    vizStatsPulseBeatIndex: null,
+    vizStatsPulseBeat: null,
   });
   syncVolumeUI(context);
   useAppStore.setState({
@@ -337,6 +353,16 @@ export function applyAnalysisResult(
     context;
   if (!autocanonizer || !jukebox) {
     return false;
+  }
+  const songId = response.id || getCurrentTrackId();
+  const savedOffset = resolveStoredBpmBarBeatOffsetForTrack(songId);
+  const restoredTrackOffsets = savedOffset !== 0 ? [savedOffset] : [];
+  useAppStore.setState({
+    bpmBarBeatOffset: savedOffset,
+    timeSignatureTrackOffsets: restoredTrackOffsets,
+  });
+  if (savedOffset !== 0) {
+    engine.updateConfig({ timeSignatureTrackOffsets: restoredTrackOffsets });
   }
   applyTuningParamsFromUrl(context);
   engine.loadAnalysis(response.result);

@@ -1,4 +1,5 @@
 import { countTuningBranches } from "@forever-jukebox/shared";
+import type { BpmBarPulseBeat } from "../bpmBarTimeSignature";
 import type { AppContext } from "../context";
 import { formatDuration } from "@forever-jukebox/shared/ui/format";
 import { useAppStore } from "../store";
@@ -47,13 +48,19 @@ export function updateTrackInfo(context: AppContext) {
   });
 }
 
-// React renders this pulse marker onto #viz-stats.
-export function pulseVizStats() {
+// React renders this pulse marker onto #viz-stats (and its active bar segment).
+export function pulseVizStats(
+  beatIndex?: number | null,
+  beat?: BpmBarPulseBeat | null,
+) {
   if (!useAppStore.getState().bpmBarEnabled) {
     return;
   }
   useAppStore.setState({
     vizStatsPulseId: useAppStore.getState().vizStatsPulseId + 1,
+    vizStatsPulseBeatIndex:
+      typeof beatIndex === "number" && beatIndex >= 0 ? beatIndex : null,
+    vizStatsPulseBeat: beat ?? null,
   });
 }
 

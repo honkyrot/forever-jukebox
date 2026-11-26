@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
+import {
+  isSmoothBpmBarStyle,
+  resolveBpmBarActiveSegment,
+  resolveBpmBarSmoothAnimation,
+} from "../../bpmBarTimeSignature";
 import { attachViz, getAppContext } from "../../runtime";
 import { useAppStore } from "../../store";
 import { ModifierBadges } from "../ModifierBadges";
@@ -29,13 +34,81 @@ export function VizContainer() {
   const loadingShown = useAppStore((s) => s.loadingShown);
   const playMode = useAppStore((s) => s.playMode);
   const vizStatsPulseId = useAppStore((s) => s.vizStatsPulseId);
+  const vizStatsPulseBeatIndex = useAppStore((s) => s.vizStatsPulseBeatIndex);
+  const vizStatsPulseBeat = useAppStore((s) => s.vizStatsPulseBeat);
   const bpmBarEnabled = useAppStore((s) => s.bpmBarEnabled);
+  const bpmBarStyle = useAppStore((s) => s.bpmBarStyle);
+  const isPaused = useAppStore((s) => s.isPaused);
+  const bpmBarTimeSignatureMode = useAppStore((s) => s.bpmBarTimeSignatureMode);
+  const bpmBarNumerator = useAppStore((s) => s.bpmBarNumerator);
+  const bpmBarDenominator = useAppStore((s) => s.bpmBarDenominator);
+  const bpmBarBeatOffset = useAppStore((s) => s.bpmBarBeatOffset);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
+  const timeSignatureBranchingEnabled = useAppStore(
+    (s) => s.timeSignatureBranchingEnabled,
+  );
+  const timeSignatureBranchMode = useAppStore((s) => s.timeSignatureBranchMode);
+  const timeSignatureNumerator = useAppStore((s) => s.timeSignatureNumerator);
+  const timeSignatureDenominator = useAppStore(
+    (s) => s.timeSignatureDenominator,
+  );
+  const timeSignatureTrackOffsets = useAppStore(
+    (s) => s.timeSignatureTrackOffsets,
+  );
+  const timeSignatureSimilarityRestrictEnabled = useAppStore(
+    (s) => s.timeSignatureSimilarityRestrictEnabled,
+  );
+  const timeSignatureSimilarityNumerator = useAppStore(
+    (s) => s.timeSignatureSimilarityNumerator,
+  );
+  const timeSignatureSimilarityDenominator = useAppStore(
+    (s) => s.timeSignatureSimilarityDenominator,
+  );
+  const jukeboxAudioMode = useAppStore((s) => s.jukeboxAudioMode);
+  const metronomeBeatsPerBar = useAppStore((s) => s.metronomeBeatsPerBar);
+  const metronomeBeatOffset = useAppStore((s) => s.metronomeBeatOffset);
+  const metronomeDetectedBeatsPerBar = useAppStore(
+    (s) => s.metronomeDetectedBeatsPerBar,
+  );
+  const vizBeats = useAppStore((s) => s.vizData?.beats);
   const vizStatsRef = useRef<HTMLDivElement | null>(null);
+  const segmentRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  const smoothFillRef = useRef<HTMLSpanElement | null>(null);
   const vizPanelRef = useRef<HTMLDivElement | null>(null);
   const vizLayerRef = useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = useRef<HTMLDivElement | null>(null);
   const wubMachineLayerRef = useRef<HTMLDivElement | null>(null);
 
+  const { segmentCount, activeSegmentIndex } = resolveBpmBarActiveSegment(
+    {
+      bpmBarTimeSignatureMode,
+      bpmBarNumerator,
+      bpmBarDenominator,
+      bpmBarBeatOffset,
+      multiTrackEnabled,
+      coverSyncEnabled,
+      timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets,
+      timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+      jukeboxAudioMode,
+      metronomeBeatsPerBar,
+      metronomeBeatOffset,
+      metronomeDetectedBeatsPerBar,
+    },
+    vizStatsPulseBeatIndex,
+    vizStatsPulseBeat,
+    vizBeats,
+  );
+
+  const isSmoothStyle = isSmoothBpmBarStyle(bpmBarStyle);
+  const showSegmentOverlay =
+    bpmBarStyle === "smooth-pulse" && segmentCount !== null;
   const visible = audioLoaded && analysisLoaded && !audioModePreparing && !loadingShown;
 
   // Child refs attach before this parent ref, so the layer nodes are ready.
@@ -88,19 +161,100 @@ export function VizContainer() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Trigger the beat-pulse CSS animation without remounting #viz-stats.
+  // Trigger the beat-pulse or smooth progress CSS animation without remounting #viz-stats.
   useLayoutEffect(() => {
     const el = vizStatsRef.current;
     if (!el) {
       return;
     }
     el.classList.remove("pulse");
+    const fillEl = smoothFillRef.current;
     if (!bpmBarEnabled || vizStatsPulseId <= 0) {
+      for (const segEl of segmentRefs.current) {
+        segEl?.classList.remove("is-pulsing");
+      }
+      if (fillEl) {
+        fillEl.classList.remove("is-animating", "is-downbeat");
+        fillEl.style.removeProperty("--bpm-bar-from");
+        fillEl.style.removeProperty("--bpm-bar-to");
+        fillEl.style.removeProperty("--bpm-bar-duration");
+      }
+      return;
+    }
+    if (isSmoothStyle) {
+      if (!fillEl) {
+        return;
+      }
+      const ctx = getAppContext();
+      const playbackRate =
+        playMode === "jukebox" ? (ctx.player?.getPlaybackRate?.() ?? 1) : 1;
+      const currentTimeSec =
+        playMode === "jukebox" && ctx.player?.isPlaying?.()
+          ? ctx.player.getCurrentTime()
+          : null;
+      const anim = resolveBpmBarSmoothAnimation({
+        segmentCount,
+        activeSegmentIndex,
+        beatIndex: vizStatsPulseBeatIndex,
+        beat: vizStatsPulseBeat,
+        playbackRate,
+        currentTimeSec,
+      });
+      fillEl.classList.remove("is-animating", "is-downbeat");
+      if (!anim) {
+        for (const segEl of segmentRefs.current) {
+          segEl?.classList.remove("is-pulsing");
+        }
+        return;
+      }
+      fillEl.style.setProperty("--bpm-bar-from", String(anim.fromFraction));
+      fillEl.style.setProperty("--bpm-bar-to", String(anim.toFraction));
+      fillEl.style.setProperty("--bpm-bar-duration", `${anim.durationMs}ms`);
+      // Force reflow so the CSS animation restarts cleanly on the next beat.
+      void fillEl.offsetWidth;
+      if (anim.isDownbeat) {
+        fillEl.classList.add("is-downbeat");
+      }
+      fillEl.classList.add("is-animating");
+      if (bpmBarStyle === "smooth-pulse") {
+        if (segmentCount !== null && activeSegmentIndex !== null) {
+          const segEl = segmentRefs.current[activeSegmentIndex];
+          if (segEl) {
+            segEl.classList.remove("is-pulsing");
+            void segEl.offsetWidth;
+            segEl.classList.add("is-pulsing");
+          }
+        } else if (segmentCount === null) {
+          void el.offsetWidth;
+          el.classList.add("pulse");
+        }
+      }
+      return;
+    }
+    if (segmentCount !== null) {
+      if (activeSegmentIndex !== null) {
+        const segEl = segmentRefs.current[activeSegmentIndex];
+        if (segEl) {
+          segEl.classList.remove("is-pulsing");
+          void segEl.offsetWidth;
+          segEl.classList.add("is-pulsing");
+        }
+      }
       return;
     }
     void el.offsetWidth;
     el.classList.add("pulse");
-  }, [vizStatsPulseId, bpmBarEnabled]);
+  }, [
+    vizStatsPulseId,
+    bpmBarEnabled,
+    bpmBarStyle,
+    isSmoothStyle,
+    segmentCount,
+    activeSegmentIndex,
+    playMode,
+    vizStatsPulseBeatIndex,
+    vizStatsPulseBeat,
+  ]);
 
   // Resize the active controller when the viz becomes visible.
   useEffect(() => {
@@ -116,6 +270,37 @@ export function VizContainer() {
       ctx.jukebox?.resizeActive();
     }
   }, [visible, playMode]);
+
+  /**
+   * Renders the BPM bar beat segments either standalone or overlaid on the smooth bar.
+   */
+  const renderBpmBarSegments = (overlay: boolean) => {
+    if (segmentCount === null) {
+      return null;
+    }
+    const baseClass =
+      segmentCount > 8 ? "bpm-bar-segments is-dense" : "bpm-bar-segments";
+    return (
+      <div
+        id="bpm-bar-segments"
+        className={overlay ? `${baseClass} is-overlay` : baseClass}
+        aria-hidden="true"
+      >
+        {Array.from({ length: segmentCount }, (_, idx) => (
+          <span
+            key={idx}
+            ref={(node) => {
+              segmentRefs.current[idx] = node;
+            }}
+            data-bpm-segment={idx + 1}
+            className={
+              idx === 0 ? "bpm-bar-segment is-downbeat" : "bpm-bar-segment"
+            }
+          />
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -149,6 +334,38 @@ export function VizContainer() {
           id="viz-stats"
           ref={vizStatsRef}
         >
+          {bpmBarEnabled && isSmoothStyle ? (
+            <div
+              id="bpm-bar-smooth"
+              className={
+                isPaused ? "bpm-bar-smooth is-paused" : "bpm-bar-smooth"
+              }
+              aria-hidden="true"
+            >
+              <span
+                id="bpm-bar-smooth-fill"
+                ref={smoothFillRef}
+                className="bpm-bar-smooth-fill"
+              />
+              {showSegmentOverlay ? renderBpmBarSegments(true) : null}
+              {segmentCount !== null && segmentCount >= 2 ? (
+                <div id="bpm-bar-smooth-ticks" className="bpm-bar-smooth-ticks">
+                  {Array.from({ length: segmentCount - 1 }, (_, idx) => (
+                    <span
+                      key={idx}
+                      data-bpm-tick={idx + 1}
+                      className="bpm-bar-smooth-tick"
+                      style={{
+                        left: `${((idx + 1) / segmentCount) * 100}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : bpmBarEnabled && segmentCount !== null ? (
+            renderBpmBarSegments(false)
+          ) : null}
           <div className="viz-bottom-left">
             <div className="viz-play-controls">
               <PlayControls />

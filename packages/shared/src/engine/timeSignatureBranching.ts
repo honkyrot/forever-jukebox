@@ -1,5 +1,10 @@
 import { alignTrackPairDtw, extractTrackBeatFeatures } from "./coverSync";
-import type { Edge, QuantumBase } from "./types";
+import type { Edge, QuantumBase, TimeSignatureBranchMode } from "./types";
+
+export type { TimeSignatureBranchMode };
+
+export const DEFAULT_TIME_SIGNATURE_BRANCH_MODE: TimeSignatureBranchMode =
+  "overwrite";
 
 export const DEFAULT_TIME_SIGNATURE_NUMERATOR = 4;
 export const MIN_TIME_SIGNATURE_NUMERATOR = 1;
@@ -21,12 +26,27 @@ export interface TimeSignatureBranchOptions {
   useCoverSync?: boolean;
 }
 
+export interface TimeSignatureBranchGrid {
+  edgesByBeat: Map<number, Edge[]>;
+  boundaryBeatIndices: Set<number>;
+}
+
 // Cache DTW master-to-secondary beat alignments per merged quanta array so live
 // signature or offset edits rebuild the graph immediately without re-running DTW.
 const cachedMasterAlignments = new WeakMap<
   readonly QuantumBase[],
   Map<number, Map<number, number>>
 >();
+
+/**
+ * Normalizes a time-signature branch mode string, defaulting unknown values to
+ * "overwrite".
+ */
+export function normalizeTimeSignatureBranchMode(
+  mode?: string,
+): TimeSignatureBranchMode {
+  return mode === "combine" ? "combine" : "overwrite";
+}
 
 /**
  * Clamps a time signature numerator (beats per bar) to [1, 64], defaulting to 4.
@@ -151,25 +171,39 @@ function getMasterCoverSyncAlignments(
 }
 
 /**
- * Builds cross-track jump edges placed strictly on time-signature bar boundaries.
+ * Builds cross-track jump edges placed strictly on time-signature bar boundaries
+ * along with the set of all eligible boundary beat indices across tracks.
  *
  * When `useCoverSync` is true, boundaries follow track 0's grid mapped onto each
  * secondary track through Cover sync DTW alignment plus relative per-track
  * offsets. Otherwise, tracks are aligned directly via their beat offsets.
  */
-export function buildTimeSignatureCrossEdges(
+export function buildTimeSignatureBranchGrid(
   quanta: readonly QuantumBase[],
   options: TimeSignatureBranchOptions = {},
-): Map<number, Edge[]> {
-  const groups = groupQuantaByTrack(quanta);
-  if (groups.length < 2) {
-    return new Map();
-  }
-
+): TimeSignatureBranchGrid {
   const stepBeats = resolveTimeSignatureBranchStepBeats(
     options.numerator,
     options.denominator,
   );
+  const groups = groupQuantaByTrack(quanta);
+  const boundaryBeatIndices = new Set<number>();
+  if (groups.length < 2) {
+    // Single-track analysis: populate bar-boundary beat indices directly using
+    // track 0's beat offset without emitting cross-track edges.
+    const offset = clampTimeSignatureTrackOffset(options.trackOffsets?.[0] ?? 0);
+    for (let m = 0; ; m += 1) {
+      const b = offset + m * stepBeats;
+      if (b >= quanta.length) {
+        break;
+      }
+      if (b >= 0) {
+        boundaryBeatIndices.add(quanta[b].which);
+      }
+    }
+    return { edgesByBeat: new Map(), boundaryBeatIndices };
+  }
+
   const offsets = groups.map((_, index) =>
     clampTimeSignatureTrackOffset(options.trackOffsets?.[index] ?? 0),
   );
@@ -201,6 +235,7 @@ export function buildTimeSignatureCrossEdges(
             dest: destEntry.beat,
             distance: 0,
             deleted: false,
+            timeSignature: true,
           });
         }
       }
@@ -220,6 +255,7 @@ export function buildTimeSignatureCrossEdges(
       if (b0 < 0) {
         continue;
       }
+      boundaryBeatIndices.add(masterBeats[b0].which);
       const barBeats: Array<{ trackPos: number; beat: QuantumBase }> = [
         { trackPos: 0, beat: masterBeats[b0] },
       ];
@@ -233,6 +269,7 @@ export function buildTimeSignatureCrossEdges(
         // DTW path; shifting one track's offset adjusts only that track.
         const bt = alignedB + ((offsets[t] ?? 0) - off0);
         if (bt >= 0 && bt < groups[t].length) {
+          boundaryBeatIndices.add(groups[t][bt].which);
           barBeats.push({ trackPos: t, beat: groups[t][bt] });
         }
       }
@@ -252,6 +289,7 @@ export function buildTimeSignatureCrossEdges(
       for (let t = 0; t < groups.length; t += 1) {
         const bt = (offsets[t] ?? 0) + m * stepBeats;
         if (bt >= 0 && bt < groups[t].length) {
+          boundaryBeatIndices.add(groups[t][bt].which);
           barBeats.push({ trackPos: t, beat: groups[t][bt] });
         }
       }
@@ -261,12 +299,104 @@ export function buildTimeSignatureCrossEdges(
     }
   }
 
-  const result = new Map<number, Edge[]>();
+  const edgesByBeat = new Map<number, Edge[]>();
   for (const [srcWhich, byTargetTrack] of edgesBySrcAndTarget.entries()) {
     const edges = [...byTargetTrack.values()].sort(
       (a, b) => (a.dest.trackIndex ?? 0) - (b.dest.trackIndex ?? 0),
     );
-    result.set(srcWhich, edges);
+    edgesByBeat.set(srcWhich, edges);
   }
-  return result;
+  return { edgesByBeat, boundaryBeatIndices };
+}
+
+/**
+ * Builds cross-track jump edges placed strictly on time-signature bar boundaries.
+ */
+export function buildTimeSignatureCrossEdges(
+  quanta: readonly QuantumBase[],
+  options: TimeSignatureBranchOptions = {},
+): Map<number, Edge[]> {
+  return buildTimeSignatureBranchGrid(quanta, options).edgesByBeat;
+}
+
+/**
+ * Computes a non-negative remainder modulo `modulus`.
+ */
+function positiveMod(value: number, modulus: number): number {
+  return ((value % modulus) + modulus) % modulus;
+}
+
+/**
+ * Resolves a beat's 0-based position within the active time-signature bar,
+ * accounting for per-track beat offsets and optional Cover sync DTW alignment.
+ */
+export function resolveTimeSignatureBeatPosition(
+  quanta: readonly QuantumBase[],
+  beat: Pick<QuantumBase, "which" | "localWhich" | "trackIndex">,
+  options: TimeSignatureBranchOptions = {},
+): number {
+  const stepBeats = resolveTimeSignatureBranchStepBeats(
+    options.numerator,
+    options.denominator,
+  );
+  const localIdx = beat.localWhich ?? beat.which;
+  const trackIndex = beat.trackIndex;
+
+  if (!options.useCoverSync || trackIndex === undefined || trackIndex === 0) {
+    const trackPos = trackIndex ?? 0;
+    const offset = clampTimeSignatureTrackOffset(
+      options.trackOffsets?.[trackPos] ?? 0,
+    );
+    return positiveMod(localIdx - offset, stepBeats);
+  }
+
+  const groups = groupQuantaByTrack(quanta);
+  if (groups.length < 2) {
+    const offset = clampTimeSignatureTrackOffset(
+      options.trackOffsets?.[trackIndex] ?? 0,
+    );
+    return positiveMod(localIdx - offset, stepBeats);
+  }
+
+  const trackPos = Math.max(
+    1,
+    groups.findIndex((beats, idx) => (beats[0]?.trackIndex ?? idx) === trackIndex),
+  );
+  const off0 = clampTimeSignatureTrackOffset(options.trackOffsets?.[0] ?? 0);
+  const offT = clampTimeSignatureTrackOffset(
+    options.trackOffsets?.[trackPos] ?? 0,
+  );
+  const alignmentsByTrack = getMasterCoverSyncAlignments(quanta, groups);
+  const alignment = alignmentsByTrack.get(trackIndex);
+  const masterBeats = groups[0];
+
+  let firstBt: number | null = null;
+  let bestAtOrBefore: number | null = null;
+  if (alignment && masterBeats) {
+    for (let m = 0; ; m += 1) {
+      const b0 = off0 + m * stepBeats;
+      if (b0 >= masterBeats.length) {
+        break;
+      }
+      if (b0 < 0) {
+        continue;
+      }
+      const alignedB = alignment.get(b0);
+      if (alignedB === undefined) {
+        continue;
+      }
+      const bt = alignedB + (offT - off0);
+      if (firstBt === null) {
+        firstBt = bt;
+      }
+      if (bt <= localIdx) {
+        bestAtOrBefore = bt;
+      } else {
+        break;
+      }
+    }
+  }
+
+  const anchorBt = bestAtOrBefore ?? firstBt ?? offT;
+  return positiveMod(localIdx - anchorBt, stepBeats);
 }

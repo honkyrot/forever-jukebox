@@ -1,4 +1,5 @@
 import {
+	DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
 	DEFAULT_TIME_SIGNATURE_DENOMINATOR,
 	DEFAULT_TIME_SIGNATURE_NUMERATOR,
 	clampTimeSignatureDenominator,
@@ -6,6 +7,8 @@ import {
 	clampTimeSignatureTrackOffset,
 	computeTempoSyncRatio,
 	mergeTrackAnalyses,
+	normalizeTimeSignatureBranchMode,
+	type TimeSignatureBranchMode,
 	type TrackAnalysis,
 } from "@forever-jukebox/shared";
 import {
@@ -38,8 +41,12 @@ import i18n from "../i18n";
 import { isLikelyJobId } from "../identity";
 import { TRACK_STEP } from "../job-progress";
 import type { PlaylistTrack } from "../playlist";
+import {
+	resolveStoredBpmBarBeatOffsetForTrack,
+	storeBpmBarBeatOffsetForTrack,
+} from "../bpmBarTimeSignature";
 import { getPlaybackDeps } from "../runtime";
-import { useAppStore } from "../store";
+import { getCurrentTrackId, useAppStore } from "../store";
 import {
 	PENDING_STEP,
 	setAnalysisStatus,
@@ -78,6 +85,7 @@ function clampMixTrackGainPct(gainPct: number): number {
 }
 
 type LoadedMixTrackSource = {
+	jobId: string;
 	track: PlaylistTrack;
 	analysisResult: AnalysisComplete["result"];
 	buffer: AudioBuffer;
@@ -178,9 +186,13 @@ function applyLoadedMixSources(
 		crossTrackOnly,
 		coverSyncEnabled,
 		timeSignatureBranchingEnabled,
+		timeSignatureBranchMode,
 		timeSignatureNumerator,
 		timeSignatureDenominator,
 		timeSignatureTrackOffsets,
+		timeSignatureSimilarityRestrictEnabled,
+		timeSignatureSimilarityNumerator,
+		timeSignatureSimilarityDenominator,
 		tempoSyncEnabled,
 		normalizeVolumeEnabled,
 		postMixNormalizeVolumeEnabled,
@@ -233,9 +245,13 @@ function applyLoadedMixSources(
 		crossTrackOnly,
 		coverSync: coverSyncEnabled,
 		timeSignatureBranching: timeSignatureBranchingEnabled,
+		timeSignatureBranchMode,
 		timeSignatureNumerator,
 		timeSignatureDenominator,
 		timeSignatureTrackOffsets: resolvedTrackOffsets,
+		timeSignatureSimilarityRestrict: timeSignatureSimilarityRestrictEnabled,
+		timeSignatureSimilarityNumerator,
+		timeSignatureSimilarityDenominator,
 	});
 	context.engine.loadAnalysis(mergedAnalysis);
 
@@ -324,6 +340,7 @@ export async function loadMultiTrackMix(context: AppContext): Promise<boolean> {
 					? rawTrackMeta.tempo
 					: undefined;
 			sources.push({
+				jobId: complete.id,
 				track: {
 					...track,
 					title:
@@ -345,6 +362,13 @@ export async function loadMultiTrackMix(context: AppContext): Promise<boolean> {
 			return false;
 		}
 
+		const restoredOffsets = sources.map((source) =>
+			resolveStoredBpmBarBeatOffsetForTrack(source.jobId || source.track.id),
+		);
+		useAppStore.setState({
+			timeSignatureTrackOffsets: restoredOffsets,
+			bpmBarBeatOffset: restoredOffsets[0] ?? 0,
+		});
 		cachedMixSources = sources;
 		applyLoadedMixSources(context, sources);
 		return true;
@@ -379,9 +403,13 @@ export async function disableMultiTrackMix(
 		crossTrackThreshold: 0,
 		coverSync: false,
 		timeSignatureBranching: false,
+		timeSignatureBranchMode: DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
 		timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
 		timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
 		timeSignatureTrackOffsets: [],
+		timeSignatureSimilarityRestrict: false,
+		timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+		timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
 	});
 
 	const { playlist } = useAppStore.getState();
@@ -463,7 +491,19 @@ export function setTimeSignatureBranchingEnabled(
 	context: AppContext,
 	enabled: boolean,
 ): void {
-	useAppStore.setState({ timeSignatureBranchingEnabled: enabled });
+	const state = useAppStore.getState();
+	// Automatically switch overwrite -> combine when similarity restriction is
+	// already enabled so auto-created bar links layer onto the restricted grid.
+	const nextMode: TimeSignatureBranchMode =
+		enabled &&
+		state.timeSignatureSimilarityRestrictEnabled &&
+		state.timeSignatureBranchMode === "overwrite"
+			? "combine"
+			: state.timeSignatureBranchMode;
+	useAppStore.setState({
+		timeSignatureBranchingEnabled: enabled,
+		timeSignatureBranchMode: nextMode,
+	});
 	const {
 		multiTrackEnabled,
 		timeSignatureNumerator,
@@ -475,11 +515,132 @@ export function setTimeSignatureBranchingEnabled(
 	}
 	context.engine?.updateConfig({
 		timeSignatureBranching: enabled,
+		timeSignatureBranchMode: nextMode,
 		timeSignatureNumerator,
 		timeSignatureDenominator,
 		timeSignatureTrackOffsets,
 	});
 	rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates whether similarity branches in multi-track mixes are strictly
+ * restricted to time-signature bar boundaries, rebuilding live when active.
+ */
+export function setTimeSignatureSimilarityRestrictEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	const state = useAppStore.getState();
+	const nextMode: TimeSignatureBranchMode =
+		enabled &&
+		state.timeSignatureBranchingEnabled &&
+		state.timeSignatureBranchMode === "overwrite"
+			? "combine"
+			: state.timeSignatureBranchMode;
+	useAppStore.setState({
+		timeSignatureSimilarityRestrictEnabled: enabled,
+		timeSignatureBranchMode: nextMode,
+	});
+	const {
+		multiTrackEnabled,
+		timeSignatureBranchingEnabled,
+		timeSignatureSimilarityNumerator,
+		timeSignatureSimilarityDenominator,
+		timeSignatureTrackOffsets,
+	} = useAppStore.getState();
+	if (!context.engine) {
+		return;
+	}
+	context.engine.updateConfig({
+		timeSignatureSimilarityRestrict: enabled,
+		timeSignatureSimilarityNumerator,
+		timeSignatureSimilarityDenominator,
+		timeSignatureTrackOffsets,
+		...(multiTrackEnabled && timeSignatureBranchingEnabled
+			? { timeSignatureBranchMode: nextMode }
+			: {}),
+	});
+	rebuildMixGraphAndSyncViz(context);
+}
+
+/**
+ * Updates the time signature numerator for similarity bar-boundary restriction
+ * and rebuilds the jump graph live when active.
+ */
+export function setTimeSignatureSimilarityNumerator(
+	context: AppContext,
+	numerator: number,
+): void {
+	const clamped = clampTimeSignatureNumerator(numerator);
+	useAppStore.setState({ timeSignatureSimilarityNumerator: clamped });
+	const {
+		multiTrackEnabled,
+		timeSignatureSimilarityRestrictEnabled,
+		timeSignatureBranchingEnabled,
+		timeSignatureBranchMode,
+	} = useAppStore.getState();
+	if (!context.engine) {
+		return;
+	}
+	context.engine.updateConfig({ timeSignatureSimilarityNumerator: clamped });
+	const isOverwrite =
+		multiTrackEnabled &&
+		timeSignatureBranchingEnabled &&
+		timeSignatureBranchMode === "overwrite";
+	if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+		rebuildMixGraphAndSyncViz(context);
+	}
+}
+
+/**
+ * Updates the time signature denominator for similarity bar-boundary
+ * restriction and rebuilds the jump graph live when active.
+ */
+export function setTimeSignatureSimilarityDenominator(
+	context: AppContext,
+	denominator: number,
+): void {
+	const clamped = clampTimeSignatureDenominator(denominator);
+	useAppStore.setState({ timeSignatureSimilarityDenominator: clamped });
+	const {
+		multiTrackEnabled,
+		timeSignatureSimilarityRestrictEnabled,
+		timeSignatureBranchingEnabled,
+		timeSignatureBranchMode,
+	} = useAppStore.getState();
+	if (!context.engine) {
+		return;
+	}
+	context.engine.updateConfig({ timeSignatureSimilarityDenominator: clamped });
+	const isOverwrite =
+		multiTrackEnabled &&
+		timeSignatureBranchingEnabled &&
+		timeSignatureBranchMode === "overwrite";
+	if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+		rebuildMixGraphAndSyncViz(context);
+	}
+}
+
+/**
+ * Updates whether time-signature bar branches overwrite or combine with
+ * similarity branches in multi-track mixes, rebuilding the graph when active.
+ */
+export function setTimeSignatureBranchMode(
+	context: AppContext,
+	mode: TimeSignatureBranchMode,
+): void {
+	const normalized = normalizeTimeSignatureBranchMode(mode);
+	useAppStore.setState({ timeSignatureBranchMode: normalized });
+	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
+		useAppStore.getState();
+	if (!multiTrackEnabled) {
+		return;
+	}
+	context.engine?.updateConfig({ timeSignatureBranchMode: normalized });
+	if (timeSignatureBranchingEnabled) {
+		rebuildMixGraphAndSyncViz(context);
+	}
 }
 
 /**
@@ -549,12 +710,34 @@ export function setTimeSignatureTrackOffset(
 		next.push(0);
 	}
 	next[trackIndex] = clamped;
-	useAppStore.setState({ timeSignatureTrackOffsets: next });
-	if (!state.multiTrackEnabled) {
+	if (state.multiTrackEnabled) {
+		const mixTrackId =
+			cachedMixSources?.[trackIndex]?.jobId ??
+			cachedMixSources?.[trackIndex]?.track.id ??
+			state.playlist.tracks[trackIndex]?.id ??
+			null;
+		storeBpmBarBeatOffsetForTrack(mixTrackId, clamped);
+		useAppStore.setState({
+			timeSignatureTrackOffsets: next,
+			...(trackIndex === 0 ? { bpmBarBeatOffset: clamped } : {}),
+		});
+	} else {
+		if (trackIndex === 0) {
+			storeBpmBarBeatOffsetForTrack(getCurrentTrackId(), clamped);
+		}
+		useAppStore.setState({
+			timeSignatureTrackOffsets: next,
+			...(trackIndex === 0 ? { bpmBarBeatOffset: clamped } : {}),
+		});
+	}
+	if (!context.engine) {
 		return;
 	}
-	context.engine?.updateConfig({ timeSignatureTrackOffsets: next });
-	if (state.timeSignatureBranchingEnabled) {
+	context.engine.updateConfig({ timeSignatureTrackOffsets: next });
+	if (
+		state.timeSignatureSimilarityRestrictEnabled ||
+		(state.multiTrackEnabled && state.timeSignatureBranchingEnabled)
+	) {
 		rebuildMixGraphAndSyncViz(context);
 	}
 }
@@ -787,6 +970,7 @@ export async function loadAutocanonizerMix(
 					? rawTrackMeta.tempo
 					: undefined;
 			sources.push({
+				jobId: complete.id,
 				track: {
 					...track,
 					title:

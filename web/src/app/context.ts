@@ -3,7 +3,7 @@ import type {
   BufferedAudioPlayer,
   JukeboxAudioMode,
 } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
-import type { Edge } from "@forever-jukebox/shared/types";
+import type { Edge, TimeSignatureBranchMode } from "@forever-jukebox/shared/types";
 import type { FavoriteTrack } from "./favorites";
 import type { PlaylistState } from "./playlist";
 import type { AppConfig } from "./api";
@@ -100,9 +100,13 @@ export type AppState = {
   crossTrackOnly: boolean;
   coverSyncEnabled: boolean;
   timeSignatureBranchingEnabled: boolean;
+  timeSignatureBranchMode: TimeSignatureBranchMode;
   timeSignatureNumerator: number;
   timeSignatureDenominator: number;
   timeSignatureTrackOffsets: number[];
+  timeSignatureSimilarityRestrictEnabled: boolean;
+  timeSignatureSimilarityNumerator: number;
+  timeSignatureSimilarityDenominator: number;
   tempoSyncEnabled: boolean;
   normalizeVolumeEnabled: boolean;
   postMixNormalizeVolumeEnabled: boolean;

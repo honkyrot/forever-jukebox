@@ -22,8 +22,12 @@ import {
   setPostMixNormalizeVolumeEnabled,
   setSleepTimer,
   setTimeSignatureBranchingEnabled,
+  setTimeSignatureBranchMode,
   setTimeSignatureDenominator,
   setTimeSignatureNumerator,
+  setTimeSignatureSimilarityDenominator,
+  setTimeSignatureSimilarityNumerator,
+  setTimeSignatureSimilarityRestrictEnabled,
   setTimeSignatureTrackOffset,
   startJukeboxFromBeat,
   stopPlayback,
@@ -762,31 +766,66 @@ describe("playback tuning", () => {
     expect(useAppStore.getState().timeSignatureNumerator).toBe(8);
     expect(context.engine.rebuildGraph).not.toHaveBeenCalled();
 
-    // Enabling time-signature branching updates config and rebuilds the graph live.
+    // Enabling similarity bar restriction while auto-create is disabled updates config and rebuilds.
+    setTimeSignatureSimilarityRestrictEnabled(context, true);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(
+      true,
+    );
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(1);
+
+    setTimeSignatureSimilarityNumerator(context, 4);
+    setTimeSignatureSimilarityDenominator(context, 4);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(4);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(4);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(3);
+
+    // Track offset changes rebuild live even when only similarity restriction is active.
+    setTimeSignatureTrackOffset(context, 1, 2);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([0, 2]);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(4);
+
+    // Enabling auto-create while similarity restriction is active automatically switches mode to combine.
     setTimeSignatureBranchingEnabled(context, true);
     expect(useAppStore.getState().timeSignatureBranchingEnabled).toBe(true);
+    expect(useAppStore.getState().timeSignatureBranchMode).toBe("combine");
     expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
         timeSignatureBranching: true,
+        timeSignatureBranchMode: "combine",
         timeSignatureNumerator: 8,
         timeSignatureDenominator: 4,
-        timeSignatureTrackOffsets: [],
+        timeSignatureTrackOffsets: [0, 2],
       }),
     );
-    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(1);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(5);
     expect(context.player.stop).not.toHaveBeenCalled();
 
-    // Changing denominator and per-track offsets rebuilds live and clamps values.
+    // Toggling branch mode while enabled updates engine config and rebuilds live.
+    setTimeSignatureBranchMode(context, "overwrite");
+    expect(useAppStore.getState().timeSignatureBranchMode).toBe("overwrite");
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith({
+      timeSignatureBranchMode: "overwrite",
+    });
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(6);
+    // Changing similarity signature while overwrite is active updates config without rebuilding.
+    setTimeSignatureSimilarityDenominator(context, 8);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(8);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(6);
+
+    setTimeSignatureBranchMode(context, "combine");
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(7);
+
+    // Changing auto-create denominator and per-track offsets rebuilds live and clamps values.
     setTimeSignatureDenominator(context, 8);
     expect(useAppStore.getState().timeSignatureDenominator).toBe(8);
-    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(2);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(8);
 
     setTimeSignatureTrackOffset(context, 1, 3);
     expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([0, 3]);
     expect(context.engine.updateConfig).toHaveBeenLastCalledWith({
       timeSignatureTrackOffsets: [0, 3],
     });
-    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(3);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(9);
 
     setTimeSignatureNumerator(context, 128);
     setTimeSignatureDenominator(context, 99);
@@ -800,9 +839,13 @@ describe("playback tuning", () => {
     expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
         timeSignatureBranching: true,
+        timeSignatureBranchMode: "combine",
         timeSignatureNumerator: 64,
         timeSignatureDenominator: 16,
         timeSignatureTrackOffsets: [-256, 3],
+        timeSignatureSimilarityRestrict: true,
+        timeSignatureSimilarityNumerator: 4,
+        timeSignatureSimilarityDenominator: 8,
       }),
     );
 
@@ -811,11 +854,108 @@ describe("playback tuning", () => {
     expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
         timeSignatureBranching: false,
+        timeSignatureBranchMode: "overwrite",
         timeSignatureNumerator: 4,
         timeSignatureDenominator: 4,
         timeSignatureTrackOffsets: [],
+        timeSignatureSimilarityRestrict: false,
+        timeSignatureSimilarityNumerator: 4,
+        timeSignatureSimilarityDenominator: 4,
       }),
     );
+  });
+
+  it("supports single-track similarity bar restriction, beat offset, and tuning reset", () => {
+    const context = createContext();
+    useAppStore.setState({ multiTrackEnabled: false });
+
+    setTimeSignatureSimilarityRestrictEnabled(context, true);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(
+      true,
+    );
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureSimilarityRestrict: true,
+        timeSignatureSimilarityNumerator: 4,
+        timeSignatureSimilarityDenominator: 4,
+        timeSignatureTrackOffsets: [],
+      }),
+    );
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(1);
+
+    setTimeSignatureSimilarityNumerator(context, 3);
+    setTimeSignatureSimilarityDenominator(context, 4);
+    setTimeSignatureTrackOffset(context, 0, 2);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([2]);
+    expect(context.engine.rebuildGraph).toHaveBeenCalledTimes(4);
+
+    resetTuningDefaults(context);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(
+      false,
+    );
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([]);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureSimilarityRestrict: false,
+        timeSignatureSimilarityNumerator: 4,
+        timeSignatureSimilarityDenominator: 4,
+        timeSignatureTrackOffsets: [],
+      }),
+    );
+  });
+
+  it("persists and restores per-song beat offsets across track switches", () => {
+    setLocalStorage();
+    const context = createContext();
+    useAppStore.setState({ multiTrackEnabled: false, lastTrackId: "song-a" });
+
+    setTimeSignatureTrackOffset(context, 0, 2);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(2);
+    expect(localStorage.getItem("fj-bpm-bar-ts-offset")).toBe(
+      JSON.stringify({ "song-a": 2 }),
+    );
+
+    useAppStore.setState({ lastTrackId: "song-b" });
+    setTimeSignatureTrackOffset(context, 0, -1);
+    expect(localStorage.getItem("fj-bpm-bar-ts-offset")).toBe(
+      JSON.stringify({ "song-a": 2, "song-b": -1 }),
+    );
+
+    // Loading song-a restores offset 2 into both store and engine config.
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-a",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(2);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([2]);
+    expect(context.engine.updateConfig).toHaveBeenCalledWith({
+      timeSignatureTrackOffsets: [2],
+    });
+
+    // Loading song-b restores offset -1.
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-b",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(-1);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([-1]);
+
+    // Loading an unsaved song-c resets offsets to 0 / [].
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-c",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(0);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([]);
   });
 
   it("applies branch stats toggle and audio mode from extras controls", () => {

@@ -97,9 +97,19 @@ beforeEach(() => {
       crossTrackOnly: true,
       coverSyncEnabled: false,
       timeSignatureBranchingEnabled: false,
+      timeSignatureBranchMode: "overwrite",
       timeSignatureNumerator: 4,
       timeSignatureDenominator: 4,
       timeSignatureTrackOffsets: [],
+      timeSignatureSimilarityRestrictEnabled: false,
+      timeSignatureSimilarityNumerator: 4,
+      timeSignatureSimilarityDenominator: 4,
+      bpmBarEnabled: true,
+      bpmBarStyle: "pulse",
+      bpmBarTimeSignatureMode: "auto",
+      bpmBarNumerator: 4,
+      bpmBarDenominator: 4,
+      bpmBarBeatOffset: 0,
       tempoSyncEnabled: true,
       normalizeVolumeEnabled: true,
       postMixNormalizeVolumeEnabled: false,
@@ -626,6 +636,173 @@ describe("TuningModal", () => {
       timeSignatureTrackOffsets: [0, 1],
     });
     expect(rebuildGraph).toHaveBeenCalledTimes(3);
+
+    // Switching to combine mode keeps Cross Branch Similarity Threshold enabled.
+    const modeSelect = document.getElementById(
+      "time-signature-branch-mode",
+    ) as HTMLSelectElement;
+    expect(modeSelect).not.toBeNull();
+    expect(modeSelect.value).toBe("overwrite");
+    fireEvent.change(modeSelect, { target: { value: "combine" } });
+    expect(useAppStore.getState().timeSignatureBranchMode).toBe("combine");
+    expect(
+      (document.getElementById("cross-threshold") as HTMLInputElement).disabled,
+    ).toBe(false);
+    expect(updateConfig).toHaveBeenLastCalledWith({
+      timeSignatureBranchMode: "combine",
+    });
+    expect(rebuildGraph).toHaveBeenCalledTimes(4);
+
+    // Enabling independent similarity bar-restriction exposes its own 4/4 grid controls
+    // and keeps them separate from the auto-create grid (e.g. 4/2).
+    const restrictToggle = document.getElementById(
+      "time-signature-similarity-restrict-enabled",
+    ) as HTMLInputElement;
+    expect(restrictToggle).not.toBeNull();
+    fireEvent.click(restrictToggle);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(
+      true,
+    );
+    expect(
+      document.getElementById("multi-time-sig-restrict-controls"),
+    ).not.toBeNull();
+    expect(
+      document.getElementById("time-signature-similarity-step-beats")
+        ?.textContent,
+    ).toBe("Every 4 beats");
+    const autoDenSelect = document.getElementById(
+      "time-signature-denominator",
+    ) as HTMLSelectElement;
+    fireEvent.change(autoDenSelect, { target: { value: "2" } });
+    expect(
+      document.getElementById("time-signature-step-beats")?.textContent,
+    ).toBe("Every 16 beats");
+    expect(
+      document.getElementById("time-signature-similarity-step-beats")
+        ?.textContent,
+    ).toBe("Every 4 beats");
+  });
+
+  it("configures BPM bar time signature under Visuals and persists per-song offset to localStorage", () => {
+    localStorage.clear();
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        bpmBarEnabled: true,
+        lastTrackId: "song-a",
+      });
+    });
+    render(<TuningModal />);
+
+    const modeSelect = document.getElementById(
+      "bpm-bar-time-sig-mode",
+    ) as HTMLSelectElement;
+    const styleSelect = document.getElementById(
+      "bpm-bar-style",
+    ) as HTMLSelectElement;
+    expect(styleSelect).not.toBeNull();
+    expect(styleSelect.value).toBe("pulse");
+    expect(modeSelect).not.toBeNull();
+    expect(modeSelect.value).toBe("auto");
+    expect(document.getElementById("bpm-bar-numerator")).toBeNull();
+
+    fireEvent.change(modeSelect, { target: { value: "custom" } });
+    expect(useAppStore.getState().bpmBarTimeSignatureMode).toBe("custom");
+    expect(localStorage.getItem("fj-bpm-bar-ts-mode")).toBe("custom");
+    expect(document.getElementById("bpm-bar-step-beats")?.textContent).toBe(
+      "4 segments",
+    );
+
+    fireEvent.change(styleSelect, { target: { value: "smooth" } });
+    expect(useAppStore.getState().bpmBarStyle).toBe("smooth");
+    expect(localStorage.getItem("fj-bpm-bar-style")).toBe("smooth");
+    expect(document.getElementById("bpm-bar-step-beats")?.textContent).toBe(
+      "4 beats",
+    );
+
+    fireEvent.change(styleSelect, { target: { value: "smooth-pulse" } });
+    expect(useAppStore.getState().bpmBarStyle).toBe("smooth-pulse");
+    expect(localStorage.getItem("fj-bpm-bar-style")).toBe("smooth-pulse");
+    expect(document.getElementById("bpm-bar-step-beats")?.textContent).toBe(
+      "4 beats",
+    );
+
+    const denSelect = document.getElementById(
+      "bpm-bar-denominator",
+    ) as HTMLSelectElement;
+    fireEvent.change(denSelect, { target: { value: "2" } });
+    expect(useAppStore.getState().bpmBarDenominator).toBe(2);
+    expect(localStorage.getItem("fj-bpm-bar-ts-den")).toBe("2");
+    expect(document.getElementById("bpm-bar-step-beats")?.textContent).toBe(
+      "8 beats",
+    );
+
+    const incBtn = document.getElementById(
+      "bpm-bar-beat-offset-inc",
+    ) as HTMLButtonElement;
+    fireEvent.click(incBtn);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(1);
+    expect(localStorage.getItem("fj-bpm-bar-ts-offset")).toBe(
+      JSON.stringify({ "song-a": 1 }),
+    );
+
+    const toggle = document.getElementById("bpm-bar-toggle") as HTMLInputElement;
+    fireEvent.click(toggle);
+    expect(document.getElementById("bpm-bar-time-sig-controls")).toBeNull();
+  });
+
+  it("renders similarity bar restriction and beat offset in single-track jukebox mode", () => {
+    const updateConfig = vi.fn();
+    const rebuildGraph = vi.fn();
+    vi.mocked(getAppContext).mockReturnValue({
+      engine: {
+        updateConfig,
+        rebuildGraph,
+        getGraphState: vi.fn(() => null),
+        getVisualizationData: vi.fn(() => null),
+        getPredictedJumps: vi.fn(() => []),
+      },
+      player: { getDuration: vi.fn(() => 0) },
+    } as unknown as ReturnType<typeof getAppContext>);
+
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        playMode: "jukebox",
+        multiTrackEnabled: false,
+      });
+    });
+    render(<TuningModal />);
+
+    expect(
+      document.getElementById("time-signature-branching-enabled"),
+    ).toBeNull();
+    const restrictToggle = document.getElementById(
+      "time-signature-similarity-restrict-enabled",
+    ) as HTMLInputElement;
+    expect(restrictToggle).not.toBeNull();
+
+    fireEvent.click(restrictToggle);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(
+      true,
+    );
+    expect(
+      document.getElementById("time-signature-similarity-step-beats")
+        ?.textContent,
+    ).toBe("Every 4 beats");
+    expect(
+      document.getElementById("time-signature-track-offset-0"),
+    ).not.toBeNull();
+
+    const incBtn = document.getElementById(
+      "time-signature-track-offset-inc-0",
+    ) as HTMLButtonElement;
+    fireEvent.click(incBtn);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([1]);
+    expect(updateConfig).toHaveBeenLastCalledWith({
+      timeSignatureTrackOffsets: [1],
+    });
+    expect(rebuildGraph).toHaveBeenCalledTimes(2);
   });
 
   it("toggles upcoming branch lookahead, persists count without seed UI or tuning reset", async () => {

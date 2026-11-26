@@ -38,6 +38,7 @@ import {
   TrackAnalysis,
 } from "./types";
 import {
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   DEFAULT_TIME_SIGNATURE_NUMERATOR,
 } from "./timeSignatureBranching";
@@ -61,9 +62,13 @@ export const DEFAULT_JUKEBOX_CONFIG: JukeboxConfig = {
   crossTrackOnly: false,
   coverSync: false,
   timeSignatureBranching: false,
+  timeSignatureBranchMode: DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   timeSignatureNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
   timeSignatureDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   timeSignatureTrackOffsets: [],
+  timeSignatureSimilarityRestrict: false,
+  timeSignatureSimilarityNumerator: DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  timeSignatureSimilarityDenominator: DEFAULT_TIME_SIGNATURE_DENOMINATOR,
 };
 
 const TICK_INTERVAL_MS = 50;
