@@ -418,6 +418,21 @@ describe("TuningModal", () => {
     expect(document.getElementById("tuning-reset")).toBeNull();
   });
 
+  it("renders Pitch Based coloring and updates store and localStorage", async () => {
+    localStorage.removeItem("visualEffectMode");
+    render(<TuningModal />);
+    act(() => {
+      useAppStore.setState({ tuningModalOpen: true });
+    });
+    const pitchRadio = document.getElementById(
+      "use-pitch-colors",
+    ) as HTMLInputElement | null;
+    expect(pitchRadio).not.toBeNull();
+    await userEvent.click(screen.getByLabelText("Pitch Based"));
+    expect(useAppStore.getState().visualPreferences.visualEffectMode).toBe("4");
+    expect(localStorage.getItem("visualEffectMode")).toBe("4");
+  });
+
   it("does not show tuning reset for the sticky anchor highlight", async () => {
     render(<TuningModal />);
     act(() => {

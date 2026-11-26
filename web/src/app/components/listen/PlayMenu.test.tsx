@@ -8,6 +8,8 @@ import { PlayMenu } from "./PlayMenu";
 const h = vi.hoisted(() => ({
   getPendingDelete: vi.fn(),
   performDelete: vi.fn(),
+  getPendingRename: vi.fn(),
+  performRename: vi.fn(),
   toggleFavorite: vi.fn(),
   copyShortUrl: vi.fn(),
   reportTrack: vi.fn(),
@@ -23,6 +25,10 @@ vi.mock("../../ui", async (importOriginal) => ({
 vi.mock("../../delete-job", () => ({
   getPendingDelete: h.getPendingDelete,
   performDelete: h.performDelete,
+}));
+vi.mock("../../rename-job", () => ({
+  getPendingRename: h.getPendingRename,
+  performRename: h.performRename,
 }));
 vi.mock("../../favorites-actions", () => ({ toggleFavorite: h.toggleFavorite }));
 vi.mock("../../playback-ui", () => ({ copyShortUrl: h.copyShortUrl }));
@@ -43,6 +49,15 @@ describe("PlayMenu", () => {
     });
     h.performDelete.mockReset();
     h.performDelete.mockResolvedValue(undefined);
+    h.getPendingRename.mockReturnValue({
+      jobId: "job1",
+      trackId: "track1",
+      title: "Song",
+      artist: "Artist",
+      adminKey: "secret",
+    });
+    h.performRename.mockReset();
+    h.performRename.mockResolvedValue(true);
     h.toggleFavorite.mockReset();
     h.copyShortUrl.mockReset();
     h.reportTrack.mockReset();
@@ -60,6 +75,7 @@ describe("PlayMenu", () => {
         bringItHomeMode: false,
         deleteEligible: false,
         deleteConfirmOpen: false,
+        renameModalOpen: false,
         favorites: [],
         favoriteToggleBusy: false,
         lastTrackId: "track1",
@@ -306,5 +322,114 @@ describe("PlayMenu", () => {
     expect(h.copyShortUrl).toHaveBeenCalled();
     await userEvent.click(document.getElementById("favorite-toggle")!);
     expect(h.toggleFavorite).toHaveBeenCalled();
+  });
+
+  it("shows the rename button only in admin mode", () => {
+    render(<PlayMenu />);
+    expect(
+      document.getElementById("rename-job")?.classList.contains("hidden"),
+    ).toBe(true);
+
+    cleanup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+    expect(
+      document.getElementById("rename-job")?.classList.contains("hidden"),
+    ).toBe(false);
+  });
+
+  it("opens the rename modal prefilled, submits trimmed values, and closes on success", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("rename-job")!);
+    expect(useAppStore.getState().renameModalOpen).toBe(true);
+
+    const titleInput = document.getElementById(
+      "rename-track-title",
+    ) as HTMLInputElement;
+    const artistInput = document.getElementById(
+      "rename-track-artist",
+    ) as HTMLInputElement;
+    const submitButton = document.getElementById(
+      "rename-track-submit",
+    ) as HTMLButtonElement;
+
+    expect(titleInput.value).toBe("Song");
+    expect(artistInput.value).toBe("Artist");
+
+    await user.clear(titleInput);
+    expect(submitButton.disabled).toBe(true);
+    await user.type(titleInput, "  Localized Song  ");
+    await user.clear(artistInput);
+    await user.type(artistInput, "  Localized Artist  ");
+    expect(submitButton.disabled).toBe(false);
+
+    await user.click(submitButton);
+
+    await waitFor(() => {
+      expect(h.performRename).toHaveBeenCalledWith(
+        {
+          jobId: "job1",
+          trackId: "track1",
+          title: "Song",
+          artist: "Artist",
+          adminKey: "secret",
+        },
+        { title: "Localized Song", artist: "Localized Artist" },
+      );
+      expect(useAppStore.getState().renameModalOpen).toBe(false);
+    });
+  });
+
+  it("keeps the rename modal open when performRename fails", async () => {
+    const user = userEvent.setup();
+    h.performRename.mockResolvedValue(false);
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("rename-job")!);
+    await user.click(document.getElementById("rename-track-submit")!);
+
+    await waitFor(() => {
+      expect(h.performRename).toHaveBeenCalledTimes(1);
+    });
+    expect(useAppStore.getState().renameModalOpen).toBe(true);
+  });
+
+  it("bails out of rename when the active job changes under the open modal", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("rename-job")!);
+    expect(useAppStore.getState().renameModalOpen).toBe(true);
+
+    h.getPendingRename.mockReturnValue({
+      jobId: "job2",
+      trackId: "track2",
+      title: "Other",
+      artist: "Other",
+      adminKey: "secret",
+    });
+
+    await user.click(document.getElementById("rename-track-submit")!);
+    await waitFor(() => {
+      expect(useAppStore.getState().renameModalOpen).toBe(false);
+    });
+    expect(h.performRename).not.toHaveBeenCalled();
+  });
+
+  it("cancels the rename modal with Escape", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("rename-job")!);
+    expect(useAppStore.getState().renameModalOpen).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(useAppStore.getState().renameModalOpen).toBe(false);
+    expect(h.performRename).not.toHaveBeenCalled();
   });
 });

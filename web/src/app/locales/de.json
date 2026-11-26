@@ -178,6 +178,15 @@
     "trackQuestion": "Song löschen?",
     "withinWindow": "Innerhalb von 30 Minuten nach Erstellung löschen"
   },
+  "rename": {
+    "track": "Song umbenennen",
+    "title": "Song umbenennen",
+    "titleLabel": "Titel",
+    "artistLabel": "Künstler",
+    "save": "Speichern",
+    "renamed": "Song umbenannt",
+    "failed": "Song konnte nicht umbenannt werden"
+  },
   "report": {
     "title": "Titel melden",
     "button": "Melden",
@@ -444,7 +453,11 @@
     "reported": "Gemeldet",
     "loadingReported": "Gemeldete Titel werden geladen...",
     "emptyReported": "Keine gemeldeten Titel.",
-    "reportedError": "Gemeldete Titel"
+    "reportedError": "Gemeldete Titel",
+    "defaultOrder": "Standardreihenfolge",
+    "playsColumn": "Aufrufe",
+    "reportColumn": "Meldung",
+    "actionsColumn": "Aktionen"
   },
   "faq": {
     "whatsNew": "Was ist neu",

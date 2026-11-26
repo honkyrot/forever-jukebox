@@ -11,6 +11,7 @@ import {
   type CustomAnchorEnd,
 } from "../engine/selection";
 import { beatPairMatch } from "../engine/graph";
+import { computePitchBeatColors } from "../engine/beatColors";
 import {
   ANCHOR_HIGHLIGHT_COLOR,
   ANCHOR_MATCH_COLORS,
@@ -20,6 +21,15 @@ import {
   MAX_EDGE_SAMPLES,
   MAX_EDGES_BASE,
 } from "../constants/visualization";
+import {
+  computeMatrixSimilarityGrid,
+  createMatrixControlPointResolver,
+  createMatrixPositioner,
+  createRingsPositioner,
+  createRosePositioner,
+  getMatrixBounds,
+  type MatrixSimilarityGrid,
+} from "./extraLayouts";
 
 type VizData = NonNullable<ReturnType<JukeboxEngine["getVisualizationData"]>>;
 
@@ -99,7 +109,7 @@ function predictedJumpsEqual(
 export type AnchorEditState = CustomAnchor & { active: CustomAnchorEnd };
 type AnchorEditHandler = (state: AnchorEditState) => void;
 
-export type VisualEffectMode = "0" | "1" | "2" | "3";
+export type VisualEffectMode = "0" | "1" | "2" | "3" | "4";
 
 export type VisualPreferences = {
   visualEffectMode: VisualEffectMode;
@@ -117,7 +127,9 @@ export function readStoredVisualPreferences(): VisualPreferences {
   }
   const rawMode = localStorage.getItem("visualEffectMode");
   const visualEffectMode: VisualEffectMode =
-    rawMode === "1" || rawMode === "2" || rawMode === "3" ? rawMode : "0";
+    rawMode === "1" || rawMode === "2" || rawMode === "3" || rawMode === "4"
+      ? rawMode
+      : "0";
   return {
     visualEffectMode,
     useSquareBeats: localStorage.getItem("useSquareBeats") === "true",
@@ -152,6 +164,7 @@ type CanvasVizOptions = {
   forceBendEdges?: boolean;
   edgeControlPointResolver?: EdgeControlPointResolver;
   beatTiles?: boolean;
+  matrixMode?: boolean;
   background?: { inner: string; outer: string };
 };
 
@@ -201,9 +214,12 @@ class CanvasViz {
   private readonly positioner: Positioner;
   private readonly forceBendEdges: boolean;
   private readonly edgeControlPointResolver: EdgeControlPointResolver | null;
+  private readonly matrixMode: boolean;
   private visible = true;
   private anchorHighlightEnabled = false;
   private visualPreferences: VisualPreferences = readStoredVisualPreferences();
+  private pitchColors: Array<string | null> = [];
+  private matrixGrid: MatrixSimilarityGrid | null = null;
 
   private edgeGeometry = new WeakMap<
     Edge,
@@ -226,6 +242,7 @@ class CanvasViz {
     this.positioner = positioner;
     this.forceBendEdges = options.forceBendEdges ?? false;
     this.edgeControlPointResolver = options.edgeControlPointResolver ?? null;
+    this.matrixMode = options.matrixMode ?? false;
     this.background = options.background;
     this.baseCanvas = document.createElement("canvas");
     this.overlayCanvas = document.createElement("canvas");
@@ -282,6 +299,10 @@ class CanvasViz {
 
   setData(data: VisualizationData) {
     this.data = data;
+    this.pitchColors = computePitchBeatColors(data.beats);
+    this.matrixGrid = this.matrixMode
+      ? computeMatrixSimilarityGrid(data.beats)
+      : null;
     this.clearHoveredBeat();
     this.computePositions();
     this.computeEdgeGeometry();
@@ -346,6 +367,8 @@ class CanvasViz {
     }
     this.data = null;
     this.positions = [];
+    this.pitchColors = [];
+    this.matrixGrid = null;
     this.predictedJumps = [];
     this.predictedJumpControls = [];
     this.edgeGeometry = new WeakMap();
@@ -570,15 +593,14 @@ class CanvasViz {
   }
 
   /**
-   * Resolves a beat's upstream timbre-based color from `beatColors`,
-   * applying optional alpha transparency and falling back when unavailable.
+   * Resolves a beat's color from an external color array, applying optional
+   * alpha transparency and falling back when unavailable.
    */
-  private resolveEngineBeatColor(
-    beatIndex: number,
+  private resolveColorEntry(
+    color: string | null | undefined,
     alpha: number,
     fallback: string
   ): string {
-    const color = this.data?.beatColors?.[beatIndex];
     if (!color) {
       return fallback;
     }
@@ -594,9 +616,54 @@ class CanvasViz {
     return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${normalizedAlpha})`;
   }
 
+  /**
+   * Resolves a beat's upstream timbre-based color from `beatColors`,
+   * applying optional alpha transparency and falling back when unavailable.
+   */
+  private resolveEngineBeatColor(
+    beatIndex: number,
+    alpha: number,
+    fallback: string
+  ): string {
+    return this.resolveColorEntry(
+      this.data?.beatColors?.[beatIndex],
+      alpha,
+      fallback
+    );
+  }
+
+  /**
+   * Resolves a beat's Circle-of-Fifths pitch color from `pitchColors`,
+   * applying optional alpha transparency and falling back when unavailable.
+   */
+  private resolvePitchBeatColor(
+    beatIndex: number,
+    alpha: number,
+    fallback: string
+  ): string {
+    return this.resolveColorEntry(
+      this.pitchColors[beatIndex],
+      alpha,
+      fallback
+    );
+  }
+
+  /**
+   * Resolves the Classic layout tile color for a beat, switching to pitch colors
+   * when Pitch mode is active.
+   */
+  private resolveTileColor(index: number): string {
+    const engineColor = this.data?.beatColors?.[index] || this.theme.beatFill;
+    if (this.visualPreferences.visualEffectMode === "4") {
+      return this.resolvePitchBeatColor(index, 1, engineColor);
+    }
+    return engineColor;
+  }
+
   setVisualPreferences(prefs: VisualPreferences) {
     this.visualPreferences = prefs;
     this.drawBase();
+    this.drawTiles();
     this.drawOverlay();
   }
 
@@ -621,6 +688,10 @@ class CanvasViz {
     const isMultiTrack = (this.data.tracks?.length ?? 0) >= 2;
     if (isMultiTrack) {
       this.drawMultiTrackLanes();
+    } else if (this.matrixMode) {
+      this.drawMatrixBase(width, height);
+      this.baseCtx.restore();
+      return;
     }
 
     const edges = this.data.edges;
@@ -712,8 +783,14 @@ class CanvasViz {
             maxDistance > 0 ? 1 - edge.distance / maxDistance : 1;
           const hue = similarity * 140;
           this.baseCtx.strokeStyle = `hsla(${hue}, 100%, 50%, 0.7)`;
-        } else {
+        } else if (visualEffectMode === "3") {
           this.baseCtx.strokeStyle = this.resolveEngineBeatColor(
+            edge.src.which,
+            0.6,
+            this.theme.edgeStroke
+          );
+        } else {
+          this.baseCtx.strokeStyle = this.resolvePitchBeatColor(
             edge.src.which,
             0.6,
             this.theme.edgeStroke
@@ -789,6 +866,12 @@ class CanvasViz {
               1,
               this.theme.beatFill
             );
+          } else if (visualEffectMode === "4") {
+            this.baseCtx.fillStyle = this.resolvePitchBeatColor(
+              i,
+              1,
+              this.theme.beatFill
+            );
           }
           const p = this.positions[i];
           if (useSquareBeats) {
@@ -813,12 +896,12 @@ class CanvasViz {
     if (!this.tileCtx || !this.data || !this.visible) {
       return;
     }
-    const { beatVisits: visits, beatColors } = this.data;
+    const { beatVisits: visits } = this.data;
     this.paintedVisits = [...visits];
     this.tileScale = resolveTileScale(visits.reduce((max, n) => Math.max(max, n), 0));
     this.tileCtx.clearRect(0, 0, this.size.width, this.size.height);
     for (let i = 0; i < visits.length; i += 1) {
-      this.paintTile(this.tileCtx, i, beatColors[i]);
+      this.paintTile(this.tileCtx, i, this.resolveTileColor(i));
     }
   }
 
@@ -827,7 +910,7 @@ class CanvasViz {
     if (!this.tileCtx || !this.data || !this.visible) {
       return;
     }
-    const { beatVisits: visits, beatColors } = this.data;
+    const { beatVisits: visits } = this.data;
     const changed: number[] = [];
     let maxVisits = 0;
     for (let i = 0; i < visits.length; i += 1) {
@@ -844,7 +927,7 @@ class CanvasViz {
       if (visits[index] < this.paintedVisits[index]) {
         this.eraseTile(this.tileCtx, index);
       }
-      this.paintTile(this.tileCtx, index, beatColors[index]);
+      this.paintTile(this.tileCtx, index, this.resolveTileColor(index));
       this.paintedVisits[index] = visits[index];
     }
   }
@@ -945,6 +1028,28 @@ class CanvasViz {
     if (this.tileCanvas) {
       return this.tileIndexAt(x, y);
     }
+    if (this.matrixMode && this.positions.length > 0) {
+      const bounds = getMatrixBounds(this.size.width, this.size.height);
+      if (
+        bounds.side > 0 &&
+        x >= bounds.left &&
+        x <= bounds.left + bounds.side &&
+        y >= bounds.top &&
+        y <= bounds.top + bounds.side
+      ) {
+        if (this.positions.length === 1) {
+          return 0;
+        }
+        const ratio = (x - bounds.left) / bounds.side;
+        return Math.max(
+          0,
+          Math.min(
+            this.positions.length - 1,
+            Math.round(ratio * (this.positions.length - 1)),
+          ),
+        );
+      }
+    }
     let bestIndex: number | null = null;
     let bestDist = Infinity;
     for (let i = 0; i < this.positions.length; i += 1) {
@@ -1003,19 +1108,39 @@ class CanvasViz {
         this.theme.edgeSelected,
         2.5
       );
+      if (this.matrixMode) {
+        const cell = this.getMatrixCellPoint(
+          this.selectedEdge.src.which,
+          this.selectedEdge.dest.which,
+        );
+        if (cell) {
+          this.overlayCtx.fillStyle = this.theme.edgeSelected;
+          this.overlayCtx.beginPath();
+          this.overlayCtx.arc(cell.x, cell.y, 4.5, 0, Math.PI * 2);
+          this.overlayCtx.fill();
+        }
+      }
     }
     if (this.anchorEdit) {
       this.drawAnchorEditor(this.anchorEdit);
     }
     if (this.hoveredBeat !== null) {
-      for (const edge of this.data.beats[this.hoveredBeat].neighbors) {
-        if (!edge.deleted) {
-          this.drawEdge(
-            this.overlayCtx,
-            edge,
-            this.theme.beatHighlight,
-            HOVER_BRANCH_LINE_WIDTH_PX,
-          );
+      if (this.matrixMode) {
+        this.drawMatrixCrosshair(
+          this.hoveredBeat,
+          this.resolveBeatHighlightColor(0.25),
+          this.theme.beatHighlight,
+        );
+      } else {
+        for (const edge of this.data.beats[this.hoveredBeat].neighbors) {
+          if (!edge.deleted) {
+            this.drawEdge(
+              this.overlayCtx,
+              edge,
+              this.theme.beatHighlight,
+              HOVER_BRANCH_LINE_WIDTH_PX,
+            );
+          }
         }
       }
       const hoverColor = this.resolveBeatHighlightColor(BEAT_HOVER_ALPHA);
@@ -1033,6 +1158,13 @@ class CanvasViz {
     }
     const current = this.positions[this.currentIndex];
     if (current) {
+      if (this.matrixMode) {
+        this.drawMatrixCrosshair(
+          this.currentIndex,
+          this.resolveBeatHighlightColor(0.35),
+          this.theme.beatHighlight,
+        );
+      }
       let cursorColor = this.theme.beatHighlight;
       if (this.visualPreferences.visualEffectMode === "1") {
         const progress =
@@ -1045,6 +1177,15 @@ class CanvasViz {
         // Keep Classic's tile marker in the theme highlight so it stays visible
         // over full-height tiles already painted with the same beat color.
         cursorColor = this.resolveEngineBeatColor(
+          this.currentIndex,
+          1,
+          this.theme.beatHighlight
+        );
+      } else if (
+        this.visualPreferences.visualEffectMode === "4" &&
+        !this.tileCanvas
+      ) {
+        cursorColor = this.resolvePitchBeatColor(
           this.currentIndex,
           1,
           this.theme.beatHighlight
@@ -1065,7 +1206,20 @@ class CanvasViz {
         const to = this.positions[this.jumpLine.to];
         if (from && to) {
           const jumpColor = this.jumpFadeColors[step];
-          if (this.jumpLine.control) {
+          if (this.matrixMode) {
+            // Highlight the jump as a crisp L-path through the (to.x, from.y) cell.
+            this.overlayCtx.strokeStyle = jumpColor;
+            this.overlayCtx.lineWidth = 2;
+            this.overlayCtx.beginPath();
+            this.overlayCtx.moveTo(from.x, from.y);
+            this.overlayCtx.lineTo(to.x, from.y);
+            this.overlayCtx.lineTo(to.x, to.y);
+            this.overlayCtx.stroke();
+            this.overlayCtx.fillStyle = jumpColor;
+            this.overlayCtx.beginPath();
+            this.overlayCtx.arc(to.x, from.y, 4, 0, Math.PI * 2);
+            this.overlayCtx.fill();
+          } else if (this.jumpLine.control) {
             this.drawBentLineWithControl(
               this.overlayCtx,
               from,
@@ -1482,6 +1636,16 @@ class CanvasViz {
     const rect = this.overlayCanvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
+    // In Matrix mode, clicking an off-diagonal branch cell takes priority over
+    // seeking inside the matrix square.
+    if (this.matrixMode && this.onEdgeSelect) {
+      const bestCellEdge = this.findNearestEdgeAt(x, y, EDGE_SELECT_RADIUS_PX);
+      if (bestCellEdge) {
+        const nextEdge = this.selectedEdge === bestCellEdge ? null : bestCellEdge;
+        this.onEdgeSelect(nextEdge);
+        return;
+      }
+    }
     if (this.onSelect) {
       const beatIndex = this.beatIndexAt(x, y);
       if (beatIndex !== null) {
@@ -1493,37 +1657,8 @@ class CanvasViz {
       }
     }
     if (this.onEdgeSelect) {
-      const edgeThreshold = EDGE_SELECT_RADIUS_PX;
-      let bestEdge: Edge | null = null;
-      let bestEdgeDist = Infinity;
-      for (const edge of this.data.edges) {
-        if (edge.deleted) {
-          continue;
-        }
-        const from = this.positions[edge.src.which];
-        const to = this.positions[edge.dest.which];
-        if (!from || !to) {
-          continue;
-        }
-        const geometry = this.getEdgeGeometry(edge);
-        if (!geometry) {
-          continue;
-        }
-        const dist =
-          geometry.bend && geometry.control
-            ? distanceToQuadratic(
-                { x, y },
-                from,
-                { x: geometry.control[0], y: geometry.control[1] },
-                to,
-              )
-            : distanceToSegment(x, y, from.x, from.y, to.x, to.y);
-        if (dist < bestEdgeDist) {
-          bestEdgeDist = dist;
-          bestEdge = edge;
-        }
-      }
-      if (bestEdge && bestEdgeDist <= edgeThreshold) {
+      const bestEdge = this.findNearestEdgeAt(x, y, EDGE_SELECT_RADIUS_PX);
+      if (bestEdge) {
         const nextEdge = this.selectedEdge === bestEdge ? null : bestEdge;
         this.onEdgeSelect(nextEdge);
         return;
@@ -1533,6 +1668,55 @@ class CanvasViz {
       }
     }
   };
+
+  /**
+   * Finds the nearest active edge to `(x, y)` within `thresholdPx`, matching
+   * off-diagonal branch cells in Matrix mode or edge curves otherwise.
+   */
+  private findNearestEdgeAt(
+    x: number,
+    y: number,
+    thresholdPx: number,
+  ): Edge | null {
+    if (!this.data) {
+      return null;
+    }
+    let bestEdge: Edge | null = null;
+    let bestEdgeDist = Infinity;
+    for (const edge of this.data.edges) {
+      if (edge.deleted) {
+        continue;
+      }
+      const from = this.positions[edge.src.which];
+      const to = this.positions[edge.dest.which];
+      if (!from || !to) {
+        continue;
+      }
+      let dist: number;
+      if (this.matrixMode) {
+        dist = Math.hypot(x - to.x, y - from.y);
+      } else {
+        const geometry = this.getEdgeGeometry(edge);
+        if (!geometry) {
+          continue;
+        }
+        dist =
+          geometry.bend && geometry.control
+            ? distanceToQuadratic(
+                { x, y },
+                from,
+                { x: geometry.control[0], y: geometry.control[1] },
+                to,
+              )
+            : distanceToSegment(x, y, from.x, from.y, to.x, to.y);
+      }
+      if (dist < bestEdgeDist) {
+        bestEdgeDist = dist;
+        bestEdge = edge;
+      }
+    }
+    return bestEdge && bestEdgeDist <= thresholdPx ? bestEdge : null;
+  }
 
   private readonly handlePointerMove = (event: PointerEvent) => {
     if (!this.data || !this.visible) {
@@ -1783,6 +1967,263 @@ class CanvasViz {
       }
     }
     ctx.restore();
+  }
+
+  /**
+   * Resolves the matrix cell coordinate `(colBeat.x, rowBeat.y)` for a pair of beats.
+   */
+  private getMatrixCellPoint(rowBeat: number, colBeat: number): Point | null {
+    const rowPos = this.positions[rowBeat];
+    const colPos = this.positions[colBeat];
+    if (!rowPos || !colPos) {
+      return null;
+    }
+    return { x: colPos.x, y: rowPos.y };
+  }
+
+  /**
+   * Resolves the color of a beat or edge under the active `visualEffectMode`.
+   */
+  private resolveModeBeatColor(
+    beatIndex: number,
+    alpha: number,
+    fallback: string,
+    similarityRatio = 1,
+  ): string {
+    const mode = this.visualPreferences.visualEffectMode;
+    if (mode === "1") {
+      const hue = (beatIndex / Math.max(1, this.positions.length)) * 360;
+      return `hsla(${hue}, 100%, 65%, ${alpha})`;
+    }
+    if (mode === "2") {
+      const hue = similarityRatio * 140;
+      return `hsla(${hue}, 100%, 55%, ${alpha})`;
+    }
+    if (mode === "3") {
+      return this.resolveEngineBeatColor(beatIndex, alpha, fallback);
+    }
+    if (mode === "4") {
+      return this.resolvePitchBeatColor(beatIndex, alpha, fallback);
+    }
+    return fallback;
+  }
+
+  /**
+   * Draws the Self-Similarity Matrix base layer: frame, similarity heatmap,
+   * section gridlines, diagonal beats, and off-diagonal branch dots.
+   */
+  private drawMatrixBase(width: number, height: number) {
+    if (!this.data) {
+      return;
+    }
+    const bounds = getMatrixBounds(width, height);
+    if (bounds.side <= 0) {
+      return;
+    }
+    const ctx = this.baseCtx;
+    const { left, top, side } = bounds;
+    const { visualEffectMode, useSquareBeats } = this.visualPreferences;
+    const edges = this.data.edges;
+    const count = this.positions.length;
+
+    let maxDistance = 0;
+    for (const e of edges) {
+      if (!e.deleted && e.distance > maxDistance) {
+        maxDistance = e.distance;
+      }
+    }
+
+    // 1. Heatmap cells from downsampled chroma + timbre self-similarity.
+    if (this.matrixGrid && typeof ctx.fillRect === "function") {
+      const { size, values, repBeats } = this.matrixGrid;
+      const cellSize = side / size;
+      const drawSize = Math.max(1, Math.ceil(cellSize));
+      const baseRgb = this.theme.beatHighlightRgb;
+
+      for (let r = 0; r < size; r += 1) {
+        const repBeat = repBeats[r];
+        for (let c = 0; c < size; c += 1) {
+          const intensity = values[r * size + c];
+          if (intensity <= 0.08) {
+            continue;
+          }
+          const alpha = intensity * (visualEffectMode === "2" ? 0.6 : 0.55);
+          if (visualEffectMode === "0") {
+            ctx.fillStyle = baseRgb
+              ? `rgba(${baseRgb.r}, ${baseRgb.g}, ${baseRgb.b}, ${(intensity * 0.42).toFixed(3)})`
+              : `rgba(74, 199, 255, ${(intensity * 0.42).toFixed(3)})`;
+          } else {
+            const fallback = baseRgb
+              ? `rgba(${baseRgb.r}, ${baseRgb.g}, ${baseRgb.b}, ${alpha.toFixed(3)})`
+              : `rgba(74, 199, 255, ${alpha.toFixed(3)})`;
+            ctx.fillStyle = this.resolveModeBeatColor(
+              repBeat,
+              alpha,
+              fallback,
+              intensity,
+            );
+          }
+          ctx.fillRect(
+            left + c * cellSize,
+            top + r * cellSize,
+            drawSize,
+            drawSize,
+          );
+        }
+      }
+    }
+
+    // 2. Square frame, main diagonal, and faint section boundary hairlines.
+    ctx.strokeStyle = this.theme.edgeStroke;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, top);
+    ctx.lineTo(left + side, top);
+    ctx.lineTo(left + side, top + side);
+    ctx.lineTo(left, top + side);
+    ctx.lineTo(left, top);
+    ctx.moveTo(left, top);
+    ctx.lineTo(left + side, top + side);
+
+    let prevSection = this.data.beats[0]?.parent?.parent ?? null;
+    for (let i = 1; i < count; i += 1) {
+      const sec = this.data.beats[i]?.parent?.parent ?? null;
+      if (sec !== null && sec !== prevSection) {
+        const pos = this.positions[i];
+        if (pos) {
+          ctx.moveTo(left, pos.y);
+          ctx.lineTo(left + side, pos.y);
+          ctx.moveTo(pos.x, top);
+          ctx.lineTo(pos.x, top + side);
+        }
+      }
+      prevSection = sec;
+    }
+    ctx.stroke();
+
+    // 3. Plot non-deleted branch edges at their off-diagonal cell `(to.x, from.y)`.
+    const dotRadius = Math.max(
+      1.8,
+      Math.min(3.5, (side / Math.max(40, count)) * 1.4),
+    );
+    const step =
+      edges.length > MAX_EDGES_BASE
+        ? Math.ceil(edges.length / MAX_EDGES_BASE)
+        : 1;
+    for (let i = 0; i < edges.length; i += step) {
+      const edge = edges[i];
+      if (edge.deleted) {
+        continue;
+      }
+      const cell = this.getMatrixCellPoint(edge.src.which, edge.dest.which);
+      if (!cell) {
+        continue;
+      }
+      const similarity =
+        maxDistance > 0 ? 1 - edge.distance / maxDistance : 1;
+      const fallback = this.resolveBeatHighlightColor(0.8);
+      ctx.fillStyle =
+        visualEffectMode === "0"
+          ? fallback
+          : this.resolveModeBeatColor(edge.src.which, 0.85, fallback, similarity);
+      ctx.beginPath();
+      ctx.arc(cell.x, cell.y, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 4. Highlight the pinned/default anchor edge cell.
+    const highlightedAnchorEdgeId =
+      this.data.userAnchorEdgeId ??
+      (this.anchorHighlightEnabled ? this.data.anchorEdgeId : null);
+    if (highlightedAnchorEdgeId !== null) {
+      for (const edge of edges) {
+        if (edge.deleted || edge.id !== highlightedAnchorEdgeId) {
+          continue;
+        }
+        const cell = this.getMatrixCellPoint(edge.src.which, edge.dest.which);
+        if (cell) {
+          ctx.fillStyle = ANCHOR_HIGHLIGHT_COLOR;
+          ctx.beginPath();
+          ctx.arc(cell.x, cell.y, dotRadius + 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+      }
+    }
+
+    // 5. Diagonal beat markers.
+    for (let i = 0; i < count; i += 1) {
+      const p = this.positions[i];
+      if (!p) {
+        continue;
+      }
+      let bestDistance = maxDistance;
+      if (visualEffectMode === "2") {
+        for (const e of edges) {
+          if (!e.deleted && e.src.which === i && e.distance < bestDistance) {
+            bestDistance = e.distance;
+          }
+        }
+      }
+      const similarity =
+        maxDistance > 0 ? 1 - bestDistance / maxDistance : 1;
+      ctx.fillStyle = this.resolveModeBeatColor(
+        i,
+        visualEffectMode === "2" ? 0.8 : 1,
+        this.theme.beatFill,
+        similarity,
+      );
+      if (useSquareBeats && typeof ctx.fillRect === "function") {
+        ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      } else {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, BEAT_DOT_RADIUS_PX, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  /**
+   * Draws row/column crosshair lines and highlights outgoing branch cells on
+   * the Matrix overlay for a hovered or active beat.
+   */
+  private drawMatrixCrosshair(
+    beatIndex: number,
+    lineColor: string,
+    cellColor: string,
+  ) {
+    const pos = this.positions[beatIndex];
+    const beat = this.data?.beats[beatIndex];
+    if (!pos || !beat) {
+      return;
+    }
+    const bounds = getMatrixBounds(this.size.width, this.size.height);
+    if (bounds.side <= 0) {
+      return;
+    }
+    const ctx = this.overlayCtx;
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pos.x, bounds.top);
+    ctx.lineTo(pos.x, bounds.top + bounds.side);
+    ctx.moveTo(bounds.left, pos.y);
+    ctx.lineTo(bounds.left + bounds.side, pos.y);
+    ctx.stroke();
+
+    ctx.fillStyle = cellColor;
+    for (const edge of beat.neighbors) {
+      if (edge.deleted) {
+        continue;
+      }
+      const cell = this.getMatrixCellPoint(beatIndex, edge.dest.which);
+      if (!cell) {
+        continue;
+      }
+      ctx.beginPath();
+      ctx.arc(cell.x, cell.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
@@ -2104,6 +2545,16 @@ function getDefaultVisualizationDefinitions(): VisualizationDefinition[] {
     { positioner: createWavePositioner() },
     { positioner: createSpiralPositioner() },
     { positioner: createRandomPositioner() },
+    { positioner: createRingsPositioner() },
+    { positioner: createRosePositioner() },
+    {
+      positioner: createMatrixPositioner(),
+      options: {
+        forceBendEdges: true,
+        edgeControlPointResolver: createMatrixControlPointResolver(),
+        matrixMode: true,
+      },
+    },
   ];
 }
 

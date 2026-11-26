@@ -773,6 +773,39 @@ def update_job_track_metadata(
         conn.commit()
 
 
+def rename_job_track(
+    db_path: Path,
+    job_id: str,
+    track_title: str,
+    track_artist: Optional[str] = None,
+) -> Optional[Job]:
+    """Update a job source's title and optional artist without changing updated_at."""
+    with _connect(db_path) as conn:
+        conn.execute(BEGIN_IMMEDIATE)
+        row = conn.execute(SELECT_JOB_SOURCE_REF_SQL, (job_id,)).fetchone()
+        if not row:
+            return None
+        source_ref = row[0]
+        # Leave sources.updated_at untouched because it tracks last listen time
+        # for storage-cleanup eligibility and recent/trending queries.
+        if track_artist is None:
+            conn.execute(
+                "UPDATE sources SET track_title = ? WHERE id = ?",
+                (track_title, source_ref),
+            )
+        else:
+            conn.execute(
+                "UPDATE sources SET track_title = ?, track_artist = ? WHERE id = ?",
+                (track_title, track_artist, source_ref),
+            )
+        job_row = conn.execute(
+            f"SELECT {JOB_SELECT_COLUMNS} FROM jobs j JOIN sources s ON s.id = j.source_ref WHERE j.id = ?",
+            (job_id,),
+        ).fetchone()
+        conn.commit()
+    return _job_from_row(job_row)
+
+
 def _exclude_top_source_refs(conn: sqlite3.Connection, exclude_top_n: int) -> list[str]:
     rows = conn.execute(
         """

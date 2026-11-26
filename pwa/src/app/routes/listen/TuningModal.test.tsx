@@ -179,4 +179,33 @@ describe("TuningModal", () => {
     fireEvent.click(resetBtn!);
     expect(onReset).toHaveBeenCalledTimes(1);
   });
+
+  it("renders Pitch Based coloring option and emits visualEffectMode '4'", () => {
+    const visuals = createVisuals();
+    const { container } = render(
+      <TuningModal
+        open={true}
+        playMode="jukebox"
+        tuneForm={baseTuneForm}
+        onTuneFormChange={() => {}}
+        extrasForm={baseExtrasForm}
+        onExtrasFormChange={() => {}}
+        multi={createMulti()}
+        visuals={visuals}
+        detectedBeatsPerBar={4}
+        onClose={() => {}}
+        showReset={false}
+        onReset={() => {}}
+      />,
+    );
+
+    const pitchRadio = container.querySelector<HTMLInputElement>(
+      "#use-pitch-colors",
+    );
+    expect(pitchRadio).not.toBeNull();
+    fireEvent.click(pitchRadio!);
+    expect(visuals.onVisualPreferencesChange).toHaveBeenCalledWith({
+      visualEffectMode: "4",
+    });
+  });
 });

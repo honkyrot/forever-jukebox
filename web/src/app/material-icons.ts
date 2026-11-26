@@ -12,6 +12,7 @@ export const MATERIAL_SYMBOL_ICON_NAMES = [
   "delete",
   "download",
   "drag_handle",
+  "edit",
   "error",
   "flag",
   "fullscreen",

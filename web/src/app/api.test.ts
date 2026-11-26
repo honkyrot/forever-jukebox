@@ -4,6 +4,7 @@ import {
   deleteJob,
   dismissTrackReport,
   fetchReportedTracks,
+  renameTrack,
   reportTrack,
   fetchAnalysis,
   searchSpotify,
@@ -457,6 +458,34 @@ describe("api", () => {
     expect(fetch).toHaveBeenLastCalledWith("/api/reports/job1", {
       method: "DELETE",
       headers: { "X-Admin-Key": "secret" },
+    });
+  });
+
+  it("renames a track with the admin key and throws on failure", async () => {
+    const updated = { id: "job1", title: "New Title", artist: "New Artist" };
+    (fetch as any).mockResolvedValueOnce(createResponse(200, updated));
+
+    await expect(
+      renameTrack("job1", { title: "New Title", artist: "New Artist" }, "secret"),
+    ).resolves.toEqual(updated);
+
+    expect(fetch).toHaveBeenCalledWith("/api/jobs/job1", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Key": "secret",
+      },
+      body: JSON.stringify({ title: "New Title", artist: "New Artist" }),
+    });
+
+    (fetch as any).mockResolvedValueOnce(
+      createResponse(403, { detail: "Invalid admin key" }, false),
+    );
+    await expect(
+      renameTrack("job1", { title: "New Title", artist: "" }, "wrong"),
+    ).rejects.toMatchObject({
+      message: "Invalid admin key",
+      status: 403,
     });
   });
 

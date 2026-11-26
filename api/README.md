@@ -239,6 +239,15 @@ Fetch favorites by sync code:
 curl "/api/favorites/sync/bison-laser-sunset"
 ```
 
+Rename a track (admin):
+
+```bash
+curl -X PATCH "/api/jobs/<id>" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -d '{"title":"Localized Title","artist":"Artist"}'
+```
+
 Delete a job and its stored files:
 
 ```bash

@@ -141,6 +141,7 @@ const VISUAL_COLORING_OPTIONS: Array<{
   { id: "use-rgb-gradient", value: "1", label: "Rainbow Gradient" },
   { id: "use-similarity-colors", value: "2", label: "Similarity Based" },
   { id: "use-engine-colors", value: "3", label: "Engine Based" },
+  { id: "use-pitch-colors", value: "4", label: "Pitch Based" },
 ];
 
 const MIN_JUMP_DISTANCE_OPTIONS = [0, 5, 10, 20, 30] as const;

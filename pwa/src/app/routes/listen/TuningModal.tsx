@@ -53,12 +53,14 @@ const VISUAL_COLORING_OPTIONS: Array<{
     | "tuning.visualColorDefault"
     | "tuning.visualColorRainbow"
     | "tuning.visualColorSimilarity"
-    | "tuning.visualColorEngine";
+    | "tuning.visualColorEngine"
+    | "tuning.visualColorPitch";
 }> = [
   { id: "visual-effect-default", value: "0", labelKey: "tuning.visualColorDefault" },
   { id: "use-rgb-gradient", value: "1", labelKey: "tuning.visualColorRainbow" },
   { id: "use-similarity-colors", value: "2", labelKey: "tuning.visualColorSimilarity" },
   { id: "use-engine-colors", value: "3", labelKey: "tuning.visualColorEngine" },
+  { id: "use-pitch-colors", value: "4", labelKey: "tuning.visualColorPitch" },
 ];
 
 function RangeRow({

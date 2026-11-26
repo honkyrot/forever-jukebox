@@ -1,6 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { JukeboxViz } from "./JukeboxViz";
-import { MAX_EDGES_BASE } from "../constants/visualization";
+import { JukeboxViz, readStoredVisualPreferences } from "./JukeboxViz";
+import {
+  MAX_EDGES_BASE,
+  VISUALIZATION_LABELS,
+  visualizationSeparatesPairedEdges,
+} from "../constants/visualization";
+import {
+  computeMatrixSimilarityGrid,
+  createMatrixPositioner,
+  createRingsPositioner,
+  createRosePositioner,
+  getMatrixBounds,
+} from "./extraLayouts";
+import { computeBeatPitchColor } from "../engine/beatColors";
 
 function createMockCtx() {
   return {
@@ -76,7 +88,7 @@ describe("JukeboxViz", () => {
   it("tracks available visualization layouts but mounts one active viz", () => {
     const container = createContainer();
     const viz = new JukeboxViz(container);
-    expect(viz.getCount()).toBe(8);
+    expect(viz.getCount()).toBe(11);
     expect(canvases.length).toBe(2);
   });
 
@@ -1279,6 +1291,302 @@ describe("JukeboxViz", () => {
       expect(stopColors[0]).toMatch(/^hsla\(4,/);
       expect(stopColors[15]).toMatch(/^hsla\(50,/);
       expect(stopColors[30]).toMatch(/^hsla\(28,/);
+    });
+  });
+
+  describe("pitch-based coloring", () => {
+    const PITCH_MODE_PREFS = {
+      visualEffectMode: "4" as const,
+      useSquareBeats: false,
+      useAltSeekShape: false,
+    };
+
+    function createColorMockCtx() {
+      const ctx = canvases[0].getContext("2d") as unknown as {
+        stroke: ReturnType<typeof vi.fn>;
+        fill: ReturnType<typeof vi.fn>;
+        strokeStyle: string;
+        fillStyle: string;
+      };
+      const strokes: string[] = [];
+      const fills: string[] = [];
+      ctx.stroke.mockImplementation(() => {
+        strokes.push(ctx.strokeStyle);
+      });
+      ctx.fill.mockImplementation(() => {
+        fills.push(ctx.fillStyle);
+      });
+      return { strokes, fills };
+    }
+
+    it("reads stored visualEffectMode '4' from localStorage", () => {
+      const prevStorage = (globalThis as any).localStorage;
+      (globalThis as any).localStorage = {
+        getItem: (key: string) => (key === "visualEffectMode" ? "4" : null),
+      };
+      try {
+        expect(readStoredVisualPreferences().visualEffectMode).toBe("4");
+      } finally {
+        (globalThis as any).localStorage = prevStorage;
+      }
+    });
+
+    it("uses pitch colors on edges, beat dots, and cursor in non-Classic layouts", () => {
+      const viz = new JukeboxViz(createContainer());
+      viz.setVisualPreferences(PITCH_MODE_PREFS);
+      const { strokes, fills } = createColorMockCtx();
+
+      const beats = [
+        {
+          which: 0,
+          start: 0,
+          duration: 1,
+          neighbors: [],
+          overlappingSegments: [
+            { pitches: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], duration: 1 },
+          ],
+        },
+        {
+          which: 1,
+          start: 1,
+          duration: 1,
+          neighbors: [],
+          overlappingSegments: [
+            { pitches: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0], duration: 1 },
+          ],
+        },
+      ];
+      const expected0 = computeBeatPitchColor(beats[0] as any)!;
+      const expected1 = computeBeatPitchColor(beats[1] as any)!;
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [0, 0],
+        beatColors: ["#112233", "#445566"],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      expect(strokes[0]).toMatch(/^rgba\(/);
+      expect(fills).toEqual([expected0, expected1]);
+
+      fills.length = 0;
+      viz.update(1, false, null);
+      expect(fills).toEqual([expected1]);
+    });
+
+    it("recolors Classic beat tiles to pitch colors on preference change and reverts back", () => {
+      const viz = new JukeboxViz(createContainer(), { initialIndex: 1 });
+      const { strokes } = createColorMockCtx();
+
+      const beats = [
+        {
+          which: 0,
+          start: 0,
+          duration: 1,
+          neighbors: [],
+          overlappingSegments: [
+            { pitches: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], duration: 1 },
+          ],
+        },
+        {
+          which: 1,
+          start: 1,
+          duration: 1,
+          neighbors: [],
+          overlappingSegments: [
+            { pitches: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0], duration: 1 },
+          ],
+        },
+      ];
+      const expected0 = computeBeatPitchColor(beats[0] as any)!;
+      const expected1 = computeBeatPitchColor(beats[1] as any)!;
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [1, 0],
+        beatColors: ["#112233", "#445566"],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      strokes.length = 0;
+      viz.setVisualPreferences(PITCH_MODE_PREFS);
+      expect(strokes.slice(1, 3)).toEqual([expected0, expected1]);
+
+      // Classic cursor marker stays in theme highlight for contrast.
+      strokes.length = 0;
+      viz.update(0, false, null);
+      expect(strokes).toEqual(["#ffd46a"]);
+
+      // Switching back to Default restores timbre beatColors on tiles.
+      strokes.length = 0;
+      viz.setVisualPreferences({
+        visualEffectMode: "0",
+        useSquareBeats: false,
+        useAltSeekShape: false,
+      });
+      expect(strokes.slice(1, 3)).toEqual(["#112233", "#445566"]);
+    });
+
+    it("falls back to theme colors when pitch data is missing", () => {
+      const viz = new JukeboxViz(createContainer());
+      viz.setVisualPreferences(PITCH_MODE_PREFS);
+      const { strokes, fills } = createColorMockCtx();
+
+      const beats = [0, 1].map((which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [],
+        overlappingSegments: [],
+      }));
+      const edge = { src: beats[0], dest: beats[1], deleted: false, id: 1 };
+
+      viz.setData({
+        beats,
+        beatVisits: [0, 0],
+        beatColors: [],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      expect(strokes).toEqual(["rgba(74, 199, 255, 0.12)"]);
+      expect(fills).toEqual([
+        "rgba(255, 215, 130, 0.55)",
+        "rgba(255, 215, 130, 0.55)",
+      ]);
+    });
+  });
+
+  describe("extra visualization layouts", () => {
+    it("produces finite in-bounds positions for Rings, Rose, and Matrix across sizes", () => {
+      const positioners = [
+        createRingsPositioner(),
+        createRosePositioner(),
+        createMatrixPositioner(),
+      ];
+      const sec0 = { which: 0 };
+      const sec1 = { which: 1 };
+      const makeBeats = (n: number) =>
+        Array.from({ length: n }, (_, which) => ({
+          which,
+          start: which,
+          duration: 1,
+          neighbors: [],
+          parent: { parent: which < n / 2 ? sec0 : sec1 },
+        }));
+
+      for (const pos of positioners) {
+        for (const count of [0, 1, 2, 16]) {
+          const beats = makeBeats(count);
+          const edges =
+            count >= 4
+              ? [{ id: 1, src: beats[0], dest: beats[count - 1], distance: 5, deleted: false }]
+              : [];
+          const pts = pos({ beats: beats as any, edges: edges as any }, 300, 300);
+          expect(pts).toHaveLength(count);
+          for (const p of pts) {
+            expect(Number.isFinite(p.x)).toBe(true);
+            expect(Number.isFinite(p.y)).toBe(true);
+            expect(p.x).toBeGreaterThanOrEqual(0);
+            expect(p.x).toBeLessThanOrEqual(300);
+            expect(p.y).toBeGreaterThanOrEqual(0);
+            expect(p.y).toBeLessThanOrEqual(300);
+          }
+        }
+      }
+    });
+
+    it("supports Matrix similarity grid, crosshair, L-jump, edge cell click, and square seek", () => {
+      const matrixIndex = VISUALIZATION_LABELS.indexOf("Matrix");
+      expect(matrixIndex).toBe(10);
+      expect(visualizationSeparatesPairedEdges(matrixIndex)).toBe(true);
+
+      const viz = new JukeboxViz(createContainer(), { initialIndex: matrixIndex });
+      const ctx = canvases[0].getContext("2d") as unknown as {
+        fillRect: ReturnType<typeof vi.fn>;
+        stroke: ReturnType<typeof vi.fn>;
+        moveTo: ReturnType<typeof vi.fn>;
+        lineTo: ReturnType<typeof vi.fn>;
+        arc: ReturnType<typeof vi.fn>;
+      };
+      ctx.fillRect = vi.fn();
+      const beats = Array.from({ length: 4 }, (_, which) => ({
+        which,
+        start: which,
+        duration: 1,
+        neighbors: [] as any[],
+        overlappingSegments: [
+          {
+            pitches:
+              which % 2 === 0
+                ? [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                : [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            timbre: [0, which * 10, 0, 0],
+            duration: 1,
+          },
+        ],
+      }));
+      const edge = { id: 10, src: beats[0], dest: beats[3], distance: 4, deleted: false };
+      beats[0].neighbors = [edge];
+
+      const grid = computeMatrixSimilarityGrid(beats as any);
+      expect(grid).not.toBeNull();
+      expect(grid!.size).toBe(4);
+      // Beat 0 and beat 2 share the same chroma vector so their similarity > beat 0 vs beat 1.
+      expect(grid!.values[0 * 4 + 2]).toBeGreaterThan(grid!.values[0 * 4 + 1]);
+
+      const onSelect = vi.fn();
+      const onEdgeSelect = vi.fn();
+      viz.setOnSelect(onSelect);
+      viz.setOnEdgeSelect(onEdgeSelect);
+
+      viz.setData({
+        beats,
+        beatVisits: [0, 0, 0, 0],
+        beatColors: ["#111", "#222", "#333", "#444"],
+        edges: [edge],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+      } as any);
+
+      expect(ctx.fillRect).toHaveBeenCalled();
+
+      // Update with a jump from beat 0 to beat 3; Matrix draws crosshair + L-path.
+      ctx.moveTo.mockClear();
+      ctx.lineTo.mockClear();
+      viz.update(3, true, 0);
+      const bounds = getMatrixBounds(300, 300);
+      const fromX = bounds.left;
+      const fromY = bounds.top;
+      const toX = bounds.left + bounds.side;
+      const toY = bounds.top + bounds.side;
+      expect(ctx.moveTo).toHaveBeenCalledWith(fromX, fromY);
+      expect(ctx.lineTo).toHaveBeenCalledWith(toX, fromY);
+      expect(ctx.lineTo).toHaveBeenCalledWith(toX, toY);
+
+      // Clicking the off-diagonal cell `(toX, fromY)` selects the branch edge rather than seeking.
+      const inner = (viz as any).activeViz;
+      inner.handleCanvasClick({ clientX: toX, clientY: fromY } as MouseEvent);
+      expect(onEdgeSelect).toHaveBeenCalledWith(edge);
+      expect(onSelect).not.toHaveBeenCalled();
+
+      // Clicking elsewhere inside the matrix square seeks to the corresponding beat.
+      onEdgeSelect.mockClear();
+      const midX = bounds.left + bounds.side / 3;
+      const midY = bounds.top + bounds.side * 0.75;
+      inner.handleCanvasClick({ clientX: midX, clientY: midY } as MouseEvent);
+      expect(onSelect).toHaveBeenCalledWith(1);
     });
   });
 });

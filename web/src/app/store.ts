@@ -163,6 +163,7 @@ type ShellSlice = {
   feedbackModalOpen: boolean;
   playlistModalOpen: boolean;
   deleteConfirmOpen: boolean;
+  renameModalOpen: boolean;
   trackInfo: TrackInfoState;
   favoriteToggleBusy: boolean;
   volumePct: number;
@@ -274,6 +275,7 @@ const createUiSlice: Slice<
     | "feedbackModalOpen"
     | "playlistModalOpen"
     | "deleteConfirmOpen"
+    | "renameModalOpen"
     | "trackInfo"
     | "favoriteToggleBusy"
     | "volumePct"
@@ -347,6 +349,7 @@ const createUiSlice: Slice<
     feedbackModalOpen: false,
     playlistModalOpen: false,
     deleteConfirmOpen: false,
+    renameModalOpen: false,
     trackInfo: {
       durationText: "00:00:00",
       totalBeats: 0,

@@ -228,6 +228,7 @@
     "visualColorRainbow": "Degradado arcoíris",
     "visualColorSimilarity": "Basado en similitud",
     "visualColorEngine": "Basado en el motor",
+    "visualColorPitch": "Basado en tono",
     "bpmBarTimeSignatureLabel": "Compás de la barra BPM",
     "bpmBarTimeSignatureAuto": "Automático (seguir compás activo)",
     "bpmBarTimeSignatureOff": "Desactivado (barra sólida)",

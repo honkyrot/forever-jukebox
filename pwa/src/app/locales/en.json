@@ -228,6 +228,7 @@
     "visualColorRainbow": "Rainbow Gradient",
     "visualColorSimilarity": "Similarity Based",
     "visualColorEngine": "Engine Based",
+    "visualColorPitch": "Pitch Based",
     "bpmBarTimeSignatureLabel": "BPM bar time signature",
     "bpmBarTimeSignatureAuto": "Auto (follow active time signature)",
     "bpmBarTimeSignatureOff": "Off (solid bar)",

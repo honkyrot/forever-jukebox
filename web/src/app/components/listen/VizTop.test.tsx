@@ -3,6 +3,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useAppStore } from "../../store";
 import { VizTop } from "./VizTop";
+import { VISUALIZATION_LABELS } from "../../constants";
 
 const h = vi.hoisted(() => ({
   setActiveVisualization: vi.fn(),
@@ -76,11 +77,17 @@ describe("VizTop", () => {
   });
 
   it("falls back to the index for visualizations beyond the label list", async () => {
-    h.getCount.mockReturnValue(9);
+    const beyondIndex = VISUALIZATION_LABELS.length;
+    h.getCount.mockReturnValue(beyondIndex + 1);
     render(<VizTop />);
-    await userEvent.selectOptions(document.getElementById("viz-select")!, "8");
+    await userEvent.selectOptions(
+      document.getElementById("viz-select")!,
+      String(beyondIndex),
+    );
 
-    expect(h.trackEvent).toHaveBeenCalledWith("select_viz", { viz: "8" });
+    expect(h.trackEvent).toHaveBeenCalledWith("select_viz", {
+      viz: String(beyondIndex),
+    });
   });
 
   it("does not report while the selector is disabled", async () => {

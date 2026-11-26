@@ -1,4 +1,5 @@
 export * from "./analysis";
+export * from "./beatColors";
 export * from "./coverSync";
 export * from "./edges";
 export * from "./graph";

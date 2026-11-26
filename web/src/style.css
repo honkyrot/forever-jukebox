@@ -1116,6 +1116,26 @@ button.is-loading::after {
   gap: 8px;
 }
 
+.rename-track-panel {
+  width: min(420px, 90vw);
+}
+
+.rename-track-panel .modal-footer {
+  gap: 8px;
+}
+
+.rename-track-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rename-track-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .report-reasons {
   display: flex;
   flex-direction: column;
@@ -1330,34 +1350,15 @@ button.is-loading::after {
 
 .top-list {
   margin: 0;
-  padding-left: 20px;
-  display: grid;
-  gap: 6px;
+  padding-left: 0;
+  display: block;
   font-size: 14px;
   color: var(--text);
 }
 
-.top-list > li,
 .search-item {
   border-radius: 8px;
   transition: background-color 0.16s ease;
-}
-
-.top-list > li {
-  padding: 2px 8px;
-}
-
-.top-list-item {
-  position: relative;
-  min-height: 20px;
-  padding-right: 28px;
-}
-
-.top-list-item .playlist-add-button {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
 }
 
 .reported-meta {
@@ -1367,10 +1368,6 @@ button.is-loading::after {
 }
 
 .reported-dismiss {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
   width: 22px;
   height: 22px;
   padding: 0;
@@ -1394,8 +1391,6 @@ button.is-loading::after {
   line-height: 1;
 }
 
-.top-list > li:hover,
-.top-list > li:focus-within,
 .search-item:hover,
 .search-item:focus-within {
   background: color-mix(in srgb, var(--surface-control-hover) 82%, transparent);
@@ -1423,7 +1418,8 @@ button.is-loading::after {
   width: 100%;
 }
 
-.favorites-table {
+.favorites-table,
+.tracks-table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -1431,31 +1427,42 @@ button.is-loading::after {
 }
 
 .favorites-table th,
-.favorites-table td {
+.favorites-table td,
+.tracks-table th,
+.tracks-table td {
   padding: 4px 8px;
   text-align: left;
   vertical-align: middle;
 }
 
-.favorites-table th {
+.favorites-table th,
+.tracks-table th {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   border-bottom: 1px solid var(--border-control);
 }
 
-.favorites-table tbody tr {
+.favorites-table tbody tr,
+.tracks-table tbody tr {
   border-radius: 8px;
   cursor: pointer;
   transition: background-color 0.16s ease;
 }
 
+.tracks-table tbody tr.top-list-item-static {
+  cursor: default;
+}
+
 .favorites-table tbody tr:hover,
-.favorites-table tbody tr:focus-within {
+.favorites-table tbody tr:focus-within,
+.tracks-table tbody tr:hover,
+.tracks-table tbody tr:focus-within {
   background: color-mix(in srgb, var(--surface-control-hover) 82%, transparent);
 }
 
-.favorites-sort-button {
+.favorites-sort-button,
+.track-sort-button {
   border: 0;
   background: transparent;
   color: inherit;
@@ -1464,16 +1471,83 @@ button.is-loading::after {
   font-weight: 700;
   padding: 0;
   text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
 }
 
-.favorites-sort-button:hover {
+.favorites-sort-button:hover,
+.track-sort-button:hover {
   color: var(--accent);
 }
 
-.favorites-sort-icon {
+.favorites-sort-icon,
+.track-sort-icon {
   font-size: 14px;
   line-height: 1;
   vertical-align: middle;
+}
+
+.tracks-table .track-rank-heading,
+.tracks-table .track-rank-cell {
+  width: 46px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tracks-table .track-title-cell {
+  overflow-wrap: break-word;
+}
+
+.tracks-table .track-artist-heading,
+.tracks-table .track-artist-cell {
+  width: 36%;
+  overflow-wrap: break-word;
+}
+
+.tracks-table .track-artist-cell {
+  color: var(--muted);
+}
+
+.tracks-table-with-plays .track-artist-heading,
+.tracks-table-with-plays .track-artist-cell {
+  width: 32%;
+}
+
+.tracks-table .track-plays-heading,
+.tracks-table .track-plays-cell {
+  width: 84px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tracks-table .track-plays-cell {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tracks-table-reported .track-artist-heading,
+.tracks-table-reported .track-artist-cell {
+  width: 24%;
+}
+
+.tracks-table .track-report-heading,
+.tracks-table .track-report-cell {
+  width: 28%;
+  overflow-wrap: break-word;
+}
+
+.tracks-table .track-report-cell .reported-meta {
+  margin-left: 0;
+  font-size: 12px;
+}
+
+.tracks-table .track-actions-heading,
+.tracks-table .track-actions-cell {
+  width: 40px;
+  text-align: right;
 }
 
 .favorites-table .favorite-title-cell {
@@ -1557,8 +1631,8 @@ body.playlist-add-enabled .playlist-add-button {
   display: inline-flex;
 }
 
-body.playlist-add-enabled .top-list > li:hover .playlist-add-button,
-body.playlist-add-enabled .top-list > li:focus-within .playlist-add-button,
+body.playlist-add-enabled .top-list-item:hover .playlist-add-button,
+body.playlist-add-enabled .top-list-item:focus-within .playlist-add-button,
 body.playlist-add-enabled .search-item:hover .playlist-add-button,
 body.playlist-add-enabled .search-item:focus-within .playlist-add-button,
 body.playlist-add-enabled .favorite-row:hover .playlist-add-button,
@@ -1693,8 +1767,29 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
 }
 
 .delete-toggle.hidden,
+.rename-toggle.hidden,
 .report-toggle.hidden {
   display: none;
+}
+
+.rename-toggle {
+  background: transparent;
+  border: none;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rename-toggle .rename-icon {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 300,
+    "GRAD" 0,
+    "opsz" 30;
+  color: var(--text);
+  font-size: 30px;
+  line-height: 1;
 }
 
 .report-toggle {
@@ -1789,6 +1884,7 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
 .playlist-control,
 .favorites-sync-button,
 .delete-toggle,
+.rename-toggle,
 .report-toggle,
 .volume-button,
 .fullscreen-toggle,
@@ -3363,5 +3459,20 @@ body.theme-light .viz-bpm.is-bpm-changed {
   #viz-stats .viz-meta {
     order: 4;
     flex: 0 0 100%;
+  }
+
+  .tracks-table th,
+  .tracks-table td {
+    padding: 4px;
+  }
+
+  .tracks-table .track-rank-heading,
+  .tracks-table .track-rank-cell {
+    width: 38px;
+  }
+
+  .tracks-table .track-plays-heading,
+  .tracks-table .track-plays-cell {
+    width: 68px;
   }
 }

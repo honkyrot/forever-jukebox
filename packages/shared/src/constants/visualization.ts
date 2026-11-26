@@ -19,6 +19,9 @@ export const VISUALIZATION_LABELS = [
   "Wave",
   "Spiral",
   "Random",
+  "Rings",
+  "Rose",
+  "Matrix",
 ] as const;
 
 export const DEFAULT_VISUALIZATION_INDEX = Math.max(
@@ -32,7 +35,10 @@ type VisualizationLabel = (typeof VISUALIZATION_LABELS)[number];
 // apart, so a forward selection there is deliberate. The label type makes a
 // rename in VISUALIZATION_LABELS a compile error here instead of a silently
 // lost capability.
-const SEPARATES_PAIRED_EDGES: ReadonlySet<VisualizationLabel> = new Set(["Arc"]);
+const SEPARATES_PAIRED_EDGES: ReadonlySet<VisualizationLabel> = new Set([
+  "Arc",
+  "Matrix",
+]);
 
 export function visualizationSeparatesPairedEdges(index: number): boolean {
   const label = VISUALIZATION_LABELS[index];

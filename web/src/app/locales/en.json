@@ -178,6 +178,15 @@
     "trackQuestion": "Delete track?",
     "withinWindow": "Delete within 30 minutes of creation"
   },
+  "rename": {
+    "track": "Rename track",
+    "title": "Rename track",
+    "titleLabel": "Title",
+    "artistLabel": "Artist",
+    "save": "Save",
+    "renamed": "Track renamed",
+    "failed": "Unable to rename track"
+  },
   "report": {
     "title": "Report track",
     "button": "Report",
@@ -444,7 +453,11 @@
     "reported": "Reported",
     "loadingReported": "Loading reported tracks...",
     "emptyReported": "No reported tracks.",
-    "reportedError": "Reported tracks"
+    "reportedError": "Reported tracks",
+    "defaultOrder": "Default order",
+    "playsColumn": "Plays",
+    "reportColumn": "Report",
+    "actionsColumn": "Actions"
   },
   "faq": {
     "whatsNew": "What's New",

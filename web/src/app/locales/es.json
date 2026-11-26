@@ -178,6 +178,15 @@
     "trackQuestion": "¿Eliminar pista?",
     "withinWindow": "Eliminar dentro de los 30 minutos posteriores a la creación"
   },
+  "rename": {
+    "track": "Renombrar pista",
+    "title": "Renombrar pista",
+    "titleLabel": "Título",
+    "artistLabel": "Artista",
+    "save": "Guardar",
+    "renamed": "Pista renombrada",
+    "failed": "No se pudo renombrar la pista"
+  },
   "report": {
     "title": "Reportar pista",
     "button": "Reportar",
@@ -444,7 +453,11 @@
     "reported": "Reportadas",
     "loadingReported": "Cargando pistas reportadas...",
     "emptyReported": "No hay pistas reportadas.",
-    "reportedError": "Pistas reportadas"
+    "reportedError": "Pistas reportadas",
+    "defaultOrder": "Orden predeterminado",
+    "playsColumn": "Reproducciones",
+    "reportColumn": "Reporte",
+    "actionsColumn": "Acciones"
   },
   "faq": {
     "whatsNew": "Novedades",

@@ -228,6 +228,7 @@
     "visualColorRainbow": "Regenbogen-Verlauf",
     "visualColorSimilarity": "Nach Ähnlichkeit",
     "visualColorEngine": "Engine-basiert",
+    "visualColorPitch": "Tonhöhen-basiert",
     "bpmBarTimeSignatureLabel": "Taktart der BPM-Leiste",
     "bpmBarTimeSignatureAuto": "Auto (aktiver Taktart folgen)",
     "bpmBarTimeSignatureOff": "Aus (durchgehende Leiste)",

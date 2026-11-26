@@ -96,6 +96,17 @@ class PlayCountUpdate(BaseModel):
     play_count: int
 
 
+class TrackMetadataUpdate(BaseModel):
+    title: str
+    artist: str | None = None
+
+
+class TrackMetadataResponse(BaseModel):
+    id: str
+    title: str
+    artist: str
+
+
 # Vetted windows only: a free-form value here would be one typo from a near-total sweep.
 CleanupWindowDays = Literal[180, 365, 730]
 

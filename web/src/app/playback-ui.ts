@@ -527,7 +527,10 @@ export function handleKeydown(event: KeyboardEvent): void {
     if (useAppStore.getState().activeTabId !== "play") {
       return;
     }
-    if (useAppStore.getState().deleteConfirmOpen) {
+    if (
+      useAppStore.getState().deleteConfirmOpen ||
+      useAppStore.getState().renameModalOpen
+    ) {
       return;
     }
     if (isEditableTarget(event.target)) {

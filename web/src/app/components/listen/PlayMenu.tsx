@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { isAdminMode } from "../../admin";
 import { reportTrack, type TrackReportReason } from "../../api";
 import { isFavoriteTuningDrifted } from "../../favorite-drift";
@@ -13,6 +13,11 @@ import {
   performDelete,
   type PendingDelete,
 } from "../../delete-job";
+import {
+  getPendingRename,
+  performRename,
+  type PendingRename,
+} from "../../rename-job";
 import { toggleFavorite } from "../../favorites-actions";
 import { copyShortUrl } from "../../playback-ui";
 import { showToast } from "../../ui";
@@ -100,6 +105,132 @@ function DeleteConfirmModal({
           {t("common.delete")}
         </button>
       </div>
+    </Modal>
+  );
+}
+
+/**
+ * Admin modal for overriding a track's stored title and artist.
+ */
+function RenameTrackModal({
+  pending,
+  onClosed,
+}: {
+  pending: PendingRename | null;
+  onClosed: () => void;
+}) {
+  const { t } = useTranslation();
+  const open = useAppStore((s) => s.renameModalOpen);
+  const [title, setTitle] = useState("");
+  const [artist, setArtist] = useState("");
+  const [busy, setBusy] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTitle(pending?.title ?? "");
+      setArtist(pending?.artist ?? "");
+      titleInputRef.current?.focus();
+    }
+  }, [open, pending]);
+
+  const close = () => {
+    if (busy) {
+      return;
+    }
+    useAppStore.setState({ renameModalOpen: false });
+    onClosed();
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmedTitle = title.trim();
+    if (busy || !pending || !trimmedTitle) {
+      return;
+    }
+    // Re-read live job state to bail out if another track loaded underneath the modal.
+    const current = getPendingRename();
+    if (current?.jobId !== pending.jobId) {
+      useAppStore.setState({ renameModalOpen: false });
+      onClosed();
+      return;
+    }
+    setBusy(true);
+    let ok = false;
+    try {
+      ok = await performRename(current, {
+        title: trimmedTitle,
+        artist: artist.trim(),
+      });
+    } finally {
+      setBusy(false);
+    }
+    if (ok) {
+      useAppStore.setState({ renameModalOpen: false });
+      onClosed();
+    }
+  };
+
+  return (
+    <Modal
+      id="rename-track-modal"
+      open={open}
+      onClose={close}
+      panelClassName="rename-track-panel"
+    >
+      <ModalHeader
+        title={t("rename.title")}
+        closeId="rename-track-close"
+        onClose={close}
+      />
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        <div className="modal-body rename-track-fields">
+          <label className="rename-track-field">
+            <span>{t("rename.titleLabel")}</span>
+            <input
+              id="rename-track-title"
+              ref={titleInputRef}
+              className="search-input"
+              type="text"
+              autoComplete="off"
+              value={title}
+              disabled={busy}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+          <label className="rename-track-field">
+            <span>{t("rename.artistLabel")}</span>
+            <input
+              id="rename-track-artist"
+              className="search-input"
+              type="text"
+              autoComplete="off"
+              value={artist}
+              disabled={busy}
+              onChange={(event) => setArtist(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="modal-footer">
+          <button
+            id="rename-track-cancel"
+            type="button"
+            disabled={busy}
+            onClick={close}
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            id="rename-track-submit"
+            className={busy ? "is-loading" : undefined}
+            type="submit"
+            disabled={busy || !title.trim()}
+            aria-busy={busy}
+          >
+            {t("rename.save")}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
@@ -222,8 +353,12 @@ export function PlayMenu() {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(
     null,
   );
+  const [pendingRename, setPendingRename] = useState<PendingRename | null>(
+    null,
+  );
   const [reportJobId, setReportJobId] = useState<string | null>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
+  const renameButtonRef = useRef<HTMLButtonElement | null>(null);
   const reportButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleRef = useRef<HTMLDivElement | null>(null);
 
@@ -288,6 +423,15 @@ export function PlayMenu() {
     useAppStore.setState({ deleteConfirmOpen: true });
   };
 
+  const handleRenameClick = () => {
+    const pending = getPendingRename();
+    if (!pending) {
+      return;
+    }
+    setPendingRename(pending);
+    useAppStore.setState({ renameModalOpen: true });
+  };
+
   return (
     <>
       <div
@@ -308,6 +452,24 @@ export function PlayMenu() {
           </span>
         </div>
         <div className="menu-right">
+          <button
+            type="button"
+            id="rename-job"
+            ref={renameButtonRef}
+            className={
+              adminMode && lastJobId ? "rename-toggle" : "rename-toggle hidden"
+            }
+            aria-label={t("rename.track")}
+            title={t("rename.track")}
+            onClick={handleRenameClick}
+          >
+            <span
+              className="material-symbols-outlined rename-icon"
+              aria-hidden="true"
+            >
+              edit
+            </span>
+          </button>
           <button
             type="button"
             id="delete-job"
@@ -424,6 +586,13 @@ export function PlayMenu() {
         onClosed={() => {
           setPendingDelete(null);
           deleteButtonRef.current?.focus();
+        }}
+      />
+      <RenameTrackModal
+        pending={pendingRename}
+        onClosed={() => {
+          setPendingRename(null);
+          renameButtonRef.current?.focus();
         }}
       />
       <ReportTrackModal

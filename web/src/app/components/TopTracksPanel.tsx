@@ -48,6 +48,14 @@ import { trackEvent } from "../analytics";
 import { loadAutocanonizerMix, loadMultiTrackMix } from "../playback";
 import { getAppContext } from "../runtime";
 import { selectTrack } from "../track-select";
+import {
+  DEFAULT_TRACK_LIST_SORT,
+  displayTrackArtist,
+  nextTrackListSort,
+  sortTrackRows,
+  type TrackListSort,
+  type TrackListSortKey,
+} from "../track-list-sort";
 import i18n from "../i18n";
 import { useTranslation } from "react-i18next";
 
@@ -176,6 +184,289 @@ function PlaylistAddButton({
   );
 }
 
+type TrackListTableRow = {
+  rowKey: string;
+  rank: number;
+  title: string;
+  artist: string;
+  listenId: string;
+  sourceType?: PlaylistTrack["sourceType"];
+  playlistTrack?: PlaylistTrack;
+  extraCell?: React.ReactNode;
+  actionsCell?: React.ReactNode;
+  onSelect?: () => void;
+};
+
+/**
+ * Renders a sortable column header button for track list tables.
+ */
+function TrackListSortHeader({
+  sortKey,
+  label,
+  sort,
+  onSort,
+  className,
+  ariaLabel,
+  title,
+  allowDescending = true,
+}: {
+  sortKey: TrackListSortKey;
+  label: string;
+  sort: TrackListSort;
+  onSort: (key: TrackListSortKey) => void;
+  className: string;
+  ariaLabel?: string;
+  title?: string;
+  allowDescending?: boolean;
+}) {
+  const active = sort.key === sortKey;
+  let ariaSort: "ascending" | "descending" | "none" = "none";
+  if (active) {
+    ariaSort =
+      allowDescending && sort.direction === "desc" ? "descending" : "ascending";
+  }
+  const iconName =
+    allowDescending && sort.direction === "desc"
+      ? "arrow_downward"
+      : "arrow_upward";
+  return (
+    <th scope="col" className={className} aria-sort={ariaSort}>
+      <button
+        type="button"
+        className="track-sort-button"
+        data-track-sort={sortKey}
+        aria-label={ariaLabel}
+        title={title}
+        onClick={() => onSort(sortKey)}
+      >
+        <span>{label}</span>
+        {active ? (
+          <span
+            className="material-symbols-outlined track-sort-icon"
+            aria-hidden="true"
+          >
+            {iconName}
+          </span>
+        ) : null}
+      </button>
+    </th>
+  );
+}
+
+/**
+ * Renders a shared sortable track table with rank, title, artist, optional extra column, and actions.
+ */
+function TrackListTable({
+  variant = "default",
+  sort,
+  onSort,
+  extraHeader,
+  rows,
+}: {
+  variant?: "default" | "with-plays" | "reported";
+  sort: TrackListSort;
+  onSort: (key: TrackListSortKey) => void;
+  extraHeader?: { className: string; label: string };
+  rows: TrackListTableRow[];
+}) {
+  const { t } = useTranslation();
+  const tableClassName =
+    variant === "default"
+      ? "tracks-table"
+      : `tracks-table tracks-table-${variant}`;
+
+  return (
+    <table className={tableClassName}>
+      <thead>
+        <tr>
+          <TrackListSortHeader
+            sortKey="default"
+            label="#"
+            sort={sort}
+            onSort={onSort}
+            className="track-rank-heading"
+            ariaLabel={t("topTracks.defaultOrder")}
+            title={t("topTracks.defaultOrder")}
+            allowDescending={false}
+          />
+          <TrackListSortHeader
+            sortKey="title"
+            label={t("favorites.titleColumn")}
+            sort={sort}
+            onSort={onSort}
+            className="track-title-heading"
+          />
+          <TrackListSortHeader
+            sortKey="artist"
+            label={t("favorites.artistColumn")}
+            sort={sort}
+            onSort={onSort}
+            className="track-artist-heading"
+          />
+          {extraHeader ? (
+            <th scope="col" className={extraHeader.className}>
+              {extraHeader.label}
+            </th>
+          ) : null}
+          <th
+            scope="col"
+            className="track-actions-heading"
+            aria-label={t("topTracks.actionsColumn")}
+          ></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => {
+          const selectable = Boolean(row.onSelect);
+          const handleRowClick = row.onSelect
+            ? (event: MouseEvent<HTMLTableRowElement>) => {
+                const target = event.target as HTMLElement | null;
+                if (target?.closest("a, button")) {
+                  return;
+                }
+                row.onSelect?.();
+              }
+            : undefined;
+          const handleRowKeydown = row.onSelect
+            ? (event: KeyboardEvent<HTMLTableRowElement>) => {
+                if (event.key !== "Enter" && event.key !== " ") {
+                  return;
+                }
+                const target = event.target as HTMLElement | null;
+                if (target?.closest("a, button")) {
+                  return;
+                }
+                event.preventDefault();
+                row.onSelect?.();
+              }
+            : undefined;
+          return (
+            <tr
+              key={row.rowKey}
+              className={
+                selectable
+                  ? "top-list-item"
+                  : "top-list-item top-list-item-static"
+              }
+              tabIndex={selectable ? 0 : undefined}
+              onClick={handleRowClick}
+              onKeyDown={handleRowKeydown}
+            >
+              <td className="track-rank-cell">{row.rank}</td>
+              <td className="track-title-cell">
+                {row.listenId && row.playlistTrack ? (
+                  <a
+                    href={`/listen/${encodeURIComponent(row.listenId)}`}
+                    data-track-id={row.listenId}
+                    data-playlist-id={row.playlistTrack.id}
+                    data-source-type={row.sourceType}
+                    data-track-title={row.title}
+                    data-track-artist={row.artist}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      row.onSelect?.();
+                    }}
+                  >
+                    {row.title}
+                  </a>
+                ) : (
+                  row.title
+                )}
+              </td>
+              <td className="track-artist-cell">
+                {displayTrackArtist(row.artist)}
+              </td>
+              {extraHeader ? row.extraCell : null}
+              <td className="track-actions-cell">{row.actionsCell}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * Maps API track list items into sorted table rows for SongList, AllTimeList, and TrackSearchList.
+ */
+function buildTopSongTableRows(
+  items: TopSongsItem[],
+  sort: TrackListSort,
+  uiSource: string,
+  untitledLabel: string,
+  includePlayCount: boolean,
+): TrackListTableRow[] {
+  const sorted = sortTrackRows(items, sort, (item) => ({
+    title: typeof item.title === "string" ? item.title : untitledLabel,
+    artist: typeof item.artist === "string" ? item.artist : "",
+  }));
+
+  return sorted.map(({ item, rank }) => {
+    const title = typeof item.title === "string" ? item.title : untitledLabel;
+    const artist = typeof item.artist === "string" ? item.artist : "";
+    const jobId = typeof item.id === "string" ? item.id : "";
+    const sourceProvider =
+      typeof item.source_provider === "string" ? item.source_provider : "";
+    const sourceType = normalizePlaylistSourceType(sourceProvider);
+    const listenId = jobId;
+    const label = artist ? `${title} — ${artist}` : title;
+    const rowKey = topSongKey(item, label);
+    const playCount =
+      typeof item.play_count === "number" ? item.play_count : null;
+    const extraCell = includePlayCount ? (
+      <td className="track-plays-cell">
+        {playCount !== null
+          ? `${playCount} ${playCount === 1 ? "play" : "plays"}`
+          : ""}
+      </td>
+    ) : undefined;
+
+    if (!listenId) {
+      return {
+        rowKey,
+        rank,
+        title,
+        artist,
+        listenId: "",
+        extraCell,
+      };
+    }
+
+    const playlistTrack: PlaylistTrack = {
+      id: jobId || listenId,
+      sourceType,
+      title,
+      artist,
+      duration: null,
+    };
+
+    return {
+      rowKey,
+      rank,
+      title,
+      artist,
+      listenId,
+      sourceType,
+      playlistTrack,
+      extraCell,
+      onSelect: () => {
+        trackEvent("select_track", {
+          ui_source: uiSource,
+          track_id: listenId,
+          track_title: title,
+        });
+        selectTrack(listenId, playlistTrack);
+      },
+      actionsCell: (
+        <PlaylistAddButton
+          track={playlistTrack}
+          onAdd={(added) => addToPlaylist(added, uiSource)}
+        />
+      ),
+    };
+  });
+}
+
 function SongList({
   tabId,
   state,
@@ -186,67 +477,31 @@ function SongList({
   hidden: boolean;
 }) {
   const { t } = useTranslation();
+  const [sort, setSort] = useState<TrackListSort>(DEFAULT_TRACK_LIST_SORT);
   const config = LIST_CONFIG[tabId];
   const className = hidden ? "top-list hidden" : "top-list";
   if (state.kind === "message") {
     return (
-      <ol className={className} id={config.listId}>
+      <div className={className} id={config.listId}>
         {state.text()}
-      </ol>
+      </div>
     );
   }
+  const rows = buildTopSongTableRows(
+    state.items.slice(0, TOP_SONGS_LIMIT),
+    sort,
+    tabId,
+    t("common.untitled"),
+    false,
+  );
   return (
-    <ol className={className} id={config.listId}>
-      {state.items.slice(0, TOP_SONGS_LIMIT).map((item) => {
-        const title =
-          typeof item.title === "string" ? item.title : t("common.untitled");
-        const artist = typeof item.artist === "string" ? item.artist : "";
-        const jobId = typeof item.id === "string" ? item.id : "";
-        const sourceProvider =
-          typeof item.source_provider === "string" ? item.source_provider : "";
-        const sourceType = normalizePlaylistSourceType(sourceProvider);
-        const listenId = jobId;
-        const label = artist ? `${title} — ${artist}` : title;
-        const key = topSongKey(item, label);
-        if (!listenId) {
-          return <li key={key}>{label}</li>;
-        }
-        const playlistTrack: PlaylistTrack = {
-          id: jobId || listenId,
-          sourceType,
-          title,
-          artist,
-          duration: null,
-        };
-        return (
-          <li key={key} className="top-list-item">
-            <a
-              href={`/listen/${encodeURIComponent(listenId)}`}
-              data-track-id={listenId}
-              data-playlist-id={playlistTrack.id}
-              data-source-type={sourceType}
-              data-track-title={title}
-              data-track-artist={artist}
-              onClick={(event) => {
-                event.preventDefault();
-                trackEvent("select_track", {
-                  ui_source: tabId,
-                  track_id: listenId,
-                  track_title: title,
-                });
-                selectTrack(listenId, playlistTrack);
-              }}
-            >
-              {label}
-            </a>
-            <PlaylistAddButton
-              track={playlistTrack}
-              onAdd={(added) => addToPlaylist(added, tabId)}
-            />
-          </li>
-        );
-      })}
-    </ol>
+    <div className={className} id={config.listId}>
+      <TrackListTable
+        sort={sort}
+        onSort={(key) => setSort((prev) => nextTrackListSort(prev, key))}
+        rows={rows}
+      />
+    </div>
   );
 }
 
@@ -267,7 +522,13 @@ function AllTimeList({
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [sort, setSort] = useState<TrackListSort>(DEFAULT_TRACK_LIST_SORT);
   const loadedKeyRef = useRef<string | null>(null);
+
+  // Reset local column sort whenever the server-side sort dropdown changes.
+  useEffect(() => {
+    setSort(DEFAULT_TRACK_LIST_SORT);
+  }, [sortBy]);
 
   useEffect(() => {
     if (!active) {
@@ -332,74 +593,35 @@ function AllTimeList({
     return null;
   }
   if (loading) {
-    return <ol className="top-list" id="all-time-songs">{t("topTracks.loadingTop")}</ol>;
+    return <div className="top-list" id="all-time-songs">{t("topTracks.loadingTop")}</div>;
   }
   if (errorText) {
-    return <ol className="top-list" id="all-time-songs">{errorText}</ol>;
+    return <div className="top-list" id="all-time-songs">{errorText}</div>;
   }
   if (items.length === 0) {
-    return <ol className="top-list" id="all-time-songs">{t("topTracks.emptyTop")}</ol>;
+    return <div className="top-list" id="all-time-songs">{t("topTracks.emptyTop")}</div>;
   }
+  const rows = buildTopSongTableRows(
+    items,
+    sort,
+    "all-time",
+    t("common.untitled"),
+    true,
+  );
   return (
     <>
-      <ol className="top-list" id="all-time-songs">
-        {items.map((item) => {
-          const title =
-            typeof item.title === "string" ? item.title : t("common.untitled");
-          const artist = typeof item.artist === "string" ? item.artist : "";
-          const jobId = typeof item.id === "string" ? item.id : "";
-          const sourceProvider =
-            typeof item.source_provider === "string" ? item.source_provider : "";
-          const sourceType = normalizePlaylistSourceType(sourceProvider);
-          const listenId = jobId;
-          const label = artist ? `${title} — ${artist}` : title;
-          const key = topSongKey(item, label);
-          const playCount =
-            typeof item.play_count === "number" ? item.play_count : null;
-          if (!listenId) {
-            return <li key={key}>{label}</li>;
-          }
-          const playlistTrack: PlaylistTrack = {
-            id: jobId || listenId,
-            sourceType,
-            title,
-            artist,
-            duration: null,
-          };
-          return (
-            <li key={key} className="top-list-item">
-              <a
-                href={`/listen/${encodeURIComponent(listenId)}`}
-                data-track-id={listenId}
-                data-playlist-id={playlistTrack.id}
-                data-source-type={sourceType}
-                data-track-title={title}
-                data-track-artist={artist}
-                onClick={(event) => {
-                  event.preventDefault();
-                  trackEvent("select_track", {
-                    ui_source: "all-time",
-                    track_id: listenId,
-                    track_title: title,
-                  });
-                  selectTrack(listenId, playlistTrack);
-                }}
-              >
-                {label}
-              </a>
-              {playCount !== null ? (
-                <span className="all-time-play-count">
-                  {playCount} {playCount === 1 ? "play" : "plays"}
-                </span>
-              ) : null}
-              <PlaylistAddButton
-                track={playlistTrack}
-                onAdd={(added) => addToPlaylist(added, "all-time")}
-              />
-            </li>
-          );
-        })}
-      </ol>
+      <div className="top-list" id="all-time-songs">
+        <TrackListTable
+          variant="with-plays"
+          sort={sort}
+          onSort={(key) => setSort((prev) => nextTrackListSort(prev, key))}
+          extraHeader={{
+            className: "track-plays-heading",
+            label: t("topTracks.playsColumn"),
+          }}
+          rows={rows}
+        />
+      </div>
       {hasMore ? (
         <div id="all-time-load-more-container" className="all-time-load-more">
           <button
@@ -432,6 +654,7 @@ function TrackSearchList({
   const [items, setItems] = useState<TopSongsItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [sort, setSort] = useState<TrackListSort>(DEFAULT_TRACK_LIST_SORT);
 
   useEffect(() => {
     if (!active) {
@@ -471,16 +694,16 @@ function TrackSearchList({
   }
   if (loading) {
     return (
-      <ol className="top-list" id="search-tracks-songs">
+      <div className="top-list" id="search-tracks-songs">
         {t("topTracks.loadingTop")}
-      </ol>
+      </div>
     );
   }
   if (errorText) {
     return (
-      <ol className="top-list" id="search-tracks-songs">
+      <div className="top-list" id="search-tracks-songs">
         {errorText}
-      </ol>
+      </div>
     );
   }
   const normalizedQuery = query.trim().toLowerCase();
@@ -496,70 +719,31 @@ function TrackSearchList({
     : items;
   if (visibleItems.length === 0) {
     return (
-      <ol className="top-list" id="search-tracks-songs">
+      <div className="top-list" id="search-tracks-songs">
         {t("topTracks.emptyTop")}
-      </ol>
+      </div>
     );
   }
+  const rows = buildTopSongTableRows(
+    visibleItems,
+    sort,
+    "search-tracks",
+    t("common.untitled"),
+    true,
+  );
   return (
-    <ol className="top-list" id="search-tracks-songs">
-      {visibleItems.map((item) => {
-        const title =
-          typeof item.title === "string" ? item.title : t("common.untitled");
-        const artist = typeof item.artist === "string" ? item.artist : "";
-        const jobId = typeof item.id === "string" ? item.id : "";
-        const sourceProvider =
-          typeof item.source_provider === "string" ? item.source_provider : "";
-        const sourceType = normalizePlaylistSourceType(sourceProvider);
-        const listenId = jobId;
-        const label = artist ? `${title} — ${artist}` : title;
-        const key = topSongKey(item, label);
-        const playCount =
-          typeof item.play_count === "number" ? item.play_count : null;
-        if (!listenId) {
-          return <li key={key}>{label}</li>;
-        }
-        const playlistTrack: PlaylistTrack = {
-          id: jobId || listenId,
-          sourceType,
-          title,
-          artist,
-          duration: null,
-        };
-        return (
-          <li key={key} className="top-list-item">
-            <a
-              href={`/listen/${encodeURIComponent(listenId)}`}
-              data-track-id={listenId}
-              data-playlist-id={playlistTrack.id}
-              data-source-type={sourceType}
-              data-track-title={title}
-              data-track-artist={artist}
-              onClick={(event) => {
-                event.preventDefault();
-                trackEvent("select_track", {
-                  ui_source: "search-tracks",
-                  track_id: listenId,
-                  track_title: title,
-                });
-                selectTrack(listenId, playlistTrack);
-              }}
-            >
-              {label}
-            </a>
-            {playCount !== null ? (
-              <span className="all-time-play-count">
-                {playCount} {playCount === 1 ? "play" : "plays"}
-              </span>
-            ) : null}
-            <PlaylistAddButton
-              track={playlistTrack}
-              onAdd={(added) => addToPlaylist(added, "search-tracks")}
-            />
-          </li>
-        );
-      })}
-    </ol>
+    <div className="top-list" id="search-tracks-songs">
+      <TrackListTable
+        variant="with-plays"
+        sort={sort}
+        onSort={(key) => setSort((prev) => nextTrackListSort(prev, key))}
+        extraHeader={{
+          className: "track-plays-heading",
+          label: t("topTracks.playsColumn"),
+        }}
+        rows={rows}
+      />
+    </div>
   );
 }
 
@@ -575,6 +759,7 @@ function ReportedList({
   reloadToken: number;
 }) {
   const { t } = useTranslation();
+  const [sort, setSort] = useState<TrackListSort>(DEFAULT_TRACK_LIST_SORT);
   const [state, setState] = useState<ReportedListState>({
     kind: "message",
     text: () => i18n.t("topTracks.loadingReported"),
@@ -642,69 +827,91 @@ function ReportedList({
   const className = active ? "top-list" : "top-list hidden";
   if (state.kind === "message") {
     return (
-      <ol className={className} id="reported-songs">
+      <div className={className} id="reported-songs">
         {state.text()}
-      </ol>
+      </div>
     );
   }
+  const untitledLabel = t("common.untitled");
+  const sorted = sortTrackRows(state.items, sort, (item) => ({
+    title: item.title || untitledLabel,
+    artist: item.artist || "",
+  }));
+  const rows: TrackListTableRow[] = sorted.map(({ item, rank }) => {
+    const title = item.title || untitledLabel;
+    const artist = item.artist || "";
+    const reportedDate = new Date(item.reported_at);
+    const dateLabel = Number.isNaN(reportedDate.getTime())
+      ? item.reported_at
+      : reportedDate.toLocaleDateString();
+    const sourceType = normalizePlaylistSourceType(item.source_provider ?? "");
+    const playlistTrack: PlaylistTrack = {
+      id: item.id,
+      sourceType,
+      title,
+      artist,
+      duration: null,
+    };
+    return {
+      rowKey: item.id,
+      rank,
+      title,
+      artist,
+      listenId: item.id,
+      sourceType,
+      playlistTrack,
+      onSelect: () => {
+        trackEvent("select_track", {
+          ui_source: "reported",
+          track_id: item.id,
+          track_title: title,
+        });
+        selectTrack(item.id, playlistTrack);
+      },
+      extraCell: (
+        <td className="track-report-cell">
+          <span className="reported-meta">
+            {dateLabel} ·{" "}
+            {t(`report.reasons.${item.reason}`, {
+              defaultValue: item.reason,
+            })}
+          </span>
+        </td>
+      ),
+      actionsCell: (
+        <button
+          type="button"
+          className="reported-dismiss"
+          title={t("report.dismiss")}
+          aria-label={t("report.dismissNamed", { title })}
+          onClick={(event) => {
+            event.stopPropagation();
+            void dismiss(item.id);
+          }}
+        >
+          <span
+            className="material-symbols-outlined reported-dismiss-icon"
+            aria-hidden="true"
+          >
+            close
+          </span>
+        </button>
+      ),
+    };
+  });
   return (
-    <ol className={className} id="reported-songs">
-      {state.items.map((item) => {
-        const title = item.title || t("common.untitled");
-        const artist = item.artist || "";
-        const label = artist ? `${title} — ${artist}` : title;
-        const reportedDate = new Date(item.reported_at);
-        const dateLabel = Number.isNaN(reportedDate.getTime())
-          ? item.reported_at
-          : reportedDate.toLocaleDateString();
-        const playlistTrack: PlaylistTrack = {
-          id: item.id,
-          sourceType: normalizePlaylistSourceType(item.source_provider ?? ""),
-          title,
-          artist,
-          duration: null,
-        };
-        return (
-          <li key={item.id} className="top-list-item">
-            <a
-              href={`/listen/${encodeURIComponent(item.id)}`}
-              data-track-id={item.id}
-              onClick={(event) => {
-                event.preventDefault();
-                trackEvent("select_track", {
-                  ui_source: "reported",
-                  track_id: item.id,
-                  track_title: title,
-                });
-                selectTrack(item.id, playlistTrack);
-              }}
-            >
-              {label}
-            </a>
-            <span className="reported-meta">
-              {dateLabel} ·{" "}
-              {t(`report.reasons.${item.reason}`, {
-                defaultValue: item.reason,
-              })}
-            </span>
-            <button
-              type="button"
-              className="reported-dismiss"
-              title={t("report.dismiss")}
-              aria-label={t("report.dismissNamed", { title })}
-              onClick={() => void dismiss(item.id)}
-            >
-              <span
-                className="material-symbols-outlined reported-dismiss-icon"
-                aria-hidden="true"
-              >
-                close
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ol>
+    <div className={className} id="reported-songs">
+      <TrackListTable
+        variant="reported"
+        sort={sort}
+        onSort={(key) => setSort((prev) => nextTrackListSort(prev, key))}
+        extraHeader={{
+          className: "track-report-heading",
+          label: t("topTracks.reportColumn"),
+        }}
+        rows={rows}
+      />
+    </div>
   );
 }
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ADMIN_KEY_STORAGE_KEY } from "../admin";
-import { dismissTrackReport, fetchReportedTracks } from "../api";
+import { dismissTrackReport, fetchReportedTracks, fetchTopSongs } from "../api";
 import { useAppStore } from "../store";
 import { TopTracksPanel } from "./TopTracksPanel";
 
@@ -89,9 +89,11 @@ describe("TopTracksPanel", () => {
     await user.click(
       document.querySelector<HTMLElement>('[data-top-subtab="reported"]')!,
     );
-    const link = await screen.findByText("Bad Song — Artist");
+    const link = await screen.findByText("Bad Song");
     expect(fetchReportedTracks).toHaveBeenCalledWith("secret");
-    const item = link.closest("li")!;
+    const item = link.closest("tr")!;
+    expect(item.querySelector(".track-rank-cell")?.textContent).toBe("1");
+    expect(item.querySelector(".track-artist-cell")?.textContent).toBe("Artist");
     expect(item.textContent).toContain(
       "Bad audio (poor quality, cut off, or incomplete)",
     );
@@ -107,12 +109,13 @@ describe("TopTracksPanel", () => {
     );
 
     await user.click(item.querySelector<HTMLElement>(".reported-dismiss")!);
+    expect(h.selectTrack).toHaveBeenCalledTimes(1);
     expect(dismissTrackReport).toHaveBeenCalledWith(
       "b4f3c0dc73c6476c9db95c227f9206f3",
       "secret",
     );
     await waitFor(() => {
-      expect(screen.queryByText("Bad Song — Artist")).toBeNull();
+      expect(screen.queryByText("Bad Song")).toBeNull();
     });
     expect(document.getElementById("reported-songs")?.textContent).toBe(
       "No reported tracks.",
@@ -121,7 +124,10 @@ describe("TopTracksPanel", () => {
 
   it("loads the top list lazily and renders job-id links", async () => {
     render(<TopTracksPanel />);
-    const link = await screen.findByText("Song — Artist");
+    const link = await screen.findByText("Song");
+    const row = link.closest("tr")!;
+    expect(row.querySelector(".track-rank-cell")?.textContent).toBe("1");
+    expect(row.querySelector(".track-artist-cell")?.textContent).toBe("Artist");
     expect(link.getAttribute("href")).toBe(
       "/listen/a3f3c0dc73c6476c9db95c227f9206f2",
     );
@@ -138,7 +144,7 @@ describe("TopTracksPanel", () => {
 
   it("adds rows to the playlist", async () => {
     render(<TopTracksPanel />);
-    await screen.findByText("Song — Artist");
+    await screen.findByText("Song");
     await userEvent.click(screen.getByLabelText("Add Song to playlist"));
     expect(h.addToPlaylist).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a3f3c0dc73c6476c9db95c227f9206f2" }),
@@ -186,7 +192,7 @@ describe("TopTracksPanel", () => {
   it("refreshes the active list on demand", async () => {
     const api = await import("../api");
     render(<TopTracksPanel />);
-    await screen.findByText("Song — Artist");
+    await screen.findByText("Song");
     expect(api.fetchTopSongs).toHaveBeenCalledTimes(1);
     await userEvent.click(document.getElementById("top-list-refresh")!);
     await waitFor(() => {
@@ -197,11 +203,11 @@ describe("TopTracksPanel", () => {
   it("keeps loaded list data across unmount and remount", async () => {
     const api = await import("../api");
     const { unmount } = render(<TopTracksPanel />);
-    await screen.findByText("Song — Artist");
+    await screen.findByText("Song");
     unmount();
 
     render(<TopTracksPanel />);
-    expect(screen.getByText("Song — Artist")).toBeTruthy();
+    expect(screen.getByText("Song")).toBeTruthy();
     expect(api.fetchTopSongs).toHaveBeenCalledTimes(1);
   });
 
@@ -376,13 +382,183 @@ describe("TopTracksPanel", () => {
     const input = document.getElementById("track-search-input") as HTMLInputElement;
     expect(input).not.toBeNull();
     const list = document.getElementById("search-tracks-songs")!;
-    await within(list).findByText("Song — Artist");
+    await within(list).findByText("Song");
+    expect(list.querySelector(".track-artist-cell")?.textContent).toBe("Artist");
     expect(within(list).getByLabelText("Add Song to playlist")).toBeTruthy();
 
     await userEvent.type(input, "nomatch");
-    expect(within(list).queryByText("Song — Artist")).toBeNull();
+    expect(within(list).queryByText("Song")).toBeNull();
 
     await userEvent.clear(input);
-    await within(list).findByText("Song — Artist");
+    await within(list).findByText("Song");
+  });
+
+  it("sorts normal track lists by Title and Artist while keeping rank numbers and resetting on #", async () => {
+    vi.mocked(fetchTopSongs).mockResolvedValueOnce([
+      {
+        id: "id-1",
+        source_provider: "youtube",
+        title: "Zebra",
+        artist: "Miles",
+        play_count: 10,
+      },
+      {
+        id: "id-2",
+        source_provider: "youtube",
+        title: "Alpha",
+        artist: "Zed",
+        play_count: 5,
+      },
+      {
+        id: "id-3",
+        source_provider: "youtube",
+        title: "Beta",
+        artist: "Unknown",
+        play_count: 1,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    render(<TopTracksPanel />);
+    await screen.findByText("Zebra");
+    const container = document.getElementById("top-songs")!;
+
+    const rowSummary = () =>
+      Array.from(container.querySelectorAll("tbody tr")).map((row) => [
+        row.querySelector(".track-rank-cell")?.textContent?.trim(),
+        row.querySelector(".track-title-cell a")?.textContent?.trim(),
+        row.querySelector(".track-artist-cell")?.textContent?.trim(),
+      ]);
+
+    expect(rowSummary()).toEqual([
+      ["1", "Zebra", "Miles"],
+      ["2", "Alpha", "Zed"],
+      ["3", "Beta", ""],
+    ]);
+
+    // Title asc then desc keeps original 1-based rank.
+    await user.click(container.querySelector('[data-track-sort="title"]')!);
+    expect(rowSummary()).toEqual([
+      ["2", "Alpha", "Zed"],
+      ["3", "Beta", ""],
+      ["1", "Zebra", "Miles"],
+    ]);
+
+    await user.click(container.querySelector('[data-track-sort="title"]')!);
+    expect(rowSummary()).toEqual([
+      ["1", "Zebra", "Miles"],
+      ["3", "Beta", ""],
+      ["2", "Alpha", "Zed"],
+    ]);
+
+    // Artist asc then desc.
+    await user.click(container.querySelector('[data-track-sort="artist"]')!);
+    expect(rowSummary()).toEqual([
+      ["3", "Beta", ""],
+      ["1", "Zebra", "Miles"],
+      ["2", "Alpha", "Zed"],
+    ]);
+
+    // Clicking "#" resets to default rank order and repeated clicks never reverse it.
+    await user.click(container.querySelector('[data-track-sort="default"]')!);
+    expect(rowSummary()).toEqual([
+      ["1", "Zebra", "Miles"],
+      ["2", "Alpha", "Zed"],
+      ["3", "Beta", ""],
+    ]);
+    await user.click(container.querySelector('[data-track-sort="default"]')!);
+    expect(rowSummary()).toEqual([
+      ["1", "Zebra", "Miles"],
+      ["2", "Alpha", "Zed"],
+      ["3", "Beta", ""],
+    ]);
+
+    // Clicking the Artist cell selects the row.
+    await user.click(
+      container.querySelectorAll<HTMLElement>(".track-artist-cell")[0],
+    );
+    expect(h.selectTrack).toHaveBeenCalledWith(
+      "id-1",
+      expect.objectContaining({ id: "id-1", title: "Zebra", artist: "Miles" }),
+    );
+  });
+
+  it("renders Plays column on All tab and resets column sort when dropdown changes", async () => {
+    vi.mocked(fetchTopSongs)
+      .mockResolvedValueOnce([
+        {
+          id: "id-1",
+          source_provider: "youtube",
+          title: "Song",
+          artist: "Artist",
+          play_count: 1,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "all-1",
+          source_provider: "youtube",
+          title: "Zebra",
+          artist: "Miles",
+          play_count: 42,
+        },
+        {
+          id: "all-2",
+          source_provider: "youtube",
+          title: "Alpha",
+          artist: "Ann",
+          play_count: 1,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "all-2",
+          source_provider: "youtube",
+          title: "Alpha",
+          artist: "Ann",
+          play_count: 1,
+        },
+        {
+          id: "all-1",
+          source_provider: "youtube",
+          title: "Zebra",
+          artist: "Miles",
+          play_count: 42,
+        },
+      ]);
+
+    const user = userEvent.setup();
+    render(<TopTracksPanel />);
+    await user.click(
+      document.querySelector<HTMLElement>('[data-top-subtab="all-time"]')!,
+    );
+
+    await screen.findByText("Zebra");
+    const allContainer = document.getElementById("all-time-songs")!;
+    expect(within(allContainer).getByText("Plays")).toBeTruthy();
+    expect(within(allContainer).getByText("42 plays")).toBeTruthy();
+    expect(within(allContainer).getByText("1 play")).toBeTruthy();
+
+    await user.click(allContainer.querySelector('[data-track-sort="title"]')!);
+    expect(
+      allContainer
+        .querySelector('[data-track-sort="title"]')
+        ?.closest("th")
+        ?.getAttribute("aria-sort"),
+    ).toBe("ascending");
+
+    await user.selectOptions(
+      document.getElementById("all-time-sort")!,
+      "newest",
+    );
+    await waitFor(() => {
+      expect(
+        document
+          .getElementById("all-time-songs")
+          ?.querySelector('[data-track-sort="default"]')
+          ?.closest("th")
+          ?.getAttribute("aria-sort"),
+      ).toBe("ascending");
+    });
   });
 });

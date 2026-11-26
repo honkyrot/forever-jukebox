@@ -79,6 +79,12 @@ export type ReportedTrackItem = {
   reported_at: string;
 };
 
+export type TrackMetadataResponse = {
+  id: string;
+  title: string;
+  artist: string;
+};
+
 export type AppConfig = {
   allow_user_upload: boolean;
   allow_user_url: boolean;
@@ -388,6 +394,25 @@ export async function dismissTrackReport(jobId: string, adminKey: string) {
     method: "DELETE",
     headers: { "X-Admin-Key": adminKey },
   });
+}
+
+/**
+ * Updates a track's stored title and artist via the admin rename endpoint.
+ */
+export async function renameTrack(
+  jobId: string,
+  payload: { title: string; artist: string },
+  adminKey: string,
+): Promise<TrackMetadataResponse> {
+  const data = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Admin-Key": adminKey,
+    },
+    body: JSON.stringify(payload),
+  });
+  return data as TrackMetadataResponse;
 }
 
 export async function fetchJobBySource(

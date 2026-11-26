@@ -32,6 +32,7 @@ from ..db import (
     get_reported_tracks,
     get_top_tracks,
     increment_job_plays,
+    rename_job_track,
     report_track,
     restart_failed_job,
     set_job_play_count,
@@ -51,6 +52,8 @@ from ..models import (
     RecentSongsResponse,
     ReportedTracksResponse,
     TopSongsResponse,
+    TrackMetadataResponse,
+    TrackMetadataUpdate,
     TrackReportRequest,
 )
 from ..paths import DB_PATH, STORAGE_ROOT
@@ -475,15 +478,19 @@ def _job_response(job, analysis: Any | None = None) -> JSONResponse:
         )
         return JSONResponse(payload.model_dump(), status_code=200)
 
-    if isinstance(data, dict) and (job.track_title or job.track_artist):
+    if isinstance(data, dict) and (job.track_title is not None or job.track_artist is not None):
         track = data.get("track")
         if not isinstance(track, dict):
             track = {}
             data["track"] = track
-        if job.track_title and not track.get("title"):
+        # Prefer database metadata so admin renames override stale analysis JSON values.
+        if job.track_title:
             track["title"] = job.track_title
-        if job.track_artist and not track.get("artist"):
-            track["artist"] = job.track_artist
+        if job.track_artist is not None:
+            if job.track_artist:
+                track["artist"] = job.track_artist
+            elif "artist" in track:
+                track["artist"] = ""
     payload = JobComplete(status="complete", result=data, progress=job.progress, **base_payload)
     return JSONResponse(payload.model_dump(), status_code=200)
 
@@ -832,6 +839,34 @@ def get_job_by_track_match(
         match="by_track_lookup",
     )
     return _response_with_auto_repair(job, background_tasks)
+
+
+@router.patch("/api/jobs/{job_id}", responses=error_responses(400, 403, 404))
+def rename_job_by_id(
+    job_id: str,
+    payload: TrackMetadataUpdate,
+    admin_key: str | None = Header(None, alias=ADMIN_KEY_HEADER),
+) -> JSONResponse:
+    """Update a track's stored title and optional artist as an admin operation."""
+    require_admin_key(admin_key)
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Track title is required")
+    artist = payload.artist.strip() if payload.artist is not None else None
+    updated = rename_job_track(DB_PATH, job_id, title, artist)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+    log_event(
+        "job_renamed",
+        job_id=job_id,
+        source=updated.source_provider or "unknown",
+    )
+    response = TrackMetadataResponse(
+        id=job_id,
+        title=updated.track_title or title,
+        artist=updated.track_artist or "",
+    )
+    return JSONResponse(response.model_dump(), status_code=200)
 
 
 @router.delete("/api/jobs/{job_id}", responses=error_responses(403, 404))
