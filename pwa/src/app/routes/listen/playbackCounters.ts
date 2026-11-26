@@ -1,8 +1,16 @@
+import type { BpmTrend } from "./liveBpm";
+
 export type PlaybackCounterValues = {
   beatsPlayed: number;
   listenSeconds: number;
+  jukeboxCurrentSeconds: number;
+  branchChanceText: string;
+  bpmText: string;
+  bpmTrend: BpmTrend;
   autocanonizerMainSeconds: number;
   autocanonizerOtherSeconds: number;
+  autocanonizerPinkSeconds: number;
+  autocanonizerGoldSeconds: number;
   wubMachineSeconds: number;
 };
 
@@ -17,8 +25,14 @@ export function createPlaybackCounters(): PlaybackCounters {
   let values: PlaybackCounterValues = {
     beatsPlayed: 0,
     listenSeconds: 0,
+    jukeboxCurrentSeconds: 0,
+    branchChanceText: "0%",
+    bpmText: "--",
+    bpmTrend: null,
     autocanonizerMainSeconds: 0,
     autocanonizerOtherSeconds: 0,
+    autocanonizerPinkSeconds: 0,
+    autocanonizerGoldSeconds: 0,
     wubMachineSeconds: 0,
   };
   const listeners = new Set<(values: PlaybackCounterValues) => void>();

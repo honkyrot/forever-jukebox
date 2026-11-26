@@ -107,4 +107,77 @@ describe("planCanonizerRender", () => {
     expect(offsets[1]).toBeCloseTo(3);
     expect(offsets[2]).toBeCloseTo(2.94);
   });
+
+  it("plans a 2-song dual mix with sourceIndex 1 and otherBeats finish-out", () => {
+    const main = makeBeats(0, [1, 1], [0, 0]);
+    const other = makeBeats(10, [1, 1, 1], [0, 1, 2]);
+    main[0].other = other[1];
+    main[1].other = other[0];
+
+    const plan = planCanonizerRender(main, {
+      finishOutSong: true,
+      mainPan: -0.25,
+      otherPan: 0.25,
+      mainGain: 1.5,
+      otherGain: 0.5,
+      isDual: true,
+      otherBeats: other,
+    });
+
+    expect(plan?.voices.map((v) => v.sourceIndex)).toEqual([0, 1]);
+    expect(plan?.durationSeconds).toBeCloseTo(4);
+    expectSegments(plan!.voices[0].segments, [[0, 1, 0, 0.55 * 1.5]]);
+    expectSegments(plan!.voices[1].segments, [
+      [0, 1, 11, 0.45 * 0.5],
+      [1, 1, 9, 0.45 * 0.5],
+      [2, 1, 9, 0.45 * 0.5],
+      [3, 1, 9, 0.45 * 0.5],
+    ]);
+  });
+
+  it("plans a 4-voice quad mix with quad blend weights, gains, and pink sync resync", () => {
+    const main = makeBeats(0, [1, 1], [1, 0]);
+    const other = makeBeats(5, [0.95, 0.95], [0, 1]);
+    main[0].pink = other[0];
+    main[1].pink = other[1];
+    main[0].pinkGain = 1;
+    main[1].pinkGain = 0.5;
+    main[0].gold = other[1];
+    main[1].gold = other[0];
+    main[0].goldGain = 0.5;
+    main[1].goldGain = 1;
+
+    const plan = planCanonizerRender(main, {
+      finishOutSong: false,
+      mainPan: -0.5,
+      otherPan: -0.25,
+      pinkPan: 0.25,
+      goldPan: 0.5,
+      mainGain: 1,
+      otherGain: 1.5,
+      pinkGain: 0.5,
+      goldGain: 2,
+      isDual: true,
+      quadMode: true,
+      otherBeats: other,
+    });
+
+    expect(plan?.voices).toHaveLength(4);
+    expect(plan?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 1, 1]);
+    expect(plan?.voices.map((v) => v.pan)).toEqual([-0.5, -0.25, 0.25, 0.5]);
+    expectSegments(plan!.voices[0].segments, [[0, 2, 0, 0.28]]);
+    expectSegments(plan!.voices[1].segments, [
+      [0, 1, 1, 0.22 * 1.5],
+      [1, 1, -1, 0.22 * 1.5],
+    ]);
+    // Pink resyncs on beat 1 because |1 - 0.95| = 0.05 > QUAD_SYNC_MAX_SKEW_DELTA (0.025).
+    expectSegments(plan!.voices[2].segments, [
+      [0, 1, 5, 0.28 * 0.5],
+      [1, 1, 4.95, 0.28 * 0.5 * 0.5],
+    ]);
+    expectSegments(plan!.voices[3].segments, [
+      [0, 1, 5.95, 0.22 * 2 * 0.5],
+      [1, 1, 4, 0.22 * 2],
+    ]);
+  });
 });

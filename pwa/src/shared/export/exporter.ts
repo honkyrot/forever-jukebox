@@ -8,7 +8,7 @@ import {
   getAudioModeSettings,
   type JukeboxAudioMode,
 } from "@forever-jukebox/shared/audio/audioModes";
-import type { JukeboxConfig, RandomMode } from "@forever-jukebox/shared";
+import type { JukeboxConfig, RandomMode, TrackAnalysis } from "@forever-jukebox/shared";
 import type { CanonizerRenderPlan } from "@forever-jukebox/shared/autocanonizer/canonizerRenderPlan";
 import { renderCanonizerAudio } from "./canonizer";
 import {
@@ -43,7 +43,7 @@ export interface JukeboxExportProgress {
 }
 
 export interface ExportJukeboxAudioOptions {
-  analysis: AnalysisOutput;
+  analysis: AnalysisOutput | TrackAnalysis;
   sourceBuffer: AudioBuffer;
   config: JukeboxConfig;
   deletedEdges?: EdgeRef[];
@@ -58,6 +58,8 @@ export interface ExportJukeboxAudioOptions {
   metronomeBeatsPerBar?: number | null;
   metronomeBeatOffset?: number;
   sectionStartBeatIndices?: number[];
+  trackGains?: readonly number[];
+  postMixNormalization?: boolean;
   // Pre-rendered source for modes that play a rendered copy of the track.
   renderedBuffer?: AudioBuffer;
   randomMode?: RandomMode;
@@ -183,6 +185,8 @@ export async function exportJukeboxAudio(
         audioMode: options.audioMode,
         audioIntensityPct: options.audioIntensityPct,
         cowbellEvents: chunkCowbellEvents,
+        trackGains: options.trackGains,
+        postMixNormalization: options.postMixNormalization,
         onProgress: (progress) => {
           const completed = chunkIndex + progress;
           const percent = 8 + (completed / chunkCount) * 72;
@@ -252,6 +256,8 @@ export async function exportJukeboxAudio(
       audioMode: options.audioMode,
       audioIntensityPct: options.audioIntensityPct,
       cowbellEvents,
+      trackGains: options.trackGains,
+      postMixNormalization: options.postMixNormalization,
       onProgress: (progress) => {
         const percent = 8 + progress * 72;
         report(
@@ -411,6 +417,7 @@ export async function exportRenderedAudio(
 
 export interface ExportCanonizerAudioOptions {
   sourceBuffer: AudioBuffer;
+  otherSourceBuffer?: AudioBuffer | null;
   plan: CanonizerRenderPlan;
   format: EncodedAudioFormat;
   bitrateKbps?: number;
@@ -418,11 +425,11 @@ export interface ExportCanonizerAudioOptions {
   onProgress?: (progress: JukeboxExportProgress) => void;
 }
 
-// Mixes the planned canon at the given gain and encodes it whole.
+// Mixes the planned canon voices at the given gain and encodes it whole.
 export async function exportCanonizerAudio(
   options: ExportCanonizerAudioOptions,
 ): Promise<ExportRenderedAudioResult> {
-  const { sourceBuffer, plan } = options;
+  const { sourceBuffer, otherSourceBuffer, plan } = options;
   if (
     options.format !== "mp3" &&
     plan.durationSeconds * sourceBuffer.sampleRate * 2 * 4 >
@@ -434,6 +441,7 @@ export async function exportCanonizerAudio(
   report(options.onProgress, "rendering", message, 2);
   const buffer = await renderCanonizerAudio(sourceBuffer, plan, {
     gain: options.gain,
+    otherSourceBuffer,
     onProgress: (progress) => {
       report(options.onProgress, "rendering", message, 2 + progress * 6);
     },

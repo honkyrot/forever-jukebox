@@ -18,6 +18,7 @@ export function useListenHotkeys({
   isTuningOpen,
   isInfoOpen,
   isExportOpen,
+  isQueueOpen = false,
   engineRef,
   bringItHomeModeRef,
   setBringItHomeMode,
@@ -38,6 +39,7 @@ export function useListenHotkeys({
   isTuningOpen: boolean;
   isInfoOpen: boolean;
   isExportOpen: boolean;
+  isQueueOpen?: boolean;
   engineRef: React.RefObject<JukeboxEngine>;
   bringItHomeModeRef: React.MutableRefObject<boolean>;
   setBringItHomeMode: (value: boolean) => void;
@@ -53,6 +55,24 @@ export function useListenHotkeys({
 }) {
   const [forceBranchActive, setForceBranchActive] = React.useState(false);
   const [freezeBeatActive, setFreezeBeatActive] = React.useState(false);
+  const callbacksRef = React.useRef({
+    showShortcutToast,
+    t,
+    openTuningModalTab,
+    togglePlayback,
+    selectAdjacentBranch,
+    deleteSelectedBranch,
+    toggleSelectedAnchorBranch,
+  });
+  callbacksRef.current = {
+    showShortcutToast,
+    t,
+    openTuningModalTab,
+    togglePlayback,
+    selectAdjacentBranch,
+    deleteSelectedBranch,
+    toggleSelectedAnchorBranch,
+  };
 
   React.useEffect(() => {
     if (!isActive) {
@@ -63,7 +83,8 @@ export function useListenHotkeys({
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isTuningOpen || isInfoOpen || isExportOpen) {
+      // Inline tuning never traps global playback hotkeys unless focus is in an input.
+      if (isInfoOpen || isExportOpen || isQueueOpen) {
         return;
       }
       if (isEditableTarget(event.target)) {
@@ -75,12 +96,12 @@ export function useListenHotkeys({
         !event.repeat
       ) {
         event.preventDefault();
-        openTuningModalTab("extras");
+        callbacksRef.current.openTuningModalTab("extras");
         return;
       }
       if (event.code === "Space") {
         event.preventDefault();
-        togglePlayback();
+        callbacksRef.current.togglePlayback();
         return;
       }
       // Arrows nudge the selected end (Shift moves a bar); Escape or Enter closes the editor.
@@ -106,7 +127,7 @@ export function useListenHotkeys({
         selectedEdge
       ) {
         event.preventDefault();
-        selectAdjacentBranch(event.key === "ArrowRight" ? 1 : -1);
+        callbacksRef.current.selectAdjacentBranch(event.key === "ArrowRight" ? 1 : -1);
         return;
       }
       if (
@@ -116,7 +137,7 @@ export function useListenHotkeys({
         !selectedEdge.deleted
       ) {
         event.preventDefault();
-        deleteSelectedBranch();
+        callbacksRef.current.deleteSelectedBranch();
         return;
       }
       if (
@@ -133,10 +154,10 @@ export function useListenHotkeys({
           engineRef.current?.setForceBranch(false);
           setForceBranchActive(false);
         }
-        showShortcutToast(
+        callbacksRef.current.showShortcutToast(
           nextValue
-            ? t("listen.bringHomeEnabled")
-            : t("listen.bringHomeDisabled"),
+            ? callbacksRef.current.t("listen.bringHomeEnabled")
+            : callbacksRef.current.t("listen.bringHomeDisabled"),
         );
         return;
       }
@@ -145,7 +166,7 @@ export function useListenHotkeys({
         (event.key === "a" || event.key === "A") &&
         !event.repeat
       ) {
-        if (toggleSelectedAnchorBranch()) {
+        if (callbacksRef.current.toggleSelectedAnchorBranch()) {
           event.preventDefault();
         }
         return;
@@ -171,8 +192,8 @@ export function useListenHotkeys({
         const direction = bracketDirection;
         const velocity = engine.getPlayVelocity() + direction;
         engine.setPlayVelocity(velocity);
-        showShortcutToast(
-          t("listen.playVelocity", {
+        callbacksRef.current.showShortcutToast(
+          callbacksRef.current.t("listen.playVelocity", {
             value: formatPlayVelocity(engine.getPlayVelocity()),
           }),
           "play-velocity",
@@ -182,8 +203,8 @@ export function useListenHotkeys({
       if (playMode === "jukebox" && event.key === "ArrowDown") {
         event.preventDefault();
         engineRef.current?.setPlayVelocity(0);
-        showShortcutToast(
-          t("listen.playVelocity", { value: "0" }),
+        callbacksRef.current.showShortcutToast(
+          callbacksRef.current.t("listen.playVelocity", { value: "0" }),
           "play-velocity",
         );
         return;
@@ -191,8 +212,8 @@ export function useListenHotkeys({
       if (playMode === "jukebox" && event.key === "ArrowUp") {
         event.preventDefault();
         engineRef.current?.setPlayVelocity(1);
-        showShortcutToast(
-          t("listen.playVelocity", { value: "+1" }),
+        callbacksRef.current.showShortcutToast(
+          callbacksRef.current.t("listen.playVelocity", { value: "+1" }),
           "play-velocity",
         );
         return;
@@ -262,6 +283,7 @@ export function useListenHotkeys({
     isTuningOpen,
     isInfoOpen,
     isExportOpen,
+    isQueueOpen,
     playMode,
     isActive,
     showShortcutToast,

@@ -17,6 +17,8 @@ import {
   isInstrumentalModeAvailable,
   renderInstrumentalBuffer,
 } from "@forever-jukebox/shared/audio/instrumentalRenderer";
+import type { LocalMixTrack } from "../state/mixQueue";
+import * as localMix from "./listen/localMix";
 
 const exportMocks = vi.hoisted(() => ({
   exportJukeboxAudio: vi.fn(),
@@ -35,17 +37,41 @@ const mockAppState = {
   setIsListenLoading: vi.fn<(loading: boolean) => void>(),
   isSettingsOpen: false,
   setIsSettingsOpen: vi.fn<(isOpen: boolean) => void>(),
+  mixQueue: [] as LocalMixTrack[],
+  activeQueueIndex: -1,
+  mixAddSticky: false,
+  setMixAddSticky: vi.fn<(sticky: boolean) => void>(),
+  addFilesToMixQueue: vi.fn(),
+  removeFromMixQueue: vi.fn(),
+  moveMixQueueItem: vi.fn(),
+  clearMixQueue: vi.fn(),
+  selectMixQueueIndex: vi.fn(),
+  updateMixQueueTrackMeta: vi.fn(),
 };
 
 type MockAutocanonizerInstance = {
   setFinishOutSong: ReturnType<typeof vi.fn>;
   planRender: ReturnType<typeof vi.fn>;
   setStreamPans: ReturnType<typeof vi.fn>;
+  setQuadStreamPans: ReturnType<typeof vi.fn>;
+  setDualAudio: ReturnType<typeof vi.fn>;
+  setDualAnalysis: ReturnType<typeof vi.fn>;
+  setStreamGains: ReturnType<typeof vi.fn>;
+  setQuadStreamGains: ReturnType<typeof vi.fn>;
+  setQuadMode: ReturnType<typeof vi.fn>;
+  setQuadBranchMode: ReturnType<typeof vi.fn>;
+  setDualAlignmentMode: ReturnType<typeof vi.fn>;
+  getAudioBuffers: ReturnType<typeof vi.fn>;
   setVolume: ReturnType<typeof vi.fn>;
   startAtIndex: ReturnType<typeof vi.fn>;
   emitBeat: (
     index: number,
-    cursorTimes: { mainSeconds: number; otherSeconds: number },
+    cursorTimes: {
+      mainSeconds: number;
+      otherSeconds: number;
+      pinkSeconds?: number;
+      goldSeconds?: number;
+    },
   ) => void;
   emitSelect: (index: number) => void;
 };
@@ -74,6 +100,8 @@ type MockJukeboxControllerInstance = {
   setData: ReturnType<typeof vi.fn>;
   setSelectedEdge: ReturnType<typeof vi.fn>;
   setSelectedEdgeActive: ReturnType<typeof vi.fn>;
+  setVisualPreferences: ReturnType<typeof vi.fn>;
+  setPredictedJumps: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
   setAnchorEdit: ReturnType<typeof vi.fn>;
@@ -90,6 +118,7 @@ type MockEngineInstance = {
   setUserAnchorEdge: ReturnType<typeof vi.fn>;
   getUserAnchorEdgeId: ReturnType<typeof vi.fn>;
   getUserAnchorEdge: ReturnType<typeof vi.fn>;
+  getPredictedJumps: ReturnType<typeof vi.fn>;
   getConfig: () => {
     justLongBranches: boolean;
     minLongBranchPercent?: number;
@@ -152,6 +181,13 @@ vi.mock("@/core/infrastructure/audio/AudioDecoder", () => ({
     constructor(context: unknown) {
       this.context = context;
     }
+
+    decode = vi.fn(async (_file: File) => ({
+      audioBuffer: { duration: 4 } as AudioBuffer,
+      analysisAudio: new Float32Array(0),
+      sampleRate: 44100,
+      channels: 1,
+    }));
   },
 }));
 
@@ -242,6 +278,13 @@ vi.mock("@forever-jukebox/shared/audio/BufferedAudioPlayer", () => ({
     getPlaybackRate() {
       return 1;
     }
+    getCurrentTime() {
+      return 0;
+    }
+    setPostMixTrackSlices = vi.fn();
+    setPostMixTrackGains = vi.fn();
+    setPostMixNormalization = vi.fn();
+    clearPostMixTrackGains = vi.fn();
     emitEnded() {
       this.onEnded?.();
     }
@@ -427,6 +470,7 @@ vi.mock("@forever-jukebox/shared", async (importOriginal) => ({
     deleteEdge = vi.fn();
     rebuildGraph = vi.fn();
     clearDeletedEdges = vi.fn();
+    getPredictedJumps = vi.fn(() => [] as number[]);
     constructor(_player: unknown) {
       engineInstances.push(this);
     }
@@ -474,6 +518,8 @@ vi.mock("@forever-jukebox/shared/viz/JukeboxController", () => ({
     setActiveIndex = vi.fn((_index: number) => undefined);
     setVisible = vi.fn((_visible: boolean) => undefined);
     setAnchorHighlightEnabled = vi.fn((_enabled: boolean) => undefined);
+    setVisualPreferences = vi.fn((_prefs: unknown) => undefined);
+    setPredictedJumps = vi.fn((_indices: readonly number[]) => undefined);
     resizeActive = vi.fn();
     refresh = vi.fn();
     reset = vi.fn();
@@ -536,6 +582,18 @@ vi.mock("@forever-jukebox/shared/autocanonizer/AutocanonizerController", () => (
     setStreamPans = vi.fn(
       (_mainPan: number, _otherPan: number) => undefined,
     );
+    setQuadStreamPans = vi.fn();
+    setDualAudio = vi.fn();
+    setDualAnalysis = vi.fn();
+    setStreamGains = vi.fn();
+    setQuadStreamGains = vi.fn();
+    setQuadMode = vi.fn();
+    setQuadBranchMode = vi.fn();
+    setDualAlignmentMode = vi.fn();
+    getAudioBuffers = vi.fn(() => ({
+      mainBuffer: { duration: 4 } as AudioBuffer,
+      otherBuffer: null as AudioBuffer | null,
+    }));
     setAudio = vi.fn(
       (_buffer: AudioBuffer | null, _context: AudioContext | null) => undefined,
     );
@@ -598,6 +656,8 @@ type RenderedListen = {
   unmount: () => void;
 };
 
+const activeRenderedListens = new Set<() => void>();
+
 function renderListen(): RenderedListen {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -611,6 +671,19 @@ function renderListen(): RenderedListen {
       </MemoryRouter>
     );
   });
+  let unmounted = false;
+  const cleanupRoot = () => {
+    if (unmounted) {
+      return;
+    }
+    unmounted = true;
+    activeRenderedListens.delete(cleanupRoot);
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  };
+  activeRenderedListens.add(cleanupRoot);
   return {
     container,
     rerender: () => {
@@ -624,12 +697,7 @@ function renderListen(): RenderedListen {
         );
       });
     },
-    unmount: () => {
-      act(() => {
-        root.unmount();
-      });
-      container.remove();
-    },
+    unmount: cleanupRoot,
   };
 }
 
@@ -741,11 +809,6 @@ async function openTuningModal(container: ParentNode) {
   await click(tuningButton);
 }
 
-async function switchToExtrasTab(container: ParentNode) {
-  const tabToggle = getRequired<HTMLButtonElement>(container, "#tuning-tab-toggle");
-  await click(tabToggle);
-}
-
 describe("Listen route behavior", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", MockResizeObserver);
@@ -780,6 +843,16 @@ describe("Listen route behavior", () => {
       lastModified: 1234,
     });
     mockAppState.fileHandle = null;
+    mockAppState.mixQueue = [];
+    mockAppState.activeQueueIndex = -1;
+    mockAppState.mixAddSticky = false;
+    mockAppState.setMixAddSticky.mockReset();
+    mockAppState.addFilesToMixQueue.mockReset();
+    mockAppState.removeFromMixQueue.mockReset();
+    mockAppState.moveMixQueueItem.mockReset();
+    mockAppState.clearMixQueue.mockReset();
+    mockAppState.selectMixQueueIndex.mockReset();
+    mockAppState.updateMixQueueTrackMeta.mockReset();
     vi.mocked(setFileHandle).mockClear();
     mockAppState.setIsListenLoading.mockReset();
     mockAppState.isSettingsOpen = false;
@@ -823,10 +896,15 @@ describe("Listen route behavior", () => {
         render: () => Promise<AudioBuffer>,
       ) => render(),
     );
+    vi.mocked(renderSwingBuffer).mockClear();
+    vi.mocked(renderInstrumentalBuffer).mockClear();
     vi.mocked(renderSwingBuffer).mockResolvedValue({ duration: 4 } as AudioBuffer);
   });
 
   afterEach(() => {
+    for (const cleanupRoot of [...activeRenderedListens]) {
+      cleanupRoot();
+    }
     vi.useRealTimers();
     vi.unstubAllGlobals();
     delete (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT;
@@ -1204,12 +1282,8 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(
       getRequired<HTMLInputElement>(rendered.container, "#audio-mode-cowbell")
-    );
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
     );
 
     expect(rendered.container.textContent).toContain("Total Cowbells:");
@@ -1653,14 +1727,7 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
-    await click(
-      getRequired<HTMLButtonElement>(
-        rendered.container,
-        ".tuning-footer .tab-btn:last-child",
-      ),
-    );
 
     await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
     await click(
@@ -1685,14 +1752,7 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
-    await click(
-      getRequired<HTMLButtonElement>(
-        rendered.container,
-        ".tuning-footer .tab-btn:last-child",
-      ),
-    );
     await settleEffects();
 
     const exportWith = async (format: string) => {
@@ -1720,7 +1780,7 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("applies extras settings and updates title/url", async () => {
+  it("applies extras settings live and updates title/url", async () => {
     const rendered = renderListen();
     await settleEffects();
 
@@ -1729,31 +1789,12 @@ describe("Listen route behavior", () => {
       rendered.container,
       "#tuning-title-text"
     );
-    const tuningTitle = getRequired<HTMLHeadingElement>(
-      rendered.container,
-      "#tuning-title"
-    );
-    const tabToggle = getRequired<HTMLButtonElement>(
-      rendered.container,
-      "#tuning-tab-toggle"
-    );
-    const tabToggleLabel = getRequired<HTMLSpanElement>(
-      rendered.container,
-      "#tuning-tab-toggle-label"
-    );
     expect(titleText.textContent).toBe("Tuning");
-    expect(tuningTitle.classList.contains("is-extras-active")).toBe(false);
-    expect(tabToggle.classList.contains("hidden")).toBe(false);
-    expect(tabToggleLabel.textContent).toBe("Extras");
-    expect(tabToggle.getAttribute("aria-label")).toBe("Switch to Extras");
-
-    await switchToExtrasTab(rendered.container);
-    expect(titleText.textContent).toBe("Extras");
-    expect(tuningTitle.classList.contains("is-extras-active")).toBe(true);
-    expect(tabToggle.classList.contains("hidden")).toBe(false);
-    expect(tabToggleLabel.textContent).toBe("Tuning");
-    expect(tabToggle.getAttribute("aria-label")).toBe("Switch to Tuning");
-    expect(rendered.container.querySelector("#tuning-beta-tag")).toBeNull();
+    expect(rendered.container.querySelector("#tuning-tab-toggle")).toBeNull();
+    expect(rendered.container.querySelector("#tuning-panel-tuning")).not.toBeNull();
+    expect(rendered.container.querySelector("#tuning-panel-visuals")).not.toBeNull();
+    expect(rendered.container.querySelector("#tuning-panel-extras")).not.toBeNull();
+    expect(rendered.container.querySelector("#tuning-panel-advanced")).not.toBeNull();
 
     const branchStatsInput = getRequired<HTMLInputElement>(
       rendered.container,
@@ -1771,10 +1812,6 @@ describe("Listen route behavior", () => {
     );
     await click(daycoreInput);
 
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
-
     expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
     const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
     expect(playTitle.textContent).toContain("(daycore)");
@@ -1788,7 +1825,6 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     expect(rendered.container.querySelector("#audio-intensity")).toBeNull();
 
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-lofi"));
@@ -1800,10 +1836,6 @@ describe("Listen route behavior", () => {
       "#audio-intensity",
     );
     await changeRange(slider, "130");
-
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
 
     expect(window.location.search).toContain("am=nightcore");
     expect(window.location.search).toContain("ai=130");
@@ -1819,17 +1851,10 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
     await changeRange(
       getRequired<HTMLInputElement>(rendered.container, "#audio-intensity"),
       "150",
-    );
-    await click(
-      getRequired<HTMLButtonElement>(
-        rendered.container,
-        ".tuning-footer .tab-btn:last-child",
-      ),
     );
 
     await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
@@ -1857,11 +1882,7 @@ describe("Listen route behavior", () => {
     expect(playButton.getAttribute("aria-label")).toBe("Pause");
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
     await settleEffects();
 
     const engine = engineInstances[0];
@@ -1892,11 +1913,7 @@ describe("Listen route behavior", () => {
     expect(playButton.getAttribute("aria-label")).toBe("Pause");
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
     await settleEffects();
 
     const player = playerInstances.at(-1) as unknown as {
@@ -1925,11 +1942,7 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-    );
     await settleEffects();
 
     const player = playerInstances.at(-1) as unknown as {
@@ -1948,22 +1961,16 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
-    const clickApply = () =>
-      click(
-        getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-      );
-    await clickApply();
     await settleEffects();
     expect(getRequired<HTMLButtonElement>(rendered.container, "#viz-play").getAttribute("aria-label")).toBe(
       "Preparing Instrumental mode",
     );
 
-    // The playback controls are hidden while preparing; the shortcut still opens Extras.
+    // Close and reopen via E while preparing, then select another mode.
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#tuning-close"));
     await keydown("e", "KeyE");
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
-    await clickApply();
     await settleEffects();
 
     expect(vi.mocked(cancelInstrumentalRender)).toHaveBeenCalled();
@@ -1978,7 +1985,6 @@ describe("Listen route behavior", () => {
     const rendered = renderListen();
     await settleEffects();
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     expect(rendered.container.querySelector("#audio-mode-instrumental")).toBeNull();
     expect(rendered.container.querySelector("#audio-mode-swing")).not.toBeNull();
     rendered.unmount();
@@ -1991,26 +1997,14 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
     await changeRange(
       getRequired<HTMLInputElement>(rendered.container, "#audio-intensity"),
       "150",
     );
-    const clickApply = () =>
-      click(
-        getRequired<HTMLButtonElement>(
-          rendered.container,
-          ".tuning-footer .tab-btn:last-child",
-        ),
-      );
-    await clickApply();
     expect(window.location.search).toContain("ai=150");
 
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-swing"));
-    await clickApply();
     await settleEffects();
 
     const player = playerInstances.at(-1) as unknown as {
@@ -2020,8 +2014,6 @@ describe("Listen route behavior", () => {
     expect(window.location.search).not.toContain("am=");
     expect(window.location.search).not.toContain("ai=");
 
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-nightcore"));
     const slider = getRequired<HTMLInputElement>(
       rendered.container,
@@ -2064,12 +2056,9 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-    );
     await settleEffects();
+    (document.activeElement as HTMLElement | null)?.blur?.();
 
     await keydown(" ", "Space");
     expect(rendered.container.textContent).toContain("Preparing Instrumental mode...");
@@ -2092,11 +2081,7 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-instrumental"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-    );
     await settleEffects();
     vi.mocked(cancelInstrumentalRender).mockClear();
 
@@ -2126,7 +2111,7 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("opens extras tab with E keyboard shortcut", async () => {
+  it("opens inline tuning panel with E keyboard shortcut", async () => {
     const rendered = renderListen();
     await settleEffects();
 
@@ -2136,22 +2121,7 @@ describe("Listen route behavior", () => {
       rendered.container,
       "#tuning-title-text"
     );
-    expect(titleText.textContent).toBe("Extras");
-    const tuningTitle = getRequired<HTMLHeadingElement>(
-      rendered.container,
-      "#tuning-title"
-    );
-    expect(tuningTitle.classList.contains("is-extras-active")).toBe(true);
-    const tabToggle = getRequired<HTMLButtonElement>(
-      rendered.container,
-      "#tuning-tab-toggle"
-    );
-    const tabToggleLabel = getRequired<HTMLSpanElement>(
-      rendered.container,
-      "#tuning-tab-toggle-label"
-    );
-    expect(tabToggle.classList.contains("hidden")).toBe(false);
-    expect(tabToggleLabel.textContent).toBe("Tuning");
+    expect(titleText.textContent).toBe("Tuning");
     const tuningPanel = getRequired<HTMLDivElement>(
       rendered.container,
       "#tuning-panel-tuning"
@@ -2160,14 +2130,8 @@ describe("Listen route behavior", () => {
       rendered.container,
       "#tuning-panel-extras"
     );
-    expect(tuningPanel.classList.contains("hidden")).toBe(true);
-    expect(extrasPanel.classList.contains("hidden")).toBe(false);
-    await click(tabToggle);
-    expect(titleText.textContent).toBe("Tuning");
-    expect(tuningTitle.classList.contains("is-extras-active")).toBe(false);
-    expect(tabToggleLabel.textContent).toBe("Extras");
     expect(tuningPanel.classList.contains("hidden")).toBe(false);
-    expect(extrasPanel.classList.contains("hidden")).toBe(true);
+    expect(extrasPanel.classList.contains("hidden")).toBe(false);
     rendered.unmount();
   });
 
@@ -2639,18 +2603,12 @@ describe("Listen route behavior", () => {
     expect(rendered.container.querySelector(".branch-stats-popup")).not.toBeNull();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     const branchStatsInput = getRequired<HTMLInputElement>(
       rendered.container,
       "#extras-enabled"
     );
     expect(branchStatsInput.checked).toBe(true);
     await click(branchStatsInput);
-    const applyButton = getRequired<HTMLButtonElement>(
-      rendered.container,
-      ".tuning-footer .tab-btn:last-child"
-    );
-    await click(applyButton);
 
     expect(rendered.container.querySelector(".branch-stats-popup")).toBeNull();
     rendered.unmount();
@@ -2685,60 +2643,25 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("resets only extras settings when reset is clicked from extras tab", async () => {
+  it("resets tuning and extras settings together when reset is clicked", async () => {
     const rendered = renderListen();
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
+    await changeRange(
+      getRequired<HTMLInputElement>(rendered.container, "#threshold"),
+      "40",
+    );
     await click(getRequired<HTMLInputElement>(rendered.container, "#extras-enabled"));
     await click(getRequired<HTMLInputElement>(rendered.container, "#bring-home-enabled"));
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
 
     expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
     expect(
       getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent
     ).toContain("(daycore)");
     expect(rendered.container.textContent).toContain("Bringing it on home");
-
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:first-child")
-    );
-
-    expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
-    expect(
-      getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent
-    ).not.toContain("(daycore)");
-    expect(rendered.container.textContent).not.toContain("Bringing it on home");
-    rendered.unmount();
-  });
-
-  it("preserves extras settings when reset is clicked from tuning tab", async () => {
-    const rendered = renderListen();
-    await settleEffects();
-
-    await openTuningModal(rendered.container);
-    await changeRange(
-      getRequired<HTMLInputElement>(rendered.container, "#tuning-panel-tuning input[type='range']"),
-      "40",
-    );
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
-
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
-    await click(getRequired<HTMLInputElement>(rendered.container, "#extras-enabled"));
-    await click(getRequired<HTMLInputElement>(rendered.container, "#bring-home-enabled"));
-    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
+    expect(window.location.search).toContain("am=daycore");
 
     const engine = engineInstances[0];
     if (!engine) {
@@ -2746,45 +2669,39 @@ describe("Listen route behavior", () => {
     }
     engine.clearDeletedEdges.mockClear();
 
-    await openTuningModal(rendered.container);
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:first-child")
-    );
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#tuning-reset"));
 
     expect(engine.clearDeletedEdges).toHaveBeenCalledTimes(1);
-    expect(rendered.container.querySelector(".tuning-footer")).toBeNull();
     expect(window.localStorage.getItem("fj-branch-stats-enabled")).toBe("1");
     expect(
       getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent
-    ).toContain("(daycore)");
-    expect(rendered.container.textContent).toContain("Bringing it on home");
-    expect(window.location.search).toContain("am=daycore");
+    ).not.toContain("(daycore)");
+    expect(rendered.container.textContent).not.toContain("Bringing it on home");
+    expect(window.location.search).not.toContain("am=daycore");
     rendered.unmount();
   });
 
-  it("hides reset on both tabs until a setting differs from defaults", async () => {
+  it("hides reset until a tuning or extras setting differs from defaults", async () => {
     const rendered = renderListen();
     await settleEffects();
-    const resetCount = () =>
-      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
+    const hasReset = () =>
+      rendered.container.querySelector("#tuning-reset") !== null;
 
     await openTuningModal(rendered.container);
-    expect(resetCount()).toBe(0);
+    expect(hasReset()).toBe(false);
     const threshold = getRequired<HTMLInputElement>(
       rendered.container,
-      "#tuning-panel-tuning input[type='range']",
+      "#threshold",
     );
     await changeRange(threshold, "40");
-    expect(resetCount()).toBe(1);
+    expect(hasReset()).toBe(true);
     await changeRange(threshold, "20");
-    expect(resetCount()).toBe(0);
+    expect(hasReset()).toBe(false);
 
-    await switchToExtrasTab(rendered.container);
-    expect(resetCount()).toBe(0);
     await click(getRequired<HTMLInputElement>(rendered.container, "#extras-enabled"));
-    expect(resetCount()).toBe(0);
+    expect(hasReset()).toBe(false);
     await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
-    expect(resetCount()).toBe(1);
+    expect(hasReset()).toBe(true);
     rendered.unmount();
   });
 
@@ -2795,10 +2712,10 @@ describe("Listen route behavior", () => {
     if (!engine) {
       throw new Error("Expected jukebox engine instance");
     }
-    const resetCount = () =>
-      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
+    const hasReset = () =>
+      rendered.container.querySelector("#tuning-reset") !== null;
     const closeButton = () =>
-      getRequired<HTMLButtonElement>(rendered.container, ".modal-close");
+      getRequired<HTMLButtonElement>(rendered.container, "#tuning-close");
 
     const graphSpy = vi.spyOn(engine as unknown as { getGraphState: () => unknown }, "getGraphState");
     graphSpy.mockReturnValue({
@@ -2808,7 +2725,7 @@ describe("Listen route behavior", () => {
       allEdges: [{ id: 3, deleted: true }],
     });
     await openTuningModal(rendered.container);
-    expect(resetCount()).toBe(1);
+    expect(hasReset()).toBe(true);
     await click(closeButton());
     graphSpy.mockRestore();
 
@@ -2818,27 +2735,7 @@ describe("Listen route behavior", () => {
       userAnchorEdgeId: 7,
     } as ReturnType<typeof engine.getVisualizationData>);
     await openTuningModal(rendered.container);
-    expect(resetCount()).toBe(1);
-    rendered.unmount();
-  });
-
-  it("keeps extras reset while an applied mode is deselected in the form", async () => {
-    const rendered = renderListen();
-    await settleEffects();
-    const resetCount = () =>
-      rendered.container.querySelectorAll(".tuning-footer .tab-btn").length - 1;
-
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
-    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-daycore"));
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
-
-    await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
-    await click(getRequired<HTMLInputElement>(rendered.container, "#audio-mode-off"));
-    expect(resetCount()).toBe(1);
+    expect(hasReset()).toBe(true);
     rendered.unmount();
   });
 
@@ -2847,17 +2744,11 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     const daycoreInput = getRequired<HTMLInputElement>(
       rendered.container,
       "#audio-mode-daycore"
     );
     await click(daycoreInput);
-    const applyButton = getRequired<HTMLButtonElement>(
-      rendered.container,
-      ".tuning-footer .tab-btn:last-child"
-    );
-    await click(applyButton);
 
     const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
     expect(playTitle.textContent).toContain("(daycore)");
@@ -2885,11 +2776,7 @@ describe("Listen route behavior", () => {
       await settleEffects();
 
       await openTuningModal(rendered.container);
-      await switchToExtrasTab(rendered.container);
       await click(getRequired<HTMLInputElement>(rendered.container, `#audio-mode-${mode}`));
-      await click(
-        getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-      );
       await settleEffects();
 
       const render = mode === "swing" ? renderSwingBuffer : renderInstrumentalBuffer;
@@ -2927,12 +2814,9 @@ describe("Listen route behavior", () => {
       const rendered = renderListen();
       await settleEffects();
 
-      // The playback controls are hidden while analyzing; the shortcut still opens Extras.
+      // The playback controls are hidden while analyzing; the shortcut still opens Tuning & Extras.
       await keydown("e", "KeyE");
       await click(getRequired<HTMLInputElement>(rendered.container, `#audio-mode-${mode}`));
-      await click(
-        getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-      );
       const render = mode === "swing" ? renderSwingBuffer : renderInstrumentalBuffer;
       expect(vi.mocked(render)).not.toHaveBeenCalled();
       expect(window.location.search).toContain(`am=${mode}`);
@@ -2973,9 +2857,6 @@ describe("Listen route behavior", () => {
 
       await keydown("e", "KeyE");
       await click(getRequired<HTMLInputElement>(rendered.container, `#audio-mode-${mode}`));
-      await click(
-        getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child"),
-      );
       expect(window.location.search).toContain(`am=${mode}`);
 
       const finishSecondAnalysis = holdNextAnalysis();
@@ -3008,38 +2889,25 @@ describe("Listen route behavior", () => {
     },
   );
 
-  it("keeps tuning changes unapplied when applying extras tab only", async () => {
+  it("live-updates tuning and extras controls without an Apply button", async () => {
     const rendered = renderListen();
     await settleEffects();
 
     await openTuningModal(rendered.container);
     const thresholdInput = getRequired<HTMLInputElement>(
       rendered.container,
-      '#tuning-panel-tuning input[type="range"]'
+      "#threshold",
     );
-    await act(async () => {
-      thresholdInput.value = "55";
-      thresholdInput.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await changeRange(thresholdInput, "55");
 
-    await switchToExtrasTab(rendered.container);
     const nightcoreInput = getRequired<HTMLInputElement>(
       rendered.container,
-      "#audio-mode-nightcore"
+      "#audio-mode-nightcore",
     );
     await click(nightcoreInput);
-    const applyButton = getRequired<HTMLButtonElement>(
-      rendered.container,
-      ".tuning-footer .tab-btn:last-child"
-    );
-    await click(applyButton);
 
-    await openTuningModal(rendered.container);
-    const thresholdValue = getRequired<HTMLSpanElement>(
-      rendered.container,
-      "#tuning-panel-tuning label:first-child .label-line span:last-child"
-    );
-    expect(thresholdValue.textContent).toBe("20");
+    expect(window.location.search).toContain("am=nightcore");
+    expect(thresholdInput.value).toBe("55");
     rendered.unmount();
   });
 
@@ -3053,21 +2921,8 @@ describe("Listen route behavior", () => {
       "#min-jump-distance",
     );
     expect(slider.value).toBe("0");
-    await act(async () => {
-      const valueSetter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      valueSetter?.call(slider, "4");
-      slider.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await changeRange(slider, "4");
     expect(slider.parentElement?.textContent).toContain(">30% of track");
-
-    const applyButton = getRequired<HTMLButtonElement>(
-      rendered.container,
-      ".tuning-footer .tab-btn:last-child",
-    );
-    await click(applyButton);
 
     expect(engineInstances[0]?.getConfig()).toEqual(
       expect.objectContaining({
@@ -3078,20 +2933,16 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("closes the tuning modal on Escape and restores focus", async () => {
+  it("closes the inline tuning panel from its close button", async () => {
     const rendered = renderListen();
     await settleEffects();
 
-    const tuningButton = getRequired<HTMLButtonElement>(rendered.container, "#tuning");
-    tuningButton.focus();
     await openTuningModal(rendered.container);
     const modal = getRequired<HTMLDivElement>(rendered.container, "#tuning-modal");
-    expect(modal.contains(document.activeElement)).toBe(true);
+    expect(modal.getAttribute("aria-modal")).toBe("false");
 
-    await keydown("Escape");
-
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#tuning-close"));
     expect(rendered.container.querySelector("#tuning-modal")).toBeNull();
-    expect(document.activeElement).toBe(tuningButton);
     rendered.unmount();
   });
 
@@ -3104,7 +2955,6 @@ describe("Listen route behavior", () => {
     expect(playTitle.textContent).toContain("(8-bit)");
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     const eightBitInput = getRequired<HTMLInputElement>(
       rendered.container,
       "#audio-mode-eight-bit"
@@ -3122,7 +2972,6 @@ describe("Listen route behavior", () => {
     expect(playTitle.textContent).toContain("(cathedral)");
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     const cathedralInput = getRequired<HTMLInputElement>(
       rendered.container,
       "#audio-mode-cathedral"
@@ -3137,7 +2986,6 @@ describe("Listen route behavior", () => {
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    await switchToExtrasTab(rendered.container);
     const metronomeInput = getRequired<HTMLInputElement>(
       rendered.container,
       "#audio-mode-metronome"
@@ -3161,17 +3009,335 @@ describe("Listen route behavior", () => {
     await changeRange(volSlider, "160");
     await changeRange(tsSlider, "2");
     await changeRange(offsetSlider, "2");
-    await click(
-      getRequired<HTMLButtonElement>(rendered.container, ".tuning-footer .tab-btn:last-child")
-    );
 
     const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
     expect(playTitle.textContent).toContain("(metronome)");
-    expect(metronomeOverlayInstances[0]?.enable).toHaveBeenCalledTimes(1);
+    expect(metronomeOverlayInstances[0]?.enable).toHaveBeenCalled();
     expect(metronomeOverlayInstances[0]?.setMetronomeVolumePct).toHaveBeenCalledWith(160);
     expect(metronomeOverlayInstances[0]?.setBeatsPerBarOverride).toHaveBeenCalledWith(3);
     expect(metronomeOverlayInstances[0]?.setBeatOffset).toHaveBeenCalledWith(2);
     rendered.unmount();
   });
 
+  it("updates visual preferences, smooth BPM bar, and upcoming branch lookahead", async () => {
+    const rendered = renderListen();
+    await settleEffects();
+
+    const controller = jukeboxControllerInstances[0];
+    const engine = engineInstances[0];
+    if (!controller || !engine) {
+      throw new Error("Expected controller and engine instances");
+    }
+    vi.spyOn(engine, "getPredictedJumps").mockReturnValue([1]);
+
+    await openTuningModal(rendered.container);
+    await click(getRequired<HTMLInputElement>(rendered.container, "#use-square-beats"));
+    await click(getRequired<HTMLInputElement>(rendered.container, "#use-alt-seek-shape"));
+    expect(controller.setVisualPreferences).toHaveBeenLastCalledWith({
+      visualEffectMode: "0",
+      useSquareBeats: true,
+      useAltSeekShape: true,
+    });
+
+    await changeSelect(
+      getRequired<HTMLSelectElement>(rendered.container, "#bpm-bar-style"),
+      "smooth",
+    );
+    expect(rendered.container.querySelector("#bpm-bar-smooth")).not.toBeNull();
+
+    await click(getRequired<HTMLInputElement>(rendered.container, "#branch-lookahead-toggle"));
+    expect(controller.setPredictedJumps).toHaveBeenLastCalledWith([1]);
+
+    // Trigger a beat update and verify BPM bar animates without forcing a React commit.
+    await act(async () => {
+      engine.emitUpdate({
+        beatsPlayed: 1,
+        currentBeatIndex: 0,
+        currentTime: 0.2,
+        curRandomBranchChance: 0.32,
+        lastJumped: false,
+        lastJumpFromIndex: null,
+        lastJumpToIndex: null,
+      });
+    });
+    const smoothFill = getRequired<HTMLSpanElement>(
+      rendered.container,
+      "#bpm-bar-smooth-fill",
+    );
+    expect(smoothFill.classList.contains("is-animating")).toBe(true);
+    expect(getRequired<HTMLSpanElement>(rendered.container, "#branch-chance").textContent).toBe(
+      "32%",
+    );
+    rendered.unmount();
+  });
+
+  it("opens MixQueueModal when clicking Mix Songs with fewer than 2 queued tracks and enables multi-track mixing when 2+ tracks are queued", async () => {
+    const songTwo = new File([new Uint8Array([4, 5, 6])], "track-two.wav", {
+      lastModified: 5678,
+    });
+    mockAppState.mixQueue = [
+      {
+        id: "q-1",
+        file: mockAppState.file,
+        fileHandle: null,
+        title: "Track One",
+      },
+    ];
+
+    const rendered = renderListen();
+    await settleEffects();
+
+    const queueBtn = getRequired<HTMLButtonElement>(
+      rendered.container,
+      "#playlist-open",
+    );
+    await click(queueBtn);
+    expect(rendered.container.querySelector("#playlist-modal")).not.toBeNull();
+    await click(getRequired<HTMLButtonElement>(rendered.container, "#playlist-close"));
+    expect(rendered.container.querySelector("#playlist-modal")).toBeNull();
+
+    const mixBtn = getRequired<HTMLButtonElement>(
+      rendered.container,
+      "#multi-track-mix-toggle",
+    );
+    expect(mixBtn.textContent).toBe("Mix Songs");
+    await click(mixBtn);
+    expect(mockAppState.setMixAddSticky).toHaveBeenCalledWith(true);
+
+    // Queue a second track and trigger Multi-Track Mix.
+    mockAppState.mixQueue = [
+      {
+        id: "q-1",
+        file: mockAppState.file,
+        fileHandle: null,
+        title: "Track One",
+        fingerprint: "fp-1",
+      },
+      {
+        id: "q-2",
+        file: songTwo,
+        fileHandle: null,
+        title: "Track Two",
+        fingerprint: "fp-2",
+      },
+    ];
+    rendered.rerender();
+
+    const merged = {
+      ...mockAnalysis,
+      beats: [
+        { ...mockAnalysis.beats[0], which: 0, localWhich: 0, trackIndex: 0 },
+        { ...mockAnalysis.beats[1], which: 1, localWhich: 0, trackIndex: 1 },
+      ],
+      tracks: [
+        {
+          id: "0",
+          title: "Track One",
+          start: 0,
+          duration: 4,
+          beatCount: 1,
+          beatStart: 0,
+          tempo: 120,
+        },
+        {
+          id: "1",
+          title: "Track Two",
+          start: 4,
+          duration: 4,
+          beatCount: 1,
+          beatStart: 1,
+          tempo: 120,
+        },
+      ],
+      beatCount: 2,
+    };
+    const resolveSpy = vi.spyOn(localMix, "resolveLocalMixSources").mockResolvedValue([
+      {
+        id: "q-1",
+        fingerprint: "fp-1",
+        title: "Track One",
+        analysis: mockAnalysis as never,
+        audioBuffer: { duration: 4 } as AudioBuffer,
+        tempo: 120,
+        file: mockAppState.file!,
+        fileHandle: null,
+      },
+      {
+        id: "q-2",
+        fingerprint: "fp-2",
+        title: "Track Two",
+        analysis: mockAnalysis as never,
+        audioBuffer: { duration: 4 } as AudioBuffer,
+        tempo: 120,
+        file: songTwo,
+        fileHandle: null,
+      },
+    ]);
+    const buildSpy = vi.spyOn(localMix, "buildJukeboxMix").mockReturnValue({
+      combined: {
+        buffer: { duration: 8 } as AudioBuffer,
+        sliceDurations: [4, 4],
+        appliedGains: [1, 1],
+      },
+      mergedAnalysis: merged as never,
+      resolvedGainsPct: [100, 100],
+      resolvedTrackOffsets: [0, 0],
+    });
+
+    try {
+      await click(
+        getRequired<HTMLButtonElement>(rendered.container, "#multi-track-mix-toggle"),
+      );
+      await settleEffects();
+
+      expect(mixBtn.textContent).toBe("Unmix Songs");
+      expect(
+        getRequired<HTMLDivElement>(rendered.container, ".play-title").textContent,
+      ).toContain("Track One × Track Two");
+
+      await openTuningModal(rendered.container);
+      expect(rendered.container.querySelector("#tuning-panel-multi")).not.toBeNull();
+      await click(getRequired<HTMLInputElement>(rendered.container, "#cross-track-only"));
+
+      await click(mixBtn);
+      await settleEffects();
+      expect(mixBtn.textContent).toBe("Mix Songs");
+      expect(rendered.container.querySelector("#tuning-panel-multi")).toBeNull();
+    } finally {
+      resolveSpy.mockRestore();
+      buildSpy.mockRestore();
+    }
+    rendered.unmount();
+  });
+
+  it("supports 2-song and 4-voice quad Autocanonizer mixing, pan/gain reset, and dual export", async () => {
+    const songTwo = new File([new Uint8Array([4, 5, 6])], "track-two.wav", {
+      lastModified: 5678,
+    });
+    const mainDualBuf = { duration: 4, tag: "main-dual" } as unknown as AudioBuffer;
+    const otherDualBuf = { duration: 4, tag: "other-dual" } as unknown as AudioBuffer;
+
+    mockAppState.mixQueue = [
+      {
+        id: "q-1",
+        file: mockAppState.file,
+        fileHandle: null,
+        title: "Song A",
+        fingerprint: "fp-a",
+      },
+      {
+        id: "q-2",
+        file: songTwo,
+        fileHandle: null,
+        title: "Song B",
+        fingerprint: "fp-b",
+      },
+    ];
+
+    const resolveSpy = vi.spyOn(localMix, "resolveLocalMixSources").mockResolvedValue([
+      {
+        id: "q-1",
+        fingerprint: "fp-a",
+        title: "Song A",
+        analysis: mockAnalysis as never,
+        audioBuffer: mainDualBuf,
+        tempo: 120,
+        file: mockAppState.file!,
+        fileHandle: null,
+      },
+      {
+        id: "q-2",
+        fingerprint: "fp-b",
+        title: "Song B",
+        analysis: mockAnalysis as never,
+        audioBuffer: otherDualBuf,
+        tempo: 120,
+        file: songTwo,
+        fileHandle: null,
+      },
+    ]);
+    const canonizerMixSpy = vi.spyOn(localMix, "buildAutocanonizerMix").mockReturnValue({
+      prepared: {
+        mainBuffer: mainDualBuf,
+        otherBuffer: otherDualBuf,
+        mainDurationSec: 4,
+        otherDurationSec: 4,
+        appliedOtherGain: 1,
+      },
+      otherTempoRatio: 1,
+    });
+
+    try {
+      const rendered = renderListen();
+      await settleEffects();
+
+      await changeSelect(
+        getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+        "autocanonizer",
+      );
+      const canonizer = autocanonizerInstances[0];
+      if (!canonizer) {
+        throw new Error("Expected autocanonizer instance");
+      }
+      canonizer.getAudioBuffers.mockReturnValue({
+        mainBuffer: mainDualBuf,
+        otherBuffer: otherDualBuf,
+      });
+
+      const mixBtn = getRequired<HTMLButtonElement>(
+        rendered.container,
+        "#multi-track-mix-toggle",
+      );
+      expect(mixBtn.textContent).toBe("Mix 2 Songs");
+      await click(mixBtn);
+      await settleEffects();
+
+      expect(mixBtn.textContent).toBe("Unmix Songs");
+      expect(canonizer.setDualAudio).toHaveBeenCalled();
+      expect(canonizer.setDualAnalysis).toHaveBeenCalled();
+      expect(
+        getRequired<HTMLButtonElement>(rendered.container, "#canonizer-mix-swap"),
+      ).not.toBeNull();
+
+      await click(
+        getRequired<HTMLButtonElement>(rendered.container, "#canonizer-quad-toggle"),
+      );
+      expect(canonizer.setQuadMode).toHaveBeenLastCalledWith(true);
+
+      await click(
+        getRequired<HTMLButtonElement>(rendered.container, "#autocanonizer-pan-button"),
+      );
+      await changeRange(
+        getRequired<HTMLInputElement>(rendered.container, "#autocanonizer-pink-pan"),
+        "-50",
+      );
+      expect(canonizer.setQuadStreamPans).toHaveBeenCalled();
+
+      await click(
+        getRequired<HTMLButtonElement>(rendered.container, "#autocanonizer-balance-reset"),
+      );
+      expect(canonizer.setStreamPans).toHaveBeenLastCalledWith(0, 0);
+      expect(canonizer.setQuadStreamPans).toHaveBeenLastCalledWith(0, 0);
+
+      await click(getRequired<HTMLButtonElement>(rendered.container, "#track-audio-export"));
+      await click(
+        getRequired<HTMLButtonElement>(
+          rendered.container,
+          ".modal-footer .tab-btn:last-child",
+        ),
+      );
+      await settleEffects();
+
+      expect(exportMocks.exportCanonizerAudio).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceBuffer: mainDualBuf,
+          otherSourceBuffer: otherDualBuf,
+        }),
+      );
+      rendered.unmount();
+    } finally {
+      resolveSpy.mockRestore();
+      canonizerMixSpy.mockRestore();
+    }
+  });
 });

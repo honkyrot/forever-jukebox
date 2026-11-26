@@ -22,7 +22,11 @@ import {
   renderInstrumentalBuffer,
 } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import { isStoredCopy } from "@forever-jukebox/shared/audio/renderedTrackCache";
-import { isCustomAnchorEdge, type JukeboxEngine } from "@forever-jukebox/shared";
+import {
+  isCustomAnchorEdge,
+  type JukeboxEngine,
+  type TrackAnalysis,
+} from "@forever-jukebox/shared";
 import type { CanonizerRenderPlan } from "@forever-jukebox/shared/autocanonizer/canonizerRenderPlan";
 import type { WubMachineRender } from "@forever-jukebox/shared/wubmachine/wubMachineRender";
 import { createSessionSeed, waitForNextPaint } from "./browser";
@@ -48,6 +52,7 @@ function exportFileSuffix(isWubMachine: boolean, isCanonizer: boolean) {
 export function useAudioExport({
   file,
   analysis,
+  activeAnalysis,
   analysisRef,
   playerRef,
   engineRef,
@@ -57,15 +62,21 @@ export function useAudioExport({
   metronomeVolumePct,
   metronomeBeatsPerBar,
   metronomeBeatOffset,
+  multiTrackEnabled = false,
+  mixTrackGainsPct,
+  postMixNormalizeVolumeEnabled = false,
+  exportTitleOverride = null,
   getSourceIdentity,
   getRenderedTrackId,
   getCanonizerRenderPlan,
+  getCanonizerBuffers,
   getWubMachineRender,
   renderWubMachine,
   t,
 }: {
   file: File | null;
   analysis: AnalysisOutput | null;
+  activeAnalysis?: AnalysisOutput | TrackAnalysis | null;
   analysisRef: React.MutableRefObject<AnalysisOutput | null>;
   playerRef: React.MutableRefObject<BufferedAudioPlayer | null>;
   engineRef: React.MutableRefObject<JukeboxEngine | null>;
@@ -75,11 +86,20 @@ export function useAudioExport({
   metronomeVolumePct?: number;
   metronomeBeatsPerBar?: number | null;
   metronomeBeatOffset?: number;
+  multiTrackEnabled?: boolean;
+  mixTrackGainsPct?: readonly number[];
+  postMixNormalizeVolumeEnabled?: boolean;
+  exportTitleOverride?: string | null;
   getSourceIdentity: () => string | null;
   // Rendered copies are stored by analysis fingerprint, like cached analysis.
   getRenderedTrackId: () => string | null;
   // The loaded track's canon as it would play from the top right now.
   getCanonizerRenderPlan: () => CanonizerRenderPlan | null;
+  // Returns the main and optional secondary buffers for dual/quad canon export.
+  getCanonizerBuffers?: () => {
+    mainBuffer: AudioBuffer | null;
+    otherBuffer: AudioBuffer | null;
+  };
   // The loaded track's Wub Machine remix, if it has been rendered.
   getWubMachineRender: () => WubMachineRender | null;
   // Renders it, storing a copy under the track unless told not to.
@@ -130,10 +150,10 @@ export function useAudioExport({
   };
 
   const onExportJukeboxAudio = async () => {
-    const activeAnalysis = analysisRef.current ?? analysis;
+    const resolvedAnalysis = activeAnalysis ?? analysisRef.current ?? analysis;
     const player = playerRef.current;
     const engine = engineRef.current;
-    if (!activeAnalysis || !player || !engine || !file) {
+    if (!resolvedAnalysis || !player || !engine || !file) {
       return;
     }
 
@@ -166,8 +186,9 @@ export function useAudioExport({
 
     const requestedExtension = exportForm.format;
     const exportSuffix = exportFileSuffix(isWubMachine, isCanonizer);
+    const exportBaseName = exportTitleOverride?.trim() || file.name;
     const requestedFilename = buildAudioExportName(
-      file.name,
+      exportBaseName,
       requestedExtension,
       exportSuffix,
     );
@@ -239,8 +260,10 @@ export function useAudioExport({
           onProgress: (progress) => setExportProgress(progress),
         });
       } else if (canonizerPlan) {
+        const canonizerBuffers = getCanonizerBuffers?.();
         result = await exportCanonizerAudio({
-          sourceBuffer,
+          sourceBuffer: canonizerBuffers?.mainBuffer ?? sourceBuffer,
+          otherSourceBuffer: canonizerBuffers?.otherBuffer ?? null,
           plan: canonizerPlan,
           format: exportForm.format,
           bitrateKbps:
@@ -284,14 +307,14 @@ export function useAudioExport({
         );
         if (existingSwingBuffer) {
           renderedBuffer = existingSwingBuffer;
-        } else if (activeAnalysis.beats.length > 0) {
+        } else if (resolvedAnalysis.beats.length > 0) {
           setExportProgress({
             stage: "rendering",
             message: { kind: "preparingSwing" },
             percent: 2,
           });
           const renderSwing = (trackId: string | null) =>
-            renderSwingBuffer(sourceBuffer, activeAnalysis.beats, {
+            renderSwingBuffer(sourceBuffer, resolvedAnalysis.beats, {
               trackId,
               onProgress: (progress) => {
                 setExportProgress({
@@ -322,7 +345,7 @@ export function useAudioExport({
       const anchorEdge = engine.getUserAnchorEdge();
 
       result = await exportJukeboxAudio({
-        analysis: activeAnalysis,
+        analysis: resolvedAnalysis,
         sourceBuffer,
         config: engine.getConfig(),
         deletedEdges,
@@ -343,6 +366,11 @@ export function useAudioExport({
         metronomeBeatsPerBar,
         metronomeBeatOffset,
         sectionStartBeatIndices: engine.getSectionStartBeatIndices(),
+        trackGains: multiTrackEnabled
+          ? mixTrackGainsPct?.map((pct) => pct / 100)
+          : undefined,
+        postMixNormalization:
+          multiTrackEnabled && postMixNormalizeVolumeEnabled,
         renderedBuffer,
         randomMode: "seeded",
         seed: createSessionSeed(),
@@ -351,7 +379,11 @@ export function useAudioExport({
       }
 
       const extension = result.extension;
-      const filename = buildAudioExportName(file.name, extension, exportSuffix);
+      const filename = buildAudioExportName(
+        exportBaseName,
+        extension,
+        exportSuffix,
+      );
       const description =
         extension === "mp3"
           ? t("export.mp3Description")

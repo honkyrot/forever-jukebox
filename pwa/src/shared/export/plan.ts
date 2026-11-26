@@ -1,6 +1,7 @@
 import type { AnalysisOutput } from "@/shared/analysis-schema/schema";
 import {
   buildJumpGraph,
+  calculateMaxLongBranch,
   calculateMinLongBranch,
   createCustomAnchorEdge,
   createRng,
@@ -12,6 +13,8 @@ import {
   type JukeboxGraphState,
   type QuantumBase,
   type RandomMode,
+  type Segment,
+  type TrackAnalysis,
   type UserAnchorSelection,
 } from "@forever-jukebox/shared";
 
@@ -32,10 +35,11 @@ export interface PlannedJukeboxSegment {
   beatIndex: number;
   jumped: boolean;
   jumpFromIndex: number | null;
+  trackIndex?: number;
 }
 
 export interface PlanJukeboxPathOptions {
-  analysis: AnalysisOutput;
+  analysis: AnalysisOutput | TrackAnalysis;
   bufferDurationSeconds: number;
   durationSeconds: number;
   config: JukeboxConfig;
@@ -48,6 +52,97 @@ export interface PlanJukeboxPathOptions {
 export interface PlannedJukeboxPath {
   segments: PlannedJukeboxSegment[];
   renderDurationSeconds: number;
+}
+
+function isMergedMultiTrackAnalysis(
+  data: AnalysisOutput | TrackAnalysis,
+): data is TrackAnalysis {
+  const candidate = data as Partial<TrackAnalysis>;
+  return (
+    Array.isArray(candidate.tracks) &&
+    candidate.tracks.length >= 2 &&
+    Array.isArray(candidate.beats) &&
+    Array.isArray(candidate.segments)
+  );
+}
+
+/**
+ * Clones a pre-merged multi-track TrackAnalysis with fresh graph edge lists
+ * and intact parent/child/segment links so planning never mutates live engine data.
+ */
+function cloneMergedTrackAnalysis(source: TrackAnalysis): TrackAnalysis {
+  const segmentMap = new Map<Segment, Segment>();
+  const segments: Segment[] = source.segments.map((seg) => {
+    const copy: Segment = {
+      ...seg,
+      pitches: [...seg.pitches],
+      timbre: [...seg.timbre],
+    };
+    segmentMap.set(seg, copy);
+    return copy;
+  });
+
+  const quantumMap = new Map<QuantumBase, QuantumBase>();
+  const cloneQuantumList = (list: QuantumBase[]): QuantumBase[] =>
+    list.map((q) => {
+      const copy: QuantumBase = {
+        start: q.start,
+        duration: q.duration,
+        confidence: q.confidence,
+        which: q.which,
+        trackIndex: q.trackIndex,
+        localWhich: q.localWhich,
+        trackBeatCount: q.trackBeatCount,
+        prev: null,
+        next: null,
+        indexInParent: q.indexInParent,
+        overlappingSegments: q.overlappingSegments.map(
+          (seg) => segmentMap.get(seg) ?? seg,
+        ),
+        oseg: q.oseg ? (segmentMap.get(q.oseg) ?? q.oseg) : q.oseg,
+        neighbors: [],
+        allNeighbors: [],
+      };
+      quantumMap.set(q, copy);
+      return copy;
+    });
+
+  const sections = cloneQuantumList(source.sections);
+  const bars = cloneQuantumList(source.bars);
+  const beats = cloneQuantumList(source.beats);
+  const tatums = cloneQuantumList(source.tatums);
+
+  const linkList = (origList: QuantumBase[], clonedList: QuantumBase[]) => {
+    for (let i = 0; i < clonedList.length; i += 1) {
+      const orig = origList[i];
+      const copy = clonedList[i];
+      copy.prev = i > 0 ? clonedList[i - 1] : null;
+      copy.next = i < clonedList.length - 1 ? clonedList[i + 1] : null;
+      if (orig.parent) {
+        copy.parent = quantumMap.get(orig.parent);
+      }
+      if (orig.children) {
+        copy.children = orig.children
+          .map((child) => quantumMap.get(child))
+          .filter((child): child is QuantumBase => Boolean(child));
+      }
+    }
+  };
+
+  linkList(source.sections, sections);
+  linkList(source.bars, bars);
+  linkList(source.beats, beats);
+  linkList(source.tatums, tatums);
+
+  return {
+    sections,
+    bars,
+    beats,
+    tatums,
+    segments,
+    track: source.track ? { ...source.track } : undefined,
+    tracks: source.tracks?.map((t) => ({ ...t })),
+  };
 }
 
 function edgeKey(src: number, dest: number) {
@@ -124,7 +219,9 @@ export function planJukeboxPath(options: PlanJukeboxPathOptions): PlannedJukebox
   const requestedDuration = sanitizeDuration(options.durationSeconds, 60);
   const bufferDuration = sanitizeDuration(options.bufferDurationSeconds, requestedDuration);
 
-  const normalized = normalizeAnalysis(options.analysis);
+  const normalized = isMergedMultiTrackAnalysis(options.analysis)
+    ? cloneMergedTrackAnalysis(options.analysis)
+    : normalizeAnalysis(options.analysis);
   const beats = normalized.beats;
   if (beats.length === 0) {
     throw new Error("Analysis contains no beats.");
@@ -135,6 +232,10 @@ export function planJukeboxPath(options: PlanJukeboxPathOptions): PlannedJukebox
     minLongBranch: calculateMinLongBranch(
       beats.length,
       options.config.minLongBranchPercent,
+    ),
+    maxLongBranch: calculateMaxLongBranch(
+      beats.length,
+      options.config.maxLongBranchPercent ?? 0,
     ),
   };
 
@@ -195,14 +296,16 @@ export function planJukeboxPath(options: PlanJukeboxPathOptions): PlannedJukebox
       break;
     }
 
-    segments.push({
+    const plannedSegment: PlannedJukeboxSegment = {
       outputStart: elapsed,
       sourceStart: beat.start,
       duration: segmentDuration,
       beatIndex: chosenIndex,
       jumped,
       jumpFromIndex,
-    });
+      ...(beat.trackIndex !== undefined ? { trackIndex: beat.trackIndex } : {}),
+    };
+    segments.push(plannedSegment);
 
     elapsed += segmentDuration;
     currentBeatIndex = chosenIndex;

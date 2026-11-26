@@ -489,4 +489,76 @@ describe("renderJukeboxAudio", () => {
       cowbellPanner ? connectsTo(cowbellPanner, context?.destination) : false,
     ).toBe(true);
   });
+
+  it("applies per-track gains and post-mix normalizer makeup gain when enabled", async () => {
+    const sr = 8000;
+    const directOut = await renderJukeboxAudio({
+      sourceBuffer: makeSourceBuffer([1, 1, 1, 1, 2, 2, 2, 2], sr),
+      segments: [
+        {
+          outputStart: 0,
+          sourceStart: 0,
+          duration: 4 / sr,
+          beatIndex: 0,
+          jumped: false,
+          jumpFromIndex: null,
+          trackIndex: 0,
+        },
+        {
+          outputStart: 4 / sr,
+          sourceStart: 4 / sr,
+          duration: 4 / sr,
+          beatIndex: 1,
+          jumped: false,
+          jumpFromIndex: null,
+          trackIndex: 1,
+        },
+      ],
+      durationSeconds: 8 / sr,
+      gain: 1,
+      trackGains: [0.25, 0.75],
+      postMixNormalization: false,
+    });
+    expect(Array.from(directOut.getChannelData(0))).toEqual([
+      0.25, 0.25, 0.25, 0.25, 1.5, 1.5, 1.5, 1.5,
+    ]);
+
+    await renderJukeboxAudio({
+      sourceBuffer: makeSourceBuffer(new Array(16).fill(1), sr),
+      segments: [
+        {
+          outputStart: 0,
+          sourceStart: 0,
+          duration: 8 / sr,
+          beatIndex: 0,
+          jumped: false,
+          jumpFromIndex: null,
+          trackIndex: 0,
+        },
+        {
+          outputStart: 8 / sr,
+          sourceStart: 8 / sr,
+          duration: 8 / sr,
+          beatIndex: 1,
+          jumped: false,
+          jumpFromIndex: null,
+          trackIndex: 1,
+        },
+      ],
+      durationSeconds: 16 / sr,
+      gain: 1,
+      trackGains: [0.5, 1.5],
+      postMixNormalization: true,
+    });
+
+    const context = MockOfflineAudioContext.last;
+    const assembled = context?.sources[0]?.buffer;
+    expect(assembled).toBeDefined();
+    expect(assembled?.getChannelData(0)[2]).toBeCloseTo(0.5);
+    expect(assembled?.getChannelData(0)[10]).toBeCloseTo(1.5);
+    const gainValues = (context?.gains ?? []).map((g) => g.gain.value);
+    expect(gainValues).toContain(1.6);
+    // Safety limiter is attached after the post-mix normalizer compressor.
+    expect((context?.compressors ?? []).length).toBeGreaterThanOrEqual(2);
+  });
 });

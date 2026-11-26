@@ -615,5 +615,10 @@ describe("AutocanonizerController", () => {
     expect(inner.beats.every((b) => inner.otherBeats.includes(b.gold!))).toBe(
       true,
     );
+
+    expect(controller.getAudioBuffers()).toEqual({ mainBuffer, otherBuffer });
+    const quadPlan = controller.planRender();
+    expect(quadPlan?.voices).toHaveLength(4);
+    expect(quadPlan?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 1, 1]);
   });
 });

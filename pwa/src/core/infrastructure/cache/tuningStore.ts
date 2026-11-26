@@ -1,4 +1,8 @@
 import {
+  clampMaxBranches,
+  clampTimeSignatureDenominator,
+  clampTimeSignatureNumerator,
+  clampTimeSignatureTrackOffset,
   DEFAULT_JUKEBOX_CONFIG,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
   formatAnchorParam,
@@ -13,8 +17,7 @@ import {
 // deleting an analysis (individually or via clear-all) also drops its tuning.
 const PREFIX = "fj-tuning:";
 
-// The subset of engine config that represents user tuning (everything except
-// the fixed structural limits maxBranches / maxBranchThreshold).
+// The subset of engine config that represents user tuning.
 type SavedTuningConfig = Pick<
   JukeboxConfig,
   | "currentThreshold"
@@ -25,7 +28,18 @@ type SavedTuningConfig = Pick<
   | "maxRandomBranchChance"
   | "randomBranchChanceDelta"
   | "minLongBranchPercent"
->;
+> &
+  Partial<
+    Pick<
+      JukeboxConfig,
+      | "maxBranches"
+      | "maxLongBranchPercent"
+      | "timeSignatureSimilarityRestrict"
+      | "timeSignatureSimilarityNumerator"
+      | "timeSignatureSimilarityDenominator"
+      | "timeSignatureTrackOffsets"
+    >
+  >;
 
 export type SavedTuning = {
   v: 1;
@@ -97,7 +111,7 @@ function normalizeConfig(raw: Record<string, unknown>): SavedTuningConfig {
       minRandomBranchChance,
     ];
   }
-  return {
+  const normalized: SavedTuningConfig = {
     currentThreshold: parsePinnedThreshold(raw.currentThreshold) ?? 0,
     justBackwards: boolOr(raw.justBackwards, defaults.justBackwards),
     justLongBranches: boolOr(raw.justLongBranches, defaults.justLongBranches),
@@ -120,6 +134,41 @@ function normalizeConfig(raw: Record<string, unknown>): SavedTuningConfig {
         ? Math.min(minLongBranchPercent, 100)
         : DEFAULT_MIN_LONG_BRANCH_PERCENT,
   };
+  if (typeof raw.maxBranches === "number" && Number.isFinite(raw.maxBranches)) {
+    normalized.maxBranches = clampMaxBranches(raw.maxBranches);
+  }
+  if (
+    typeof raw.maxLongBranchPercent === "number" &&
+    Number.isFinite(raw.maxLongBranchPercent)
+  ) {
+    const pct = Math.round(raw.maxLongBranchPercent);
+    normalized.maxLongBranchPercent = pct > 0 && pct < 100 ? pct : 0;
+  }
+  if (typeof raw.timeSignatureSimilarityRestrict === "boolean") {
+    normalized.timeSignatureSimilarityRestrict =
+      raw.timeSignatureSimilarityRestrict;
+  }
+  if (
+    typeof raw.timeSignatureSimilarityNumerator === "number" &&
+    Number.isFinite(raw.timeSignatureSimilarityNumerator)
+  ) {
+    normalized.timeSignatureSimilarityNumerator = clampTimeSignatureNumerator(
+      raw.timeSignatureSimilarityNumerator,
+    );
+  }
+  if (
+    typeof raw.timeSignatureSimilarityDenominator === "number" &&
+    Number.isFinite(raw.timeSignatureSimilarityDenominator)
+  ) {
+    normalized.timeSignatureSimilarityDenominator =
+      clampTimeSignatureDenominator(raw.timeSignatureSimilarityDenominator);
+  }
+  if (Array.isArray(raw.timeSignatureTrackOffsets)) {
+    normalized.timeSignatureTrackOffsets = raw.timeSignatureTrackOffsets
+      .filter((n): n is number => typeof n === "number" && Number.isFinite(n))
+      .map((n) => clampTimeSignatureTrackOffset(n));
+  }
+  return normalized;
 }
 
 export function loadTuning(fingerprint: string): SavedTuning | null {

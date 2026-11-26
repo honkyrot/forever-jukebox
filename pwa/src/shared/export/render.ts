@@ -1,9 +1,11 @@
 import {
   MODE_FILTER_Q,
   PAN_STEP,
+  POST_MIX_MAKEUP_GAIN,
   REVERB_SECONDS,
   audioModeNeedsLimiter,
   createBitcrusherCurve,
+  createPostMixNormalizer,
   createSafetyLimiter,
   getAudioModeSettings,
   renderBitcrushedBuffer,
@@ -27,6 +29,8 @@ export interface RenderJukeboxAudioOptions {
   audioMode?: JukeboxAudioMode;
   audioIntensityPct?: number;
   cowbellEvents?: CowbellRenderEvent[];
+  trackGains?: readonly number[];
+  postMixNormalization?: boolean;
   onProgress?: (progress: number) => void;
 }
 
@@ -75,6 +79,13 @@ export function clampGain(value: number): number {
     return 1;
   }
   return Math.max(0, Math.min(1, value));
+}
+
+function clampPostMixGain(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(0, Math.min(2, value));
 }
 
 function copySegment(
@@ -129,7 +140,14 @@ export async function renderJukeboxAudio(
   const sourceFrameLength = sourceTimelineSeconds * sampleRate;
   const mainGain = clampGain(options.gain);
   const hasCowbell = (options.cowbellEvents?.length ?? 0) > 0;
-  const needsOfflineGraph = audioMode !== "off" || hasCowbell;
+  const postMixNormalization = Boolean(options.postMixNormalization);
+  const hasBoostedTrackGain =
+    options.trackGains?.some((g) => Number.isFinite(g) && g > 1) ?? false;
+  const needsOfflineGraph =
+    audioMode !== "off" ||
+    hasCowbell ||
+    postMixNormalization ||
+    hasBoostedTrackGain;
   const assembled = createOutputBuffer(channels, sourceFrameLength, sampleRate);
 
   const targetSeconds = Math.max(0.001, sourceTimelineSeconds);
@@ -140,11 +158,15 @@ export async function renderJukeboxAudio(
 
   for (let i = 0; i < options.segments.length; i += 1) {
     const segment = options.segments[i];
+    const trackGain = clampPostMixGain(
+      options.trackGains?.[segment.trackIndex ?? 0],
+    );
+    const segmentGain = needsOfflineGraph ? trackGain : trackGain * mainGain;
     const frames = copySegment(
       options.sourceBuffer,
       assembled,
       segment,
-      needsOfflineGraph ? 1 : mainGain,
+      segmentGain,
     );
     renderedSeconds += frames / sampleRate;
 
@@ -172,6 +194,11 @@ export async function renderJukeboxAudio(
     durationSeconds: options.durationSeconds,
     gain: mainGain,
     cowbellEvents: options.cowbellEvents ?? [],
+    postMixNormalization,
+    needsSafetyLimiter:
+      audioModeNeedsLimiter(settings) ||
+      postMixNormalization ||
+      hasBoostedTrackGain,
   });
 }
 
@@ -181,6 +208,8 @@ async function renderModeGraph(options: {
   durationSeconds: number;
   gain: number;
   cowbellEvents: CowbellRenderEvent[];
+  postMixNormalization: boolean;
+  needsSafetyLimiter: boolean;
 }): Promise<AudioBuffer> {
   const channels = options.assembled.numberOfChannels;
   const sampleRate = options.assembled.sampleRate;
@@ -203,10 +232,23 @@ async function renderModeGraph(options: {
   const modeOutput = connectAudioModeChain(context, source, settings);
   const mainGain = context.createGain();
   mainGain.gain.value = options.gain;
-  modeOutput.connect(mainGain);
+  if (options.postMixNormalization) {
+    const normalizer = createPostMixNormalizer(context);
+    if (normalizer) {
+      const makeupGain = context.createGain();
+      makeupGain.gain.value = POST_MIX_MAKEUP_GAIN;
+      modeOutput.connect(normalizer);
+      normalizer.connect(makeupGain);
+      makeupGain.connect(mainGain);
+    } else {
+      modeOutput.connect(mainGain);
+    }
+  } else {
+    modeOutput.connect(mainGain);
+  }
   // Mirror live playback's output stage: modes that can sum peaks past 0dBFS
   // render through the safety limiter so the encoder doesn't hard-clip them.
-  const limiter = audioModeNeedsLimiter(settings)
+  const limiter = options.needsSafetyLimiter
     ? createSafetyLimiter(context)
     : null;
   const destination: AudioNode = limiter ?? context.destination;

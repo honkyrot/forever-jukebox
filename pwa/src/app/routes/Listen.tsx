@@ -1,6 +1,6 @@
 import React from "react";
 import "@/app/i18n";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { AnalysisWorkerClient } from "@/core/infrastructure/analysis/AnalysisWorkerClient";
 import { AudioDecoder } from "@/core/infrastructure/audio/AudioDecoder";
 import {
@@ -42,15 +42,26 @@ import {
   renderInstrumentalBuffer,
 } from "@forever-jukebox/shared/audio/instrumentalRenderer";
 import {
-  countTuningBranches,
   DEFAULT_JUKEBOX_CONFIG,
   DEFAULT_MIN_LONG_BRANCH_PERCENT,
+  DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
+  DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+  DEFAULT_TIME_SIGNATURE_NUMERATOR,
   Edge,
+  JukeboxEngine,
+  clampMaxBranches,
+  clampTimeSignatureDenominator,
+  clampTimeSignatureNumerator,
+  clampTimeSignatureTrackOffset,
+  countTuningBranches,
   findBackwardTwin,
   hasNonDefaultExtras,
   hasNonDefaultTuning,
   isCustomAnchorEdge,
-  JukeboxEngine,
+  normalizeTimeSignatureBranchMode,
+  type QuantumBase,
+  type TimeSignatureBranchMode,
+  type TrackAnalysis,
 } from "@forever-jukebox/shared";
 import {
   visualizationSeparatesPairedEdges,
@@ -58,13 +69,18 @@ import {
 import {
   createToastQueue,
 } from "@forever-jukebox/shared/ui/toastQueue";
-import { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import {
+  AutocanonizerController,
+  type AutocanonizerMixAlignmentMode,
+  type AutocanonizerQuadBranchMode,
+} from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import {
   renderWubMachineBuffer,
   type WubMachineRender,
 } from "@forever-jukebox/shared/wubmachine/wubMachineRender";
 import { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
+import type { VisualPreferences } from "@forever-jukebox/shared/viz/JukeboxViz";
 import { useAppState } from "../state/AppState";
 import { SymbolIcon } from "@/ui/components/SymbolIcon";
 import { useMarquee } from "./listen/useMarquee";
@@ -101,7 +117,6 @@ import {
 } from "./listen/labels";
 import {
   RANDOM_BRANCH_DELTA_PERCENT_SCALE,
-  tuneFormChanged,
   type ExtrasFormState,
   type TuneFormState,
 } from "./listen/tuning";
@@ -120,6 +135,7 @@ import {
 import { customAnchorLabels, useCustomAnchorEditor } from "./listen/useCustomAnchorEditor";
 import { ExportModal } from "./listen/ExportModal";
 import { InfoModal } from "./listen/InfoModal";
+import { MixQueueModal } from "./listen/MixQueueModal";
 import { PanPopover } from "./listen/PanPopover";
 import { PlayMenu } from "./listen/PlayMenu";
 import { SettingsModal } from "./listen/SettingsModal";
@@ -135,6 +151,67 @@ import { useFullscreenSession } from "./listen/useFullscreenSession";
 import { useListenHotkeys } from "./listen/useListenHotkeys";
 import { useSleepTimer } from "./listen/useSleepTimer";
 import { useVizPopovers } from "./listen/useVizPopovers";
+import {
+  BPM_CHANGE_CLEAR_TIMEOUT_MS,
+  clearBpmTrackerTrend,
+  createBpmTrackerState,
+  formatBpmText,
+  resolveEffectivePlaybackRate,
+  resolveLocalBeatBpm,
+  resolveTrackBaseTempoBpm,
+  stepBpmTracker,
+  type BpmBeatSample,
+  type BpmTrackerState,
+} from "./listen/liveBpm";
+import {
+  isSmoothBpmBarStyle,
+  normalizeBpmBarStyle,
+  normalizeBpmBarTimeSignatureMode,
+  resolveBpmBarActiveSegment,
+  resolveBpmBarSmoothAnimation,
+  resolveStoredBpmBarBeatOffsetForTrack,
+  resolveStoredBpmBarDenominator,
+  resolveStoredBpmBarNumerator,
+  resolveStoredBpmBarStyle,
+  resolveStoredBpmBarTimeSignatureMode,
+  storeBpmBarBeatOffsetForTrack,
+  storeBpmBarDenominator,
+  storeBpmBarNumerator,
+  storeBpmBarStyle,
+  storeBpmBarTimeSignatureMode,
+  type BpmBarPulseBeat,
+  type BpmBarStyle,
+  type BpmBarTimeSignatureInput,
+  type BpmBarTimeSignatureMode,
+} from "./listen/bpmBarTimeSignature";
+import {
+  clampBranchLookaheadCount,
+  resolveStoredBranchLookaheadCount,
+  resolveStoredBranchLookaheadEnabled,
+  storeBranchLookaheadCount,
+  storeBranchLookaheadEnabled,
+} from "./listen/branchLookahead";
+import {
+  resolveStoredAudioBalance,
+  storeAudioBalance,
+} from "./listen/audioBalance";
+import {
+  resolveStoredBpmBarEnabled,
+  resolveStoredVisualPreferences,
+  storeBpmBarEnabled,
+  storeVisualPreferences,
+} from "./listen/visualPreferences";
+import {
+  DEFAULT_MIX_TRACK_GAIN_PCT,
+  MAX_AUTOCANONIZER_MIX_TRACKS,
+  MAX_MIX_TRACKS,
+  buildAutocanonizerMix,
+  buildJukeboxMix,
+  clampMixTrackGainPct,
+  resolveLocalMixSources,
+  type LoadedLocalMixSource,
+} from "./listen/localMix";
+import type { AudioFileEntry } from "@/ui/components/DropZone";
 
 const VIZ_CLASS_NAMES: Record<PlayMode, string> = {
   jukebox: "",
@@ -142,21 +219,67 @@ const VIZ_CLASS_NAMES: Record<PlayMode, string> = {
   wubmachine: "is-wubmachine",
 };
 
+function createDefaultTuneForm(
+  volume: number,
+  highlightAnchorBranch: boolean,
+): TuneFormState {
+  return {
+    threshold: 0,
+    computedThreshold: 0,
+    crossThreshold: 0,
+    computedCrossThreshold: null,
+    maxBranches: DEFAULT_JUKEBOX_CONFIG.maxBranches,
+    minProb: Math.round(DEFAULT_JUKEBOX_CONFIG.minRandomBranchChance * 100),
+    maxProb: Math.round(DEFAULT_JUKEBOX_CONFIG.maxRandomBranchChance * 100),
+    ramp:
+      Math.round(
+        DEFAULT_JUKEBOX_CONFIG.randomBranchChanceDelta *
+          RANDOM_BRANCH_DELTA_PERCENT_SCALE *
+          10,
+      ) / 10,
+    volume,
+    highlightAnchorBranch,
+    justBackwards: DEFAULT_JUKEBOX_CONFIG.justBackwards,
+    minLongBranchPercent: 0,
+    maxLongBranchPercent: 100,
+    removeSequentialBranches: DEFAULT_JUKEBOX_CONFIG.removeSequentialBranches,
+  };
+}
+
 export function Listen({ isActive = true }: { isActive?: boolean }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const appState = useAppState();
   const {
     file,
     fileHandle,
     setIsListenLoading,
     isSettingsOpen,
     setIsSettingsOpen,
-  } = useAppState();
+  } = appState;
+  const mixQueue = appState.mixQueue ?? [];
+  const activeQueueIndex = appState.activeQueueIndex ?? -1;
+  const setMixAddSticky = appState.setMixAddSticky;
+  const addFilesToMixQueue = appState.addFilesToMixQueue;
+  const removeFromMixQueue = appState.removeFromMixQueue;
+  const moveMixQueueItem = appState.moveMixQueueItem;
+  const clearMixQueue = appState.clearMixQueue;
+  const selectMixQueueIndex = appState.selectMixQueueIndex;
+  const updateMixQueueTrackMeta = appState.updateMixQueueTrackMeta;
+
   const initialAudioMode = React.useMemo(() => resolveAudioModeFromUrl(), []);
   const initialAudioIntensity = React.useMemo(
     () => resolveAudioIntensityFromUrl(),
     [],
   );
+  const initialAudioBalance = React.useMemo(
+    () => resolveStoredAudioBalance(),
+    [],
+  );
+
   const [analysis, setAnalysis] = React.useState<AnalysisOutput | null>(null);
+  const [mergedAnalysis, setMergedAnalysis] =
+    React.useState<TrackAnalysis | null>(null);
   const [readyFileKey, setReadyFileKey] = React.useState<string | null>(null);
   const [progressStage, setProgressStage] = React.useState<AnalyzeStage>("loading");
   const [stageProgress, setStageProgress] = React.useState<number | null>(null);
@@ -166,8 +289,27 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [isRunning, setIsRunning] = React.useState(false);
   const [isPaused, setIsPaused] = React.useState(false);
   const [counters] = React.useState(createPlaybackCounters);
-  const [autocanonizerMainPan, setAutocanonizerMainPan] = React.useState(0);
-  const [autocanonizerOtherPan, setAutocanonizerOtherPan] = React.useState(0);
+  const [autocanonizerMainPan, setAutocanonizerMainPan] = React.useState(
+    initialAudioBalance.mainPan,
+  );
+  const [autocanonizerOtherPan, setAutocanonizerOtherPan] = React.useState(
+    initialAudioBalance.otherPan,
+  );
+  const [autocanonizerPinkPan, setAutocanonizerPinkPan] = React.useState(
+    initialAudioBalance.pinkPan,
+  );
+  const [autocanonizerGoldPan, setAutocanonizerGoldPan] = React.useState(
+    initialAudioBalance.goldPan,
+  );
+  const [autocanonizerMainGainPct, setAutocanonizerMainGainPct] =
+    React.useState(DEFAULT_MIX_TRACK_GAIN_PCT);
+  const [autocanonizerOtherGainPct, setAutocanonizerOtherGainPct] =
+    React.useState(DEFAULT_MIX_TRACK_GAIN_PCT);
+  const [autocanonizerPinkGainPct, setAutocanonizerPinkGainPct] =
+    React.useState(DEFAULT_MIX_TRACK_GAIN_PCT);
+  const [autocanonizerGoldGainPct, setAutocanonizerGoldGainPct] =
+    React.useState(DEFAULT_MIX_TRACK_GAIN_PCT);
+
   const [wubMachineDurationSeconds, setWubMachineDurationSeconds] =
     React.useState(0);
   const [loopTrack, setLoopTrack] = React.useState<boolean>(() =>
@@ -176,6 +318,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [selectedEdge, setSelectedEdge] = React.useState<Edge | null>(null);
   const [isTuningOpen, setIsTuningOpen] = React.useState(false);
   const [isInfoOpen, setIsInfoOpen] = React.useState(false);
+  const [isQueueOpen, setIsQueueOpen] = React.useState(false);
   const {
     sleepTimer,
     pendingSleepTimerDurationMs,
@@ -199,6 +342,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [audioIntensity, setAudioIntensity] = React.useState(
     initialAudioIntensity,
   );
+  const audioIntensityRef = React.useRef(initialAudioIntensity);
   const [metronomeVolumePct, setMetronomeVolumePct] = React.useState(
     DEFAULT_METRONOME_VOLUME_PCT,
   );
@@ -220,10 +364,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const [modelDownloaded, setModelDownloaded] = React.useState(false);
   // A failed or cancelled render hides the loading panel instead of playing it out.
   const [prepAborted, setPrepAborted] = React.useState(false);
-  const [tuningActiveTab, setTuningActiveTab] =
-    React.useState<TuningModalTab>("tuning");
-  const [tuneFormBaseline, setTuneFormBaseline] =
-    React.useState<TuneFormState | null>(null);
   const [tuningNonDefault, setTuningNonDefault] = React.useState(false);
   const [activeVizIndex, setActiveVizIndex] = React.useState(() =>
     resolveStoredVisualizationIndex(),
@@ -236,23 +376,96 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     resolveStoredFinishOutSong(),
   );
   const [initialVolume] = React.useState(resolveStoredVolume);
-  const [tuneForm, setTuneForm] = React.useState<TuneFormState>({
-    threshold: 0,
-    computedThreshold: 0,
-    minProb: Math.round(DEFAULT_JUKEBOX_CONFIG.minRandomBranchChance * 100),
-    maxProb: Math.round(DEFAULT_JUKEBOX_CONFIG.maxRandomBranchChance * 100),
-    ramp:
-      Math.round(
-        DEFAULT_JUKEBOX_CONFIG.randomBranchChanceDelta *
-          RANDOM_BRANCH_DELTA_PERCENT_SCALE *
-          10,
-      ) / 10,
-    volume: initialVolume,
-    highlightAnchorBranch,
-    justBackwards: DEFAULT_JUKEBOX_CONFIG.justBackwards,
-    minLongBranchPercent: 0,
-    removeSequentialBranches: DEFAULT_JUKEBOX_CONFIG.removeSequentialBranches,
-  });
+
+  // Visual preferences, BPM bar & lookahead state.
+  const [visualPreferences, setVisualPreferences] =
+    React.useState<VisualPreferences>(() => resolveStoredVisualPreferences());
+  const [bpmBarEnabled, setBpmBarEnabled] = React.useState<boolean>(() =>
+    resolveStoredBpmBarEnabled(),
+  );
+  const bpmBarEnabledRef = React.useRef(bpmBarEnabled);
+  const [bpmBarStyle, setBpmBarStyle] = React.useState<BpmBarStyle>(() =>
+    resolveStoredBpmBarStyle(),
+  );
+  const [bpmBarTimeSignatureMode, setBpmBarTimeSignatureMode] =
+    React.useState<BpmBarTimeSignatureMode>(() =>
+      resolveStoredBpmBarTimeSignatureMode(),
+    );
+  const [bpmBarNumerator, setBpmBarNumerator] = React.useState<number>(() =>
+    resolveStoredBpmBarNumerator(),
+  );
+  const [bpmBarDenominator, setBpmBarDenominator] = React.useState<number>(() =>
+    resolveStoredBpmBarDenominator(),
+  );
+  const [bpmBarBeatOffset, setBpmBarBeatOffset] = React.useState<number>(0);
+  const [branchLookaheadEnabled, setBranchLookaheadEnabled] =
+    React.useState<boolean>(() => resolveStoredBranchLookaheadEnabled());
+  const branchLookaheadEnabledRef = React.useRef(branchLookaheadEnabled);
+  const [branchLookaheadCount, setBranchLookaheadCount] = React.useState<number>(
+    () => resolveStoredBranchLookaheadCount(),
+  );
+  const branchLookaheadCountRef = React.useRef(branchLookaheadCount);
+
+  // Multi-track & Autocanonizer mix state.
+  const [multiTrackEnabled, setMultiTrackEnabled] = React.useState(false);
+  const multiTrackEnabledRef = React.useRef(false);
+  const [mixTracksMeta, setMixTracksMeta] = React.useState<
+    Array<{ title: string }>
+  >([]);
+  const [crossTrackOnly, setCrossTrackOnly] = React.useState(false);
+  const [coverSyncEnabled, setCoverSyncEnabled] = React.useState(false);
+  const [tempoSyncEnabled, setTempoSyncEnabled] = React.useState(true);
+  const [normalizeVolumeEnabled, setNormalizeVolumeEnabled] =
+    React.useState(false);
+  const [postMixNormalizeVolumeEnabled, setPostMixNormalizeVolumeEnabled] =
+    React.useState(false);
+  const [mixTrackGainsPct, setMixTrackGainsPct] = React.useState<number[]>([]);
+  const [timeSignatureBranchingEnabled, setTimeSignatureBranchingEnabled] =
+    React.useState(false);
+  const [timeSignatureBranchMode, setTimeSignatureBranchMode] =
+    React.useState<TimeSignatureBranchMode>(DEFAULT_TIME_SIGNATURE_BRANCH_MODE);
+  const [timeSignatureNumerator, setTimeSignatureNumerator] = React.useState(
+    DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  );
+  const [timeSignatureDenominator, setTimeSignatureDenominator] =
+    React.useState(DEFAULT_TIME_SIGNATURE_DENOMINATOR);
+  const [timeSignatureTrackOffsets, setTimeSignatureTrackOffsets] =
+    React.useState<number[]>([]);
+  const [
+    timeSignatureSimilarityRestrictEnabled,
+    setTimeSignatureSimilarityRestrictEnabled,
+  ] = React.useState(false);
+  const [timeSignatureSimilarityNumerator, setTimeSignatureSimilarityNumerator] =
+    React.useState(DEFAULT_TIME_SIGNATURE_NUMERATOR);
+  const [
+    timeSignatureSimilarityDenominator,
+    setTimeSignatureSimilarityDenominator,
+  ] = React.useState(DEFAULT_TIME_SIGNATURE_DENOMINATOR);
+
+  const [autocanonizerMixEnabled, setAutocanonizerMixEnabled] =
+    React.useState(false);
+  const autocanonizerMixEnabledRef = React.useRef(false);
+  const [autocanonizerMixAlignment, setAutocanonizerMixAlignment] =
+    React.useState<AutocanonizerMixAlignmentMode>("cover-sync");
+  const [autocanonizerQuadMode, setAutocanonizerQuadMode] =
+    React.useState(false);
+  const [autocanonizerQuadBranchMode, setAutocanonizerQuadBranchMode] =
+    React.useState<AutocanonizerQuadBranchMode>("synced");
+  const [autocanonizerMixTrackTitles, setAutocanonizerMixTrackTitles] =
+    React.useState<[string, string] | null>(null);
+  const [autocanonizerOtherDurationSec, setAutocanonizerOtherDurationSec] =
+    React.useState<number | null>(null);
+  const [mixTitleOverride, setMixTitleOverride] = React.useState<string | null>(
+    null,
+  );
+  const [mixDurationOverrideSec, setMixDurationOverrideSec] = React.useState<
+    number | null
+  >(null);
+  const [isMixing, setIsMixing] = React.useState(false);
+
+  const [tuneForm, setTuneForm] = React.useState<TuneFormState>(() =>
+    createDefaultTuneForm(initialVolume, highlightAnchorBranch),
+  );
   const [extrasForm, setExtrasForm] = React.useState<ExtrasFormState>({
     branchStatsEnabled: resolveStoredBranchStatsEnabled(),
     bringItHomeMode: false,
@@ -268,6 +481,38 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const vizLayerRef = React.useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = React.useRef<HTMLDivElement | null>(null);
   const wubMachineLayerRef = React.useRef<HTMLDivElement | null>(null);
+  const vizStatsRef = React.useRef<HTMLDivElement | null>(null);
+  const segmentRefs = React.useRef<Array<HTMLSpanElement | null>>([]);
+  const smoothFillRef = React.useRef<HTMLSpanElement | null>(null);
+  const bpmBarRuntimeRef = React.useRef<{
+    bpmBarConfig: BpmBarTimeSignatureInput | null;
+    bpmBarEnabled: boolean;
+    bpmBarStyle: BpmBarStyle;
+    isSmoothStyle: boolean;
+    playMode: PlayMode;
+  }>({
+    bpmBarConfig: null,
+    bpmBarEnabled: true,
+    bpmBarStyle: "pulse",
+    isSmoothStyle: false,
+    playMode: "jukebox",
+  });
+  const clearBpmBarPulse = React.useCallback(() => {
+    const el = vizStatsRef.current;
+    if (el) {
+      el.classList.remove("pulse");
+    }
+    for (const segEl of segmentRefs.current) {
+      segEl?.classList.remove("is-pulsing");
+    }
+    const fillEl = smoothFillRef.current;
+    if (fillEl) {
+      fillEl.classList.remove("is-animating", "is-downbeat");
+      fillEl.style.removeProperty("--bpm-bar-from");
+      fillEl.style.removeProperty("--bpm-bar-to");
+      fillEl.style.removeProperty("--bpm-bar-duration");
+    }
+  }, []);
   const vizControllerRef = React.useRef<JukeboxController | null>(null);
   const autocanonizerRef = React.useRef<AutocanonizerController | null>(null);
   const wubmachineRef = React.useRef<WubMachineController | null>(null);
@@ -275,6 +520,153 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const wubMachineRenderRef = React.useRef<WubMachineRender | null>(null);
   const wubMachineAbortRef = React.useRef<AbortController | null>(null);
   const engineRef = React.useRef<JukeboxEngine | null>(null);
+  const cachedMixSourcesRef = React.useRef<LoadedLocalMixSource[] | null>(null);
+  const cachedAutocanonizerMixSourcesRef = React.useRef<
+    [LoadedLocalMixSource, LoadedLocalMixSource] | null
+  >(null);
+  const mixLoadGenerationRef = React.useRef(0);
+
+  // Live BPM tracker refs.
+  const bpmTrackerRef = React.useRef<BpmTrackerState>(createBpmTrackerState());
+  const bpmTrendTimerRef = React.useRef<number | null>(null);
+  const trackTempoBpmRef = React.useRef<number | null>(null);
+
+  const clearBpmTrendTimer = React.useCallback(() => {
+    if (bpmTrendTimerRef.current !== null && typeof window !== "undefined") {
+      window.clearTimeout(bpmTrendTimerRef.current);
+    }
+    bpmTrendTimerRef.current = null;
+  }, []);
+
+  const commitBpmToCounters = React.useCallback(() => {
+    counters.set({
+      bpmText: formatBpmText(bpmTrackerRef.current.currentBpm),
+      bpmTrend: bpmTrackerRef.current.trend,
+    });
+  }, [counters]);
+
+  const scheduleBpmTrendClear = React.useCallback(() => {
+    clearBpmTrendTimer();
+    if (typeof window === "undefined") {
+      return;
+    }
+    bpmTrendTimerRef.current = window.setTimeout(() => {
+      bpmTrendTimerRef.current = null;
+      bpmTrackerRef.current = clearBpmTrackerTrend(bpmTrackerRef.current);
+      commitBpmToCounters();
+    }, BPM_CHANGE_CLEAR_TIMEOUT_MS);
+  }, [clearBpmTrendTimer, commitBpmToCounters]);
+
+  const applyLiveBpmSample = React.useCallback(
+    (rawBpm: number | null, advanceBeat: boolean) => {
+      const prev = bpmTrackerRef.current;
+      const next = stepBpmTracker(prev, rawBpm, { advanceBeat });
+      bpmTrackerRef.current = next;
+      if (next.trend === null) {
+        clearBpmTrendTimer();
+      } else if (
+        next.trend !== prev.trend ||
+        (next.currentBpm !== prev.currentBpm && next.beatsSinceChange === 0)
+      ) {
+        scheduleBpmTrendClear();
+      }
+      commitBpmToCounters();
+    },
+    [clearBpmTrendTimer, commitBpmToCounters, scheduleBpmTrendClear],
+  );
+
+  const resetLiveBpm = React.useCallback(
+    (baseTempoBpm?: number | null) => {
+      clearBpmTrendTimer();
+      const resolvedBase =
+        baseTempoBpm !== undefined ? baseTempoBpm : trackTempoBpmRef.current;
+      if (baseTempoBpm !== undefined) {
+        trackTempoBpmRef.current = baseTempoBpm;
+      }
+      const rate = resolveEffectivePlaybackRate(
+        playModeRef.current,
+        jukeboxAudioModeRef.current,
+        audioIntensityRef.current,
+      );
+      bpmTrackerRef.current = createBpmTrackerState(
+        resolvedBase !== null ? resolvedBase * rate : null,
+      );
+      commitBpmToCounters();
+    },
+    [clearBpmTrendTimer, commitBpmToCounters],
+  );
+
+  const updateLiveBpmForBeat = React.useCallback(
+    (
+      beat: BpmBeatSample | null | undefined,
+      options?: {
+        beats?: readonly BpmBeatSample[] | null;
+        beatIndex?: number | null;
+        playbackRate?: number | null;
+      },
+    ) => {
+      const localBpm =
+        resolveLocalBeatBpm(beat, options?.beats, options?.beatIndex) ??
+        trackTempoBpmRef.current;
+      const rate = resolveEffectivePlaybackRate(
+        playModeRef.current,
+        jukeboxAudioModeRef.current,
+        audioIntensityRef.current,
+        options?.playbackRate,
+      );
+      applyLiveBpmSample(localBpm !== null ? localBpm * rate : null, true);
+    },
+    [applyLiveBpmSample],
+  );
+
+  const syncLiveBpmForPlaybackRate = React.useCallback(
+    (playbackRate?: number | null) => {
+      const beats = vizDataRef.current?.beats;
+      const idx = lastBeatRef.current;
+      const activeBeat =
+        idx !== null && beats && idx >= 0 && idx < beats.length
+          ? beats[idx]
+          : undefined;
+      const baseBpm =
+        resolveLocalBeatBpm(activeBeat, beats, idx) ??
+        trackTempoBpmRef.current;
+      const rate = resolveEffectivePlaybackRate(
+        playModeRef.current,
+        jukeboxAudioModeRef.current,
+        audioIntensityRef.current,
+        playbackRate,
+      );
+      applyLiveBpmSample(baseBpm !== null ? baseBpm * rate : null, false);
+    },
+    [applyLiveBpmSample],
+  );
+
+  React.useEffect(() => {
+    return () => {
+      clearBpmTrendTimer();
+    };
+  }, [clearBpmTrendTimer]);
+
+  const syncPredictedJumps = React.useCallback(() => {
+    const controller = vizControllerRef.current;
+    const engine = engineRef.current;
+    if (!controller || typeof controller.setPredictedJumps !== "function") {
+      return;
+    }
+    if (
+      !branchLookaheadEnabledRef.current ||
+      playModeRef.current !== "jukebox" ||
+      !engine ||
+      typeof engine.getPredictedJumps !== "function"
+    ) {
+      controller.setPredictedJumps([]);
+      return;
+    }
+    controller.setPredictedJumps(
+      engine.getPredictedJumps(branchLookaheadCountRef.current),
+    );
+  }, []);
+
   const customAnchor = useCustomAnchorEditor({
     engineRef,
     vizControllerRef,
@@ -282,6 +674,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     onAnchorChanged: () => {
       syncVizDataFromEngine();
       syncTuneFormFromEngine();
+      syncPredictedJumps();
       persistCurrentTuning();
     },
   });
@@ -302,8 +695,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   > | null>(null);
   const lastBeatRef = React.useRef<number | null>(null);
   const lastCowbellBeatsPlayedRef = React.useRef<number | null>(null);
-  const autocanonizerMainPanRef = React.useRef(0);
-  const autocanonizerOtherPanRef = React.useRef(0);
+  const autocanonizerMainPanRef = React.useRef(initialAudioBalance.mainPan);
+  const autocanonizerOtherPanRef = React.useRef(initialAudioBalance.otherPan);
+  const autocanonizerPinkPanRef = React.useRef(initialAudioBalance.pinkPan);
+  const autocanonizerGoldPanRef = React.useRef(initialAudioBalance.goldPan);
   const renderTokenRef = React.useRef(0);
   const preparingModeRef = React.useRef<PreparingAudioMode>(null);
   const playTimerMsRef = React.useRef(0);
@@ -343,6 +738,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   } = useAudioExport({
     file,
     analysis,
+    activeAnalysis: multiTrackEnabled ? (mergedAnalysis ?? analysis) : analysis,
     analysisRef,
     playerRef,
     engineRef,
@@ -352,9 +748,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     metronomeVolumePct,
     metronomeBeatsPerBar,
     metronomeBeatOffset,
+    multiTrackEnabled,
+    mixTrackGainsPct,
+    postMixNormalizeVolumeEnabled,
+    exportTitleOverride: mixTitleOverride,
     getSourceIdentity: getCurrentSourceIdentity,
     getRenderedTrackId: () => fingerprintRef.current,
     getCanonizerRenderPlan: () => autocanonizerRef.current?.planRender() ?? null,
+    getCanonizerBuffers: () =>
+      autocanonizerRef.current?.getAudioBuffers?.() ?? {
+        mainBuffer: null,
+        otherBuffer: null,
+      },
     getWubMachineRender: () => wubMachineRenderRef.current,
     renderWubMachine: renderWubMachineForExport,
     t,
@@ -403,6 +808,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     metronomeOverlayRef.current?.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
     stopPreparing();
     jukeboxAudioModeRef.current = "off";
+    audioIntensityRef.current = DEFAULT_AUDIO_MODE_INTENSITY;
     setJukeboxAudioMode("off");
     setAudioIntensity(DEFAULT_AUDIO_MODE_INTENSITY);
     setMetronomeBeatsPerBar(null);
@@ -423,6 +829,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     );
     player.setJukeboxAudioMode("off", DEFAULT_AUDIO_MODE_INTENSITY);
     writeAudioModeToUrl("off", DEFAULT_AUDIO_MODE_INTENSITY, true);
+    syncLiveBpmForPlaybackRate(player.getPlaybackRate?.());
   }
 
   function resetPlaybackSessionMetrics() {
@@ -430,11 +837,19 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     lastPlayStampRef.current = null;
     lastBeatRef.current = null;
     lastCowbellBeatsPlayedRef.current = null;
+    const minProbPct = Math.round(
+      (engineRef.current?.getConfig().minRandomBranchChance ??
+        DEFAULT_JUKEBOX_CONFIG.minRandomBranchChance) * 100,
+    );
     counters.set({
       listenSeconds: 0,
       beatsPlayed: 0,
+      jukeboxCurrentSeconds: 0,
+      branchChanceText: `${minProbPct}%`,
       autocanonizerMainSeconds: 0,
       autocanonizerOtherSeconds: 0,
+      autocanonizerPinkSeconds: 0,
+      autocanonizerGoldSeconds: 0,
       wubMachineSeconds: 0,
     });
   }
@@ -459,7 +874,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       return null;
     }
     engine.rebuildGraph();
-    return syncVizDataFromEngine();
+    const data = syncVizDataFromEngine();
+    syncPredictedJumps();
+    return data;
   }
 
   React.useEffect(() => {
@@ -510,6 +927,24 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }, [activeVizIndex]);
 
   React.useEffect(() => {
+    bpmBarEnabledRef.current = bpmBarEnabled;
+  }, [bpmBarEnabled]);
+
+  React.useEffect(() => {
+    branchLookaheadEnabledRef.current = branchLookaheadEnabled;
+    branchLookaheadCountRef.current = branchLookaheadCount;
+    syncPredictedJumps();
+  }, [branchLookaheadEnabled, branchLookaheadCount, syncPredictedJumps]);
+
+  React.useEffect(() => {
+    multiTrackEnabledRef.current = multiTrackEnabled;
+  }, [multiTrackEnabled]);
+
+  React.useEffect(() => {
+    autocanonizerMixEnabledRef.current = autocanonizerMixEnabled;
+  }, [autocanonizerMixEnabled]);
+
+  React.useEffect(() => {
     if (
       !vizLayerRef.current ||
       !canonizerLayerRef.current ||
@@ -527,20 +962,29 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     controller.setActiveIndex(activeVizIndex);
     controller.setVisible(playModeRef.current === "jukebox");
     controller.setAnchorHighlightEnabled(highlightAnchorBranch);
+    controller.setVisualPreferences?.(visualPreferences);
     autocanonizer.setVisible(playModeRef.current === "autocanonizer");
     autocanonizer.setFinishOutSong(finishOutSong);
     autocanonizer.setStreamPans(
       autocanonizerMainPanRef.current / 100,
       autocanonizerOtherPanRef.current / 100,
     );
+    autocanonizer.setQuadStreamPans?.(
+      autocanonizerPinkPanRef.current / 100,
+      autocanonizerGoldPanRef.current / 100,
+    );
     autocanonizer.setVolume(playerRef.current?.getVolume() ?? 1);
-    autocanonizer.setOnBeat((index, _beat, cursorTimes) => {
+    autocanonizer.setOnBeat((index, beat, cursorTimes) => {
       lastBeatRef.current = index;
       counters.set({
         beatsPlayed: index + 1,
         autocanonizerMainSeconds: cursorTimes.mainSeconds,
         autocanonizerOtherSeconds: cursorTimes.otherSeconds,
+        autocanonizerPinkSeconds: cursorTimes.pinkSeconds ?? 0,
+        autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
+      updateLiveBpmForBeat(beat);
+      triggerBpmBarPulse(index, beat);
     });
     autocanonizer.setOnEnded(() => {
       if (!isRunningRef.current) {
@@ -637,7 +1081,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     } else {
       vizControllerRef.current?.resizeActive();
     }
-  }, [playMode]);
+    syncPredictedJumps();
+    syncLiveBpmForPlaybackRate(playerRef.current?.getPlaybackRate?.());
+  }, [playMode, syncLiveBpmForPlaybackRate, syncPredictedJumps]);
 
   React.useEffect(() => {
     storeWubMachineLoop(loopTrack);
@@ -663,6 +1109,27 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       setDetectedBeatsPerBar(DEFAULT_BEATS_PER_BAR);
       resetAudioModeToOff(playerRef.current);
     }
+
+    // Reset any active multi-track or dual-canonizer mix on single-file load.
+    mixLoadGenerationRef.current += 1;
+    cachedMixSourcesRef.current = null;
+    cachedAutocanonizerMixSourcesRef.current = null;
+    multiTrackEnabledRef.current = false;
+    autocanonizerMixEnabledRef.current = false;
+    setMultiTrackEnabled(false);
+    setMergedAnalysis(null);
+    setMixTracksMeta([]);
+    setMixTrackGainsPct([]);
+    setAutocanonizerMixEnabled(false);
+    setAutocanonizerQuadMode(false);
+    setAutocanonizerMixTrackTitles(null);
+    setAutocanonizerOtherDurationSec(null);
+    setMixTitleOverride(null);
+    setMixDurationOverrideSec(null);
+    setIsMixing(false);
+    autocanonizerRef.current?.setQuadMode?.(false);
+    playerRef.current.clearPostMixTrackGains?.();
+    playerRef.current.setPostMixNormalization?.(false);
 
     const fileKey = `${file.name}:${file.size}:${file.lastModified}`;
     let cancelled = false;
@@ -715,6 +1182,17 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         }
         analysisRef.current = result.analysis;
         fingerprintRef.current = result.fingerprint;
+        updateMixQueueTrackMeta?.(file, {
+          fingerprint: result.fingerprint,
+          title: result.analysis.track?.title,
+          artist: result.analysis.track?.artist,
+          durationSeconds: result.analysis.track?.duration,
+        });
+        const storedOffset = resolveStoredBpmBarBeatOffsetForTrack(
+          result.fingerprint,
+        );
+        setBpmBarBeatOffset(storedOffset);
+        setTimeSignatureTrackOffsets([storedOffset]);
         trimRenderedTracks(result.fingerprint).catch((err: unknown) => {
           console.warn(`Rendered track trim failed: ${String(err)}`);
         });
@@ -728,7 +1206,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         playerRef.current?.loadBuffer(result.audioBuffer);
         autocanonizerRef.current?.setAudio(
           playerRef.current?.getSourceBuffer() ?? null,
-          playerRef.current?.getContext() ?? null
+          playerRef.current?.getContext() ?? null,
         );
         initializeEngine(result.analysis);
         restoreSavedTuning(result.fingerprint);
@@ -793,6 +1271,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     engineRef.current?.stopJukebox();
     engineRef.current?.resetStats();
     resetPlaybackSessionMetrics();
+    resetLiveBpm();
+    clearBpmBarPulse();
     vizControllerRef.current?.reset();
     if (bringItHomeModeRef.current) {
       bringItHomeModeRef.current = false;
@@ -839,17 +1319,23 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playModeRef.current === "wubmachine") {
       cancelWubMachineRender();
     }
+    if (mode !== "jukebox" && multiTrackEnabledRef.current) {
+      void disableMultiTrackMix();
+    }
+    if (mode !== "autocanonizer" && autocanonizerMixEnabledRef.current) {
+      void disableAutocanonizerMix();
+    }
     playModeRef.current = mode;
     setPlayMode(mode);
     counters.set({
       autocanonizerMainSeconds: 0,
       autocanonizerOtherSeconds: 0,
+      autocanonizerPinkSeconds: 0,
+      autocanonizerGoldSeconds: 0,
       wubMachineSeconds: 0,
     });
     if (mode !== "jukebox") {
-      setIsTuningOpen(false);
       setIsInfoOpen(false);
-      setTuningActiveTab("tuning");
       customAnchor.exit();
       clearSelectedBranch();
     }
@@ -858,43 +1344,38 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
-  const initializeEngine = (analysisData: AnalysisOutput) => {
-    if (!playerRef.current) {
-      return;
-    }
-    const engine = new JukeboxEngine(playerRef.current, {
-      randomMode: "seeded",
-      seed: createSessionSeed(),
-    });
-    engine.loadAnalysis(analysisData);
-    const normalizedBeats = engine.getVisualizationData()?.beats;
-    engine.setBringItHomeMode(bringItHomeModeRef.current);
-    cowbellOverlayRef.current?.setSectionStartBeatIndices(
-      engine.getSectionStartBeatIndices(),
-    );
-    const detected = detectTrackBeatsPerBar(
-      normalizedBeats,
-      analysisData.track?.time_signature,
-    );
-    setDetectedBeatsPerBar(detected);
-    metronomeOverlayRef.current?.setBeatsPerBar(detected);
+  function wireEngineUpdateListener(
+    engine: JukeboxEngine,
+    beatsSource: readonly QuantumBase[],
+  ) {
     engine.onUpdate((state) => {
-      counters.set({ beatsPlayed: state.beatsPlayed });
+      const chancePct = Math.round((state.curRandomBranchChance ?? 0) * 100);
+      counters.set({
+        beatsPlayed: state.beatsPlayed,
+        jukeboxCurrentSeconds: state.currentTime ?? 0,
+        branchChanceText: `${chancePct}%`,
+      });
       if (state.currentBeatIndex >= 0) {
+        const beat = beatsSource[state.currentBeatIndex];
         if (state.beatsPlayed !== lastCowbellBeatsPlayedRef.current) {
           lastCowbellBeatsPlayedRef.current = state.beatsPlayed;
-          const beat = analysisData.beats[state.currentBeatIndex];
           if (beat) {
             cowbellOverlayRef.current?.handleBeatEnter(
               state.currentBeatIndex,
               beat,
-              analysisData.beats[state.currentBeatIndex + 1],
+              beatsSource[state.currentBeatIndex + 1],
             );
           }
           metronomeOverlayRef.current?.handleBeatEnter(
             state.currentBeatIndex,
-            normalizedBeats?.[state.currentBeatIndex],
+            beat,
           );
+          updateLiveBpmForBeat(beat, {
+            beats: beatsSource,
+            beatIndex: state.currentBeatIndex,
+            playbackRate: playerRef.current?.getPlaybackRate?.(),
+          });
+          triggerBpmBarPulse(state.currentBeatIndex, beat ?? null);
         }
         const highlightJump =
           state.lastJumped && engine.getLastJumpWasBranch();
@@ -911,17 +1392,62 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           vizControllerRef.current?.update(state.currentBeatIndex, false, jumpTo);
         }
         lastBeatRef.current = state.currentBeatIndex;
+        syncPredictedJumps();
       }
     });
+  }
+
+  const initializeEngine = (
+    analysisData: AnalysisOutput | TrackAnalysis,
+    options?: { skipAutocanonizer?: boolean },
+  ) => {
+    if (!playerRef.current) {
+      return;
+    }
+    const engine = new JukeboxEngine(playerRef.current, {
+      randomMode: "seeded",
+      seed: createSessionSeed(),
+    });
+    engine.loadAnalysis(analysisData);
+    const normalizedBeats = (engine.getVisualizationData()?.beats ??
+      analysisData.beats) as unknown as readonly QuantumBase[];
+    engine.setBringItHomeMode(bringItHomeModeRef.current);
+    cowbellOverlayRef.current?.setSectionStartBeatIndices(
+      engine.getSectionStartBeatIndices(),
+    );
+    const detected = detectTrackBeatsPerBar(
+      normalizedBeats,
+      analysisData.track?.time_signature,
+    );
+    setDetectedBeatsPerBar(detected);
+    metronomeOverlayRef.current?.setBeatsPerBar(detected);
+    wireEngineUpdateListener(engine, normalizedBeats);
     engineRef.current = engine;
-    autocanonizerRef.current?.setAnalysis(analysisData, analysisData.track?.duration);
+    if (!options?.skipAutocanonizer) {
+      autocanonizerRef.current?.setAnalysis(
+        analysisData,
+        analysisData.track?.duration,
+      );
+    }
 
     syncVizDataFromEngine();
+    syncPredictedJumps();
+    const baseTempo = resolveTrackBaseTempoBpm(
+      analysisData.track?.tempo,
+      normalizedBeats,
+    );
+    resetLiveBpm(baseTempo);
+    const minProbPct = Math.round(engine.getConfig().minRandomBranchChance * 100);
+    counters.set({
+      jukeboxCurrentSeconds: 0,
+      branchChanceText: `${minProbPct}%`,
+    });
+
     vizControllerRef.current?.setOnSelect((index) => {
       if (playModeRef.current !== "jukebox") {
         return;
       }
-      startFromBeat(index, analysisData);
+      startFromBeat(index);
     });
     vizControllerRef.current?.setOnEdgeSelect((edge) => {
       if (playModeRef.current !== "jukebox") {
@@ -936,6 +1462,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     setActiveVizIndex((prev) => Math.max(0, Math.min(prev, count - 1)));
 
     syncTuneFormFromEngine();
+    setTuningNonDefault(hasNonDefaultTuning(engine));
   };
 
   const syncTuneFormFromEngine = (
@@ -949,12 +1476,25 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const config = engine.getConfig();
     const graph = engine.getGraphState();
     const computedThreshold = Math.round(graph?.computedThreshold ?? 0);
-    const currentThreshold = config.currentThreshold === 0
-      ? Math.round(graph?.currentThreshold ?? computedThreshold)
-      : config.currentThreshold;
+    const currentThreshold =
+      config.currentThreshold === 0
+        ? Math.round(graph?.currentThreshold ?? computedThreshold)
+        : config.currentThreshold;
+    const rawCross = config.crossTrackThreshold ?? 0;
+    const computedCrossThreshold =
+      graph?.computedCrossThreshold !== undefined
+        ? Math.round(graph.computedCrossThreshold)
+        : null;
+    const crossThreshold =
+      rawCross === 0 && graph?.currentCrossThreshold !== undefined
+        ? Math.round(graph.currentCrossThreshold)
+        : rawCross;
     const nextForm: TuneFormState = {
       threshold: currentThreshold,
       computedThreshold,
+      crossThreshold,
+      computedCrossThreshold,
+      maxBranches: config.maxBranches,
       minProb: Math.round(config.minRandomBranchChance * 100),
       maxProb: Math.round(config.maxRandomBranchChance * 100),
       ramp:
@@ -969,6 +1509,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       minLongBranchPercent: config.justLongBranches
         ? (config.minLongBranchPercent ?? DEFAULT_MIN_LONG_BRANCH_PERCENT)
         : 0,
+      maxLongBranchPercent:
+        config.maxLongBranchPercent && config.maxLongBranchPercent > 0
+          ? config.maxLongBranchPercent
+          : 100,
       removeSequentialBranches: config.removeSequentialBranches,
     };
     setTuneForm(nextForm);
@@ -976,6 +1520,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   };
 
   const persistCurrentTuning = () => {
+    if (multiTrackEnabledRef.current) {
+      return;
+    }
     const engine = engineRef.current;
     const fingerprint = fingerprintRef.current;
     if (!engine || !fingerprint) {
@@ -998,6 +1545,17 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         maxRandomBranchChance: config.maxRandomBranchChance,
         randomBranchChanceDelta: config.randomBranchChanceDelta,
         minLongBranchPercent: config.minLongBranchPercent,
+        maxBranches: config.maxBranches,
+        maxLongBranchPercent: config.maxLongBranchPercent ?? 0,
+        timeSignatureSimilarityRestrict:
+          Boolean(config.timeSignatureSimilarityRestrict),
+        timeSignatureSimilarityNumerator:
+          config.timeSignatureSimilarityNumerator ??
+          DEFAULT_TIME_SIGNATURE_NUMERATOR,
+        timeSignatureSimilarityDenominator:
+          config.timeSignatureSimilarityDenominator ??
+          DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+        timeSignatureTrackOffsets: config.timeSignatureTrackOffsets ?? [],
       },
       deletedEdgeIds,
       anchor: engine.getAnchorParam(),
@@ -1011,9 +1569,28 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     const saved = loadTuning(fingerprint);
     if (!saved) {
+      setTimeSignatureSimilarityRestrictEnabled(false);
+      setTimeSignatureSimilarityNumerator(DEFAULT_TIME_SIGNATURE_NUMERATOR);
+      setTimeSignatureSimilarityDenominator(
+        DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+      );
       return;
     }
     engine.updateConfig(saved.config);
+    setTimeSignatureSimilarityRestrictEnabled(
+      Boolean(saved.config.timeSignatureSimilarityRestrict),
+    );
+    setTimeSignatureSimilarityNumerator(
+      saved.config.timeSignatureSimilarityNumerator ??
+        DEFAULT_TIME_SIGNATURE_NUMERATOR,
+    );
+    setTimeSignatureSimilarityDenominator(
+      saved.config.timeSignatureSimilarityDenominator ??
+        DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    );
+    if (saved.config.timeSignatureTrackOffsets?.length) {
+      setTimeSignatureTrackOffsets(saved.config.timeSignatureTrackOffsets);
+    }
     engine.clearDeletedEdges();
     engine.rebuildGraph();
     const allEdges = engine.getGraphState()?.allEdges ?? [];
@@ -1025,30 +1602,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     engine.applyAnchorParam(saved.anchor);
     syncVizDataFromEngine();
+    syncPredictedJumps();
     syncTuneFormFromEngine();
+    setTuningNonDefault(hasNonDefaultTuning(engine));
   };
-
-  const syncExtrasFormFromState = React.useCallback(() => {
-    setExtrasForm({
-      branchStatsEnabled,
-      bringItHomeMode,
-      customAnchorEnabled,
-      audioMode: jukeboxAudioMode,
-      audioIntensity,
-      metronomeVolumePct,
-      metronomeBeatsPerBar,
-      metronomeBeatOffset,
-    });
-  }, [
-    branchStatsEnabled,
-    bringItHomeMode,
-    customAnchorEnabled,
-    jukeboxAudioMode,
-    audioIntensity,
-    metronomeVolumePct,
-    metronomeBeatsPerBar,
-    metronomeBeatOffset,
-  ]);
 
   function getCurrentSourceIdentity() {
     return file ? `${file.name}:${file.size}:${file.lastModified}` : null;
@@ -1072,7 +1629,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     return (
       playModeRef.current === "jukebox" &&
       preparingModeRef.current !== null &&
-      preparingModeRef.current === jukeboxAudioMode
+      preparingModeRef.current === jukeboxAudioModeRef.current
     );
   }
 
@@ -1080,7 +1637,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playModeRef.current === "wubmachine") {
       return "listen.preparingWubMachineEllipsis" as const;
     }
-    return jukeboxAudioMode === "instrumental"
+    return jukeboxAudioModeRef.current === "instrumental"
       ? ("listen.preparingInstrumentalEllipsis" as const)
       : ("listen.preparingSwingEllipsis" as const);
   }
@@ -1199,7 +1756,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   function prepareSwingMode() {
     const player = playerRef.current;
     const sourceBuffer = player?.getSourceBuffer();
-    const beats = analysisRef.current?.beats;
+    const beats = vizDataRef.current?.beats ?? analysisRef.current?.beats;
     if (
       player?.getJukeboxAudioMode() !== "swing" ||
       !sourceBuffer ||
@@ -1215,19 +1772,24 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     renderTokenRef.current = renderToken;
     setPreparingState("swing");
 
-    getOrCreateSwingBuffer(sourceBuffer, getCurrentSourceIdentity(), () =>
-      renderSwingBuffer(sourceBuffer, beats, {
-        trackId: fingerprintRef.current,
-        onProgress: (progress) => {
-          if (
-            renderTokenRef.current !== renderToken ||
-            playerRef.current?.getJukeboxAudioMode() !== "swing"
-          ) {
-            return;
-          }
-          setPreparingProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
-        },
-      }),
+    getOrCreateSwingBuffer(
+      sourceBuffer,
+      multiTrackEnabledRef.current ? null : getCurrentSourceIdentity(),
+      () =>
+        renderSwingBuffer(sourceBuffer, beats, {
+          trackId: multiTrackEnabledRef.current ? null : fingerprintRef.current,
+          onProgress: (progress) => {
+            if (
+              renderTokenRef.current !== renderToken ||
+              playerRef.current?.getJukeboxAudioMode() !== "swing"
+            ) {
+              return;
+            }
+            setPreparingProgress(
+              Math.max(0, Math.min(100, Math.round(progress * 100))),
+            );
+          },
+        }),
     )
       .then((buffer) => {
         if (
@@ -1300,7 +1862,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
     renderInstrumentalBuffer(
       sourceBuffer,
-      fingerprintRef.current,
+      multiTrackEnabledRef.current ? null : fingerprintRef.current,
       ({ phase, progress }) => {
         if (isStale()) {
           return;
@@ -1347,12 +1909,25 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playModeRef.current !== "jukebox") {
       return;
     }
-    setTuneFormBaseline(syncTuneFormFromEngine());
-    const engine = engineRef.current;
-    setTuningNonDefault(engine !== null && hasNonDefaultTuning(engine));
-    syncExtrasFormFromState();
-    setTuningActiveTab(tab);
-    setIsTuningOpen(true);
+    if (!isTuningOpen && engineRef.current) {
+      syncTuneFormFromEngine();
+      setTuningNonDefault(hasNonDefaultTuning(engineRef.current));
+    }
+    if (tab === "extras") {
+      setIsTuningOpen((prev) => {
+        const next = !prev;
+        if (next && typeof window !== "undefined") {
+          window.requestAnimationFrame(() => {
+            document
+              .getElementById("tuning-panel-extras")
+              ?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+          });
+        }
+        return next;
+      });
+      return;
+    }
+    setIsTuningOpen((prev) => !prev);
   };
 
   const pausePlayback = () => {
@@ -1484,15 +2059,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
     const player = playerRef.current;
     const engine = engineRef.current;
-    const activeAnalysis = analysisData ?? analysisRef.current;
-    if (!activeAnalysis || !player || !engine) {
+    const beats =
+      vizDataRef.current?.beats ??
+      analysisData?.beats ??
+      analysisRef.current?.beats;
+    if (!beats || !player || !engine) {
       return;
     }
     if (isPlaybackBlockedForAudioMode()) {
       showPreparingToast();
       return;
     }
-    const beat = activeAnalysis.beats[index];
+    const beat = beats[index];
     if (!beat) {
       return;
     }
@@ -1503,6 +2081,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     engine.seekToBeat(index);
     lastBeatRef.current = index;
     vizControllerRef.current?.update(index, true, null);
+    syncPredictedJumps();
 
     if (!isRunningRef.current) {
       engine.play();
@@ -1615,6 +2194,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     } else {
       vizControllerRef.current?.setSelectedEdgeActive(edge);
     }
+    syncPredictedJumps();
     persistCurrentTuning();
     showShortcutToast(
       nextAnchor ? t("listen.anchorSet") : t("listen.anchorReset"),
@@ -1622,89 +2202,89 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     return true;
   };
 
-  const onApplyTuning = () => {
+  // Live-applied tuning handler (no Apply button).
+  const handleTuneFormChange = (nextForm: TuneFormState) => {
     const engine = engineRef.current;
     const player = playerRef.current;
     if (!engine || !player) {
+      setTuneForm(nextForm);
       return;
     }
-
-    let minProb = tuneForm.minProb;
-    let maxProb = tuneForm.maxProb;
+    let minProb = nextForm.minProb;
+    let maxProb = nextForm.maxProb;
     if (minProb > maxProb) {
       [minProb, maxProb] = [maxProb, minProb];
     }
-    const useAutoThreshold = tuneForm.threshold === tuneForm.computedThreshold;
+    const useAutoThreshold = nextForm.threshold === nextForm.computedThreshold;
+    const crossThreshold = nextForm.crossThreshold ?? 0;
+    const computedCross = nextForm.computedCrossThreshold ?? null;
+    const useAutoCrossThreshold =
+      crossThreshold <= 0 ||
+      (computedCross !== null &&
+        Number.isFinite(computedCross) &&
+        crossThreshold === computedCross);
+    const maxBranches = clampMaxBranches(nextForm.maxBranches);
+    const sliderMaxPct =
+      nextForm.maxLongBranchPercent > 0 && nextForm.maxLongBranchPercent < 100
+        ? Math.max(1, Math.round(nextForm.maxLongBranchPercent))
+        : 100;
+    const maxLongBranchPercent = sliderMaxPct >= 100 ? 0 : sliderMaxPct;
 
     engine.updateConfig({
-      currentThreshold: useAutoThreshold ? 0 : tuneForm.threshold,
+      maxBranches,
+      currentThreshold: useAutoThreshold ? 0 : nextForm.threshold,
+      crossTrackThreshold: useAutoCrossThreshold ? 0 : crossThreshold,
       minRandomBranchChance: minProb / 100,
       maxRandomBranchChance: maxProb / 100,
-      randomBranchChanceDelta: tuneForm.ramp / RANDOM_BRANCH_DELTA_PERCENT_SCALE,
-      justBackwards: tuneForm.justBackwards,
-      justLongBranches: tuneForm.minLongBranchPercent > 0,
+      randomBranchChanceDelta: nextForm.ramp / RANDOM_BRANCH_DELTA_PERCENT_SCALE,
+      justBackwards: nextForm.justBackwards,
+      justLongBranches: nextForm.minLongBranchPercent > 0,
       minLongBranchPercent:
-        tuneForm.minLongBranchPercent > 0
-          ? tuneForm.minLongBranchPercent
+        nextForm.minLongBranchPercent > 0
+          ? nextForm.minLongBranchPercent
           : DEFAULT_MIN_LONG_BRANCH_PERCENT,
-      removeSequentialBranches: tuneForm.removeSequentialBranches,
+      maxLongBranchPercent,
+      removeSequentialBranches: nextForm.removeSequentialBranches,
     });
-    setHighlightAnchorBranch(tuneForm.highlightAnchorBranch);
-    storeAnchorHighlight(tuneForm.highlightAnchorBranch);
+    setHighlightAnchorBranch(nextForm.highlightAnchorBranch);
+    storeAnchorHighlight(nextForm.highlightAnchorBranch);
     vizControllerRef.current?.setAnchorHighlightEnabled(
-      tuneForm.highlightAnchorBranch,
+      nextForm.highlightAnchorBranch,
     );
     rebuildGraphAndSyncViz();
-    const volume = tuneForm.volume / 100;
-    player.setVolume(volume);
-    autocanonizerRef.current?.setVolume(volume);
-    wubmachineRef.current?.setVolume(volume);
-    cowbellOverlayRef.current?.setVolume(volume);
-    metronomeOverlayRef.current?.setVolume(volume);
-    syncTuneFormFromEngine(tuneForm.highlightAnchorBranch);
+    syncTuneFormFromEngine(nextForm.highlightAnchorBranch);
+    setTuningNonDefault(hasNonDefaultTuning(engine));
+    if (!isRunningRef.current) {
+      counters.set({ branchChanceText: `${Math.round(minProb)}%` });
+    }
     persistCurrentTuning();
-    setIsTuningOpen(false);
   };
 
-  const onResetTuning = () => {
-    const engine = engineRef.current;
-    const player = playerRef.current;
-    if (!engine || !player) {
-      return;
-    }
-    customAnchor.discard();
-    engine.clearDeletedEdges();
-    engine.updateConfig(DEFAULT_JUKEBOX_CONFIG);
-    rebuildGraphAndSyncViz();
-    clearSelectedBranch();
-    syncTuneFormFromEngine();
-    if (fingerprintRef.current) {
-      removeTuning(fingerprintRef.current);
-    }
-    setIsTuningOpen(false);
-  };
-
-  const onApplyExtras = () => {
+  // Live-applied extras handler (no Apply button).
+  const handleExtrasFormChange = (nextExtras: ExtrasFormState) => {
+    setExtrasForm(nextExtras);
     const player = playerRef.current;
     if (!player) {
       return;
     }
-    const previousAudioMode = jukeboxAudioMode;
-    const previousAudioIntensity = audioIntensity;
-    const nextBranchStatsEnabled = playModeRef.current === "jukebox" && extrasForm.branchStatsEnabled;
-    const nextBringItHomeMode = playModeRef.current === "jukebox" && extrasForm.bringItHomeMode;
-    const nextAudioMode = extrasForm.audioMode;
+    const previousAudioMode = jukeboxAudioModeRef.current;
+    const previousAudioIntensity = audioIntensityRef.current;
+    const nextBranchStatsEnabled =
+      playModeRef.current === "jukebox" && nextExtras.branchStatsEnabled;
+    const nextBringItHomeMode =
+      playModeRef.current === "jukebox" && nextExtras.bringItHomeMode;
+    const nextAudioMode = nextExtras.audioMode;
     const nextAudioIntensity = clampAudioModeIntensity(
-      extrasForm.audioIntensity,
+      nextExtras.audioIntensity,
     );
     const nextMetronomeVolumePct = clampMetronomeVolumePct(
-      extrasForm.metronomeVolumePct,
+      nextExtras.metronomeVolumePct,
     );
     const nextMetronomeBeatsPerBar = resolveMetronomeTimeSignatureOverride(
-      extrasForm.metronomeBeatsPerBar,
+      nextExtras.metronomeBeatsPerBar,
     );
     const nextMetronomeBeatOffset = clampMetronomeBeatOffset(
-      extrasForm.metronomeBeatOffset,
+      nextExtras.metronomeBeatOffset,
       nextMetronomeBeatsPerBar ?? detectedBeatsPerBar,
     );
     bringItHomeModeRef.current = nextBringItHomeMode;
@@ -1715,20 +2295,22 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     engineRef.current?.setBringItHomeMode(nextBringItHomeMode);
     setBranchStatsEnabled(nextBranchStatsEnabled);
     storeBranchStatsEnabled(nextBranchStatsEnabled);
-    // The toggle only shows the editor button; an anchor already set keeps playing.
-    setCustomAnchorEnabled(extrasForm.customAnchorEnabled);
-    storeCustomAnchorEnabled(extrasForm.customAnchorEnabled);
-    if (!extrasForm.customAnchorEnabled) {
+    setCustomAnchorEnabled(nextExtras.customAnchorEnabled);
+    storeCustomAnchorEnabled(nextExtras.customAnchorEnabled);
+    if (!nextExtras.customAnchorEnabled) {
       customAnchor.exit();
     }
     jukeboxAudioModeRef.current = nextAudioMode;
+    audioIntensityRef.current = nextAudioIntensity;
     setJukeboxAudioMode(nextAudioMode);
     setAudioIntensity(nextAudioIntensity);
     setMetronomeVolumePct(nextMetronomeVolumePct);
     setMetronomeBeatsPerBar(nextMetronomeBeatsPerBar);
     setMetronomeBeatOffset(nextMetronomeBeatOffset);
     metronomeOverlayRef.current?.setMetronomeVolumePct(nextMetronomeVolumePct);
-    metronomeOverlayRef.current?.setBeatsPerBarOverride(nextMetronomeBeatsPerBar);
+    metronomeOverlayRef.current?.setBeatsPerBarOverride(
+      nextMetronomeBeatsPerBar,
+    );
     metronomeOverlayRef.current?.setBeatOffset(nextMetronomeBeatOffset);
     if (nextAudioMode === "cowbell") {
       cowbellOverlayRef.current?.enable();
@@ -1768,26 +2350,75 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         nextAudioMode,
         previousAudioIntensity,
         nextAudioIntensity,
-      ) &&
-      playModeRef.current === "jukebox" &&
-      nextAudioMode !== "swing" &&
-      nextAudioMode !== "instrumental" &&
-      (isRunningRef.current || isPausedRef.current)
+      )
     ) {
-      engineRef.current?.syncToPlaybackPosition();
+      syncLiveBpmForPlaybackRate(player.getPlaybackRate?.());
+      if (
+        playModeRef.current === "jukebox" &&
+        nextAudioMode !== "swing" &&
+        nextAudioMode !== "instrumental" &&
+        (isRunningRef.current || isPausedRef.current)
+      ) {
+        engineRef.current?.syncToPlaybackPosition();
+      }
     }
-    setIsTuningOpen(false);
+    syncPredictedJumps();
   };
 
-  const onResetExtras = () => {
+  const handleResetTuningAndExtras = () => {
+    const engine = engineRef.current;
     const player = playerRef.current;
-    if (!player) {
+    if (!engine || !player) {
       return;
     }
-    const previousAudioMode = jukeboxAudioMode;
+    customAnchor.discard();
+    engine.clearDeletedEdges();
+    const isMulti = multiTrackEnabledRef.current;
+    engine.updateConfig({
+      ...DEFAULT_JUKEBOX_CONFIG,
+      crossTrackOnly: isMulti ? crossTrackOnly : false,
+      crossTrackThreshold: 0,
+      coverSync: isMulti ? coverSyncEnabled : false,
+      timeSignatureBranching: isMulti ? timeSignatureBranchingEnabled : false,
+      timeSignatureBranchMode: isMulti
+        ? timeSignatureBranchMode
+        : DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
+      timeSignatureNumerator: isMulti
+        ? timeSignatureNumerator
+        : DEFAULT_TIME_SIGNATURE_NUMERATOR,
+      timeSignatureDenominator: isMulti
+        ? timeSignatureDenominator
+        : DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+      timeSignatureTrackOffsets: isMulti
+        ? [...timeSignatureTrackOffsets]
+        : [],
+      timeSignatureSimilarityRestrict: isMulti
+        ? timeSignatureSimilarityRestrictEnabled
+        : false,
+      timeSignatureSimilarityNumerator: isMulti
+        ? timeSignatureSimilarityNumerator
+        : DEFAULT_TIME_SIGNATURE_NUMERATOR,
+      timeSignatureSimilarityDenominator: isMulti
+        ? timeSignatureSimilarityDenominator
+        : DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+    });
+    if (!isMulti) {
+      setTimeSignatureSimilarityRestrictEnabled(false);
+      setTimeSignatureSimilarityNumerator(DEFAULT_TIME_SIGNATURE_NUMERATOR);
+      setTimeSignatureSimilarityDenominator(
+        DEFAULT_TIME_SIGNATURE_DENOMINATOR,
+      );
+      setTimeSignatureTrackOffsets([]);
+    }
+    rebuildGraphAndSyncViz();
+    clearSelectedBranch();
+    syncTuneFormFromEngine();
+    setTuningNonDefault(hasNonDefaultTuning(engine));
+
+    const previousAudioMode = jukeboxAudioModeRef.current;
     bringItHomeModeRef.current = false;
     setBringItHomeMode(false);
-    engineRef.current?.setBringItHomeMode(false);
+    engine.setBringItHomeMode(false);
     setMetronomeVolumePct(DEFAULT_METRONOME_VOLUME_PCT);
     metronomeOverlayRef.current?.setMetronomeVolumePct(
       DEFAULT_METRONOME_VOLUME_PCT,
@@ -1805,32 +2436,399 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       playModeRef.current === "jukebox" &&
       (isRunningRef.current || isPausedRef.current)
     ) {
-      engineRef.current?.syncToPlaybackPosition();
+      engine.syncToPlaybackPosition();
     }
-    setIsTuningOpen(false);
+    if (fingerprintRef.current && !isMulti) {
+      removeTuning(fingerprintRef.current);
+    }
+    if (!isRunningRef.current) {
+      counters.set({
+        branchChanceText: `${Math.round(engine.getConfig().minRandomBranchChance * 100)}%`,
+      });
+    }
   };
 
-  const onApplyTuningModal = () => {
-    if (tuningActiveTab === "extras") {
-      onApplyExtras();
+  // Multi-track Jukebox mixing helpers.
+  const applyLoadedMixSources = (
+    sources: LoadedLocalMixSource[],
+    overrides?: {
+      tempoSyncEnabled?: boolean;
+      normalizeVolumeEnabled?: boolean;
+      postMixNormalizeVolumeEnabled?: boolean;
+      mixTrackGainsPct?: readonly number[];
+      timeSignatureTrackOffsets?: readonly number[];
+    },
+  ) => {
+    const player = playerRef.current;
+    if (!player) {
       return;
     }
-    onApplyTuning();
+    const nextTempoSync = overrides?.tempoSyncEnabled ?? tempoSyncEnabled;
+    const nextNormalize =
+      overrides?.normalizeVolumeEnabled ?? normalizeVolumeEnabled;
+    const nextPostMixNorm =
+      overrides?.postMixNormalizeVolumeEnabled ?? postMixNormalizeVolumeEnabled;
+    const nextGainsPct = overrides?.mixTrackGainsPct ?? mixTrackGainsPct;
+    const nextOffsets =
+      overrides?.timeSignatureTrackOffsets ?? timeSignatureTrackOffsets;
+
+    const built = buildJukeboxMix(player.getContext(), sources, {
+      tempoSyncEnabled: nextTempoSync,
+      normalizeVolumeEnabled: nextNormalize,
+      mixTrackGainsPct: nextGainsPct,
+      timeSignatureTrackOffsets: nextOffsets,
+    });
+
+    player.loadBuffer(built.combined.buffer);
+    player.setPostMixTrackSlices?.(
+      built.combined.sliceDurations,
+      built.resolvedGainsPct.map((pct) => pct / 100),
+    );
+    player.setPostMixNormalization?.(nextPostMixNorm);
+
+    const activeAudioMode = jukeboxAudioModeRef.current;
+    if (activeAudioMode === "cowbell") {
+      cowbellOverlayRef.current?.enable();
+      player.setJukeboxAudioMode("cowbell", audioIntensityRef.current);
+    } else if (activeAudioMode === "metronome") {
+      metronomeOverlayRef.current?.enable();
+      player.setJukeboxAudioMode("metronome", audioIntensityRef.current);
+    } else if (
+      activeAudioMode !== "swing" &&
+      activeAudioMode !== "instrumental"
+    ) {
+      player.setJukeboxAudioMode(activeAudioMode, audioIntensityRef.current);
+    }
+
+    multiTrackEnabledRef.current = true;
+    setMultiTrackEnabled(true);
+    setMergedAnalysis(built.mergedAnalysis);
+    setMixTracksMeta(sources.map((s) => ({ title: s.title })));
+    setMixTrackGainsPct(built.resolvedGainsPct);
+    setTimeSignatureTrackOffsets(built.resolvedTrackOffsets);
+    setMixTitleOverride(sources.map((s) => s.title).join(" × "));
+    setMixDurationOverrideSec(
+      built.mergedAnalysis.tracks?.[0]?.duration ??
+        built.mergedAnalysis.track?.duration ??
+        built.combined.buffer.duration,
+    );
+
+    initializeEngine(built.mergedAnalysis, { skipAutocanonizer: true });
+    engineRef.current?.updateConfig({
+      crossTrackOnly,
+      coverSync: coverSyncEnabled,
+      timeSignatureBranching: timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets: built.resolvedTrackOffsets,
+      timeSignatureSimilarityRestrict: timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+    });
+    rebuildGraphAndSyncViz();
+    syncTuneFormFromEngine();
+    setTuningNonDefault(
+      engineRef.current ? hasNonDefaultTuning(engineRef.current) : false,
+    );
+
+    if (activeAudioMode === "swing") {
+      player.setJukeboxAudioMode("swing", audioIntensityRef.current);
+      prepareSwingMode();
+    } else if (activeAudioMode === "instrumental") {
+      player.setJukeboxAudioMode("instrumental", audioIntensityRef.current);
+      prepareInstrumentalMode();
+    }
   };
 
-  const showTuningReset =
-    tuningActiveTab === "extras"
-      ? hasNonDefaultExtras({ audioMode: jukeboxAudioMode, bringItHomeMode }) ||
-        hasNonDefaultExtras(extrasForm)
-      : tuningNonDefault ||
-        (tuneFormBaseline !== null && tuneFormChanged(tuneFormBaseline, tuneForm));
+  const loadMultiTrackMix = async () => {
+    const player = playerRef.current;
+    if (!player || playModeRef.current !== "jukebox" || mixQueue.length < 2) {
+      return false;
+    }
+    const tracks = mixQueue.slice(0, MAX_MIX_TRACKS);
+    stopPlayback();
+    const gen = ++mixLoadGenerationRef.current;
+    setIsMixing(true);
+    try {
+      const sources = await resolveLocalMixSources(tracks, player.getContext(), {
+        isCancelled: () => mixLoadGenerationRef.current !== gen,
+      });
+      if (mixLoadGenerationRef.current !== gen || sources.length < 2) {
+        return false;
+      }
+      const restoredOffsets = sources.map((source) =>
+        resolveStoredBpmBarBeatOffsetForTrack(source.fingerprint),
+      );
+      setTimeSignatureTrackOffsets(restoredOffsets);
+      if (restoredOffsets.length > 0) {
+        setBpmBarBeatOffset(restoredOffsets[0]);
+      }
+      cachedMixSourcesRef.current = sources;
+      applyLoadedMixSources(sources, {
+        timeSignatureTrackOffsets: restoredOffsets,
+      });
+      return true;
+    } catch (err) {
+      if (mixLoadGenerationRef.current === gen) {
+        console.warn(`Multi-track mix failed: ${String(err)}`);
+        showShortcutToast(t("mix.loadFailed"));
+      }
+      return false;
+    } finally {
+      if (mixLoadGenerationRef.current === gen) {
+        setIsMixing(false);
+      }
+    }
+  };
 
-  const onResetTuningModal = () => {
-    if (tuningActiveTab === "extras") {
-      onResetExtras();
+  const disableMultiTrackMix = async () => {
+    const player = playerRef.current;
+    if (!player) {
       return;
     }
-    onResetTuning();
+    mixLoadGenerationRef.current += 1;
+    cachedMixSourcesRef.current = null;
+    stopPlayback();
+    multiTrackEnabledRef.current = false;
+    setMultiTrackEnabled(false);
+    setMergedAnalysis(null);
+    setMixTracksMeta([]);
+    setMixTrackGainsPct([]);
+    setMixTitleOverride(null);
+    setMixDurationOverrideSec(null);
+    player.clearPostMixTrackGains?.();
+    player.setPostMixNormalization?.(false);
+
+    if (analysisRef.current && file) {
+      const audioMode = jukeboxAudioModeRef.current;
+      const decoder = new AudioDecoder(player.getContext());
+      try {
+        const decoded = await decoder.decode(file);
+        await player.loadBuffer(decoded.audioBuffer);
+      } catch {
+        // Keep buffer if decode fails.
+      }
+      setCrossTrackOnly(false);
+      setCoverSyncEnabled(false);
+      setTimeSignatureBranchingEnabled(false);
+      setTimeSignatureSimilarityRestrictEnabled(false);
+      setTimeSignatureBranchMode(DEFAULT_TIME_SIGNATURE_BRANCH_MODE);
+      setTimeSignatureNumerator(DEFAULT_TIME_SIGNATURE_NUMERATOR);
+      setTimeSignatureDenominator(DEFAULT_TIME_SIGNATURE_DENOMINATOR);
+      setTimeSignatureSimilarityNumerator(DEFAULT_TIME_SIGNATURE_NUMERATOR);
+      setTimeSignatureSimilarityDenominator(DEFAULT_TIME_SIGNATURE_DENOMINATOR);
+      const restoredOffset = resolveStoredBpmBarBeatOffsetForTrack(
+        fingerprintRef.current,
+      );
+      setBpmBarBeatOffset(restoredOffset);
+      setTimeSignatureTrackOffsets([restoredOffset]);
+      initializeEngine(analysisRef.current);
+      if (fingerprintRef.current) {
+        restoreSavedTuning(fingerprintRef.current);
+      }
+      if (audioMode === "swing") {
+        player.setJukeboxAudioMode("swing", audioIntensityRef.current);
+        maybePrepareSwingMode();
+      } else if (audioMode === "instrumental") {
+        player.setJukeboxAudioMode("instrumental", audioIntensityRef.current);
+        maybePrepareInstrumentalMode();
+      } else {
+        player.setJukeboxAudioMode(audioMode, audioIntensityRef.current);
+      }
+    }
+  };
+
+  // Autocanonizer 2-song & 4-voice quad mixing helpers.
+  const applyLoadedAutocanonizerMixSources = (
+    sources: [LoadedLocalMixSource, LoadedLocalMixSource],
+    overrides?: {
+      alignmentMode?: AutocanonizerMixAlignmentMode;
+      quadMode?: boolean;
+      quadBranchMode?: AutocanonizerQuadBranchMode;
+    },
+  ) => {
+    const player = playerRef.current;
+    const autocanonizer = autocanonizerRef.current;
+    if (!player || !autocanonizer) {
+      return;
+    }
+    const [mainSource, otherSource] = sources;
+    const built = buildAutocanonizerMix(
+      player.getContext(),
+      mainSource,
+      otherSource,
+    );
+    const alignmentMode = overrides?.alignmentMode ?? autocanonizerMixAlignment;
+    const quadMode = overrides?.quadMode ?? autocanonizerQuadMode;
+    const quadBranchMode =
+      overrides?.quadBranchMode ?? autocanonizerQuadBranchMode;
+
+    autocanonizer.setDualAudio?.(
+      built.prepared.mainBuffer,
+      built.prepared.otherBuffer,
+      player.getContext(),
+    );
+    autocanonizer.setDualAnalysis?.(mainSource.analysis, otherSource.analysis, {
+      mainDuration: built.prepared.mainDurationSec,
+      otherDuration: built.prepared.otherDurationSec,
+      otherTempoRatio: built.otherTempoRatio,
+      alignmentMode,
+      quadMode,
+      quadBranchMode,
+    });
+    autocanonizer.setStreamPans(
+      autocanonizerMainPan / 100,
+      autocanonizerOtherPan / 100,
+    );
+    autocanonizer.setStreamGains?.(
+      autocanonizerMainGainPct / 100,
+      autocanonizerOtherGainPct / 100,
+    );
+    autocanonizer.setQuadStreamPans?.(
+      autocanonizerPinkPan / 100,
+      autocanonizerGoldPan / 100,
+    );
+    autocanonizer.setQuadStreamGains?.(
+      autocanonizerPinkGainPct / 100,
+      autocanonizerGoldGainPct / 100,
+    );
+
+    const title1 = mainSource.title || t("common.untitled");
+    const title2 = otherSource.title || t("common.untitled");
+    autocanonizerMixEnabledRef.current = true;
+    setAutocanonizerMixEnabled(true);
+    setAutocanonizerMixTrackTitles([title1, title2]);
+    setAutocanonizerOtherDurationSec(built.prepared.otherDurationSec);
+    setMixTitleOverride(`${title1} × ${title2}`);
+    setMixDurationOverrideSec(built.prepared.mainDurationSec);
+    counters.set({
+      autocanonizerMainSeconds: 0,
+      autocanonizerOtherSeconds: 0,
+      autocanonizerPinkSeconds: 0,
+      autocanonizerGoldSeconds: 0,
+    });
+    resetLiveBpm(mainSource.tempo ?? null);
+  };
+
+  const loadAutocanonizerMix = async () => {
+    const player = playerRef.current;
+    if (
+      !player ||
+      playModeRef.current !== "autocanonizer" ||
+      mixQueue.length < 2
+    ) {
+      return false;
+    }
+    if (mixQueue.length > MAX_AUTOCANONIZER_MIX_TRACKS) {
+      showShortcutToast(t("mix.canonizerFirst2"));
+    }
+    const tracks = mixQueue.slice(0, MAX_AUTOCANONIZER_MIX_TRACKS);
+    stopPlayback();
+    const gen = ++mixLoadGenerationRef.current;
+    setIsMixing(true);
+    try {
+      const sources = await resolveLocalMixSources(tracks, player.getContext(), {
+        isCancelled: () => mixLoadGenerationRef.current !== gen,
+      });
+      if (mixLoadGenerationRef.current !== gen || sources.length < 2) {
+        return false;
+      }
+      const pair: [LoadedLocalMixSource, LoadedLocalMixSource] = [
+        sources[0],
+        sources[1],
+      ];
+      cachedAutocanonizerMixSourcesRef.current = pair;
+      applyLoadedAutocanonizerMixSources(pair);
+      return true;
+    } catch (err) {
+      if (mixLoadGenerationRef.current === gen) {
+        console.warn(`Autocanonizer mix failed: ${String(err)}`);
+        showShortcutToast(t("mix.loadFailed"));
+      }
+      return false;
+    } finally {
+      if (mixLoadGenerationRef.current === gen) {
+        setIsMixing(false);
+      }
+    }
+  };
+
+  const disableAutocanonizerMix = async () => {
+    mixLoadGenerationRef.current += 1;
+    cachedAutocanonizerMixSourcesRef.current = null;
+    stopPlayback();
+    autocanonizerMixEnabledRef.current = false;
+    setAutocanonizerMixEnabled(false);
+    setAutocanonizerQuadMode(false);
+    setAutocanonizerMixTrackTitles(null);
+    setAutocanonizerOtherDurationSec(null);
+    setMixTitleOverride(null);
+    setMixDurationOverrideSec(null);
+    setAutocanonizerMainGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    setAutocanonizerOtherGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    setAutocanonizerPinkGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    setAutocanonizerGoldGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    autocanonizerRef.current?.setQuadMode?.(false);
+    autocanonizerRef.current?.setStreamGains?.(1, 1);
+    autocanonizerRef.current?.setQuadStreamGains?.(1, 1);
+
+    const player = playerRef.current;
+    if (player && analysisRef.current) {
+      autocanonizerRef.current?.setAudio(
+        player.getSourceBuffer() ?? null,
+        player.getContext(),
+      );
+      autocanonizerRef.current?.setAnalysis(
+        analysisRef.current,
+        analysisRef.current.track?.duration,
+      );
+      resetLiveBpm(
+        resolveTrackBaseTempoBpm(
+          analysisRef.current.track?.tempo,
+          analysisRef.current.beats,
+        ),
+      );
+    }
+  };
+
+  const onToggleMix = () => {
+    const isCanonizer = playModeRef.current === "autocanonizer";
+    const active = isCanonizer
+      ? autocanonizerMixEnabledRef.current
+      : multiTrackEnabledRef.current;
+    if (active) {
+      void (isCanonizer ? disableAutocanonizerMix() : disableMultiTrackMix());
+      return;
+    }
+    if (mixQueue.length >= 2) {
+      setMixAddSticky?.(false);
+      void (isCanonizer ? loadAutocanonizerMix() : loadMultiTrackMix());
+      return;
+    }
+    setMixAddSticky?.(true);
+    showShortcutToast(
+      isCanonizer ? t("mix.pick2Prompt") : t("mix.pickPrompt"),
+    );
+    navigate("/");
+  };
+
+  const onSwapAutocanonizerMix = () => {
+    const pair = cachedAutocanonizerMixSourcesRef.current;
+    if (!autocanonizerMixEnabledRef.current || !pair) {
+      return;
+    }
+    const wasRunning = isRunningRef.current;
+    stopPlayback();
+    const swapped: [LoadedLocalMixSource, LoadedLocalMixSource] = [
+      pair[1],
+      pair[0],
+    ];
+    cachedAutocanonizerMixSourcesRef.current = swapped;
+    applyLoadedAutocanonizerMixSources(swapped);
+    if (wasRunning) {
+      startAutocanonizerPlayback(0, { resetSession: true });
+    }
   };
 
   const onVolumeChange = (value: number) => {
@@ -1855,6 +2853,85 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     autocanonizerMainPanRef.current = nextMain;
     autocanonizerOtherPanRef.current = nextOther;
     autocanonizerRef.current?.setStreamPans(nextMain / 100, nextOther / 100);
+    storeAudioBalance(
+      nextMain,
+      nextOther,
+      autocanonizerPinkPan,
+      autocanonizerGoldPan,
+    );
+  };
+
+  const onAutocanonizerQuadPanChange = (
+    stream: "pink" | "gold",
+    value: number,
+  ) => {
+    const nextPink = stream === "pink" ? value : autocanonizerPinkPan;
+    const nextGold = stream === "gold" ? value : autocanonizerGoldPan;
+    setAutocanonizerPinkPan(nextPink);
+    setAutocanonizerGoldPan(nextGold);
+    autocanonizerPinkPanRef.current = nextPink;
+    autocanonizerGoldPanRef.current = nextGold;
+    autocanonizerRef.current?.setQuadStreamPans?.(
+      nextPink / 100,
+      nextGold / 100,
+    );
+    storeAudioBalance(
+      autocanonizerMainPan,
+      autocanonizerOtherPan,
+      nextPink,
+      nextGold,
+    );
+  };
+
+  const onAutocanonizerStreamGainChange = (
+    stream: "main" | "other",
+    gainPct: number,
+  ) => {
+    const clamped = clampMixTrackGainPct(gainPct);
+    const nextMain = stream === "main" ? clamped : autocanonizerMainGainPct;
+    const nextOther = stream === "other" ? clamped : autocanonizerOtherGainPct;
+    setAutocanonizerMainGainPct(nextMain);
+    setAutocanonizerOtherGainPct(nextOther);
+    autocanonizerRef.current?.setStreamGains?.(nextMain / 100, nextOther / 100);
+  };
+
+  const onAutocanonizerQuadGainChange = (
+    stream: "pink" | "gold",
+    gainPct: number,
+  ) => {
+    const clamped = clampMixTrackGainPct(gainPct);
+    const nextPink = stream === "pink" ? clamped : autocanonizerPinkGainPct;
+    const nextGold = stream === "gold" ? clamped : autocanonizerGoldGainPct;
+    setAutocanonizerPinkGainPct(nextPink);
+    setAutocanonizerGoldGainPct(nextGold);
+    autocanonizerRef.current?.setQuadStreamGains?.(
+      nextPink / 100,
+      nextGold / 100,
+    );
+  };
+
+  const onResetAutocanonizerBalance = () => {
+    setAutocanonizerMainPan(0);
+    setAutocanonizerOtherPan(0);
+    autocanonizerMainPanRef.current = 0;
+    autocanonizerOtherPanRef.current = 0;
+    autocanonizerRef.current?.setStreamPans(0, 0);
+    setAutocanonizerMainGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    setAutocanonizerOtherGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+    autocanonizerRef.current?.setStreamGains?.(1, 1);
+    if (autocanonizerQuadMode) {
+      setAutocanonizerPinkPan(0);
+      setAutocanonizerGoldPan(0);
+      autocanonizerPinkPanRef.current = 0;
+      autocanonizerGoldPanRef.current = 0;
+      autocanonizerRef.current?.setQuadStreamPans?.(0, 0);
+      setAutocanonizerPinkGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+      setAutocanonizerGoldGainPct(DEFAULT_MIX_TRACK_GAIN_PCT);
+      autocanonizerRef.current?.setQuadStreamGains?.(1, 1);
+      storeAudioBalance(0, 0, 0, 0);
+    } else {
+      storeAudioBalance(0, 0, autocanonizerPinkPan, autocanonizerGoldPan);
+    }
   };
 
   const onSetActiveViz = (index: number) => {
@@ -1878,6 +2955,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     isTuningOpen,
     isInfoOpen,
     isExportOpen,
+    isQueueOpen,
     engineRef,
     bringItHomeModeRef,
     setBringItHomeMode,
@@ -1890,6 +2968,195 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     toggleSelectedAnchorBranch,
     customAnchor,
   });
+
+  // BPM bar segment calculation + imperative zero-commit DOM pulse updates.
+  const bpmBarConfig: BpmBarTimeSignatureInput = React.useMemo(
+    () => ({
+      bpmBarTimeSignatureMode,
+      bpmBarNumerator,
+      bpmBarDenominator,
+      bpmBarBeatOffset,
+      multiTrackEnabled,
+      coverSyncEnabled,
+      timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets,
+      timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+      jukeboxAudioMode,
+      metronomeBeatsPerBar,
+      metronomeBeatOffset,
+      metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
+    }),
+    [
+      bpmBarTimeSignatureMode,
+      bpmBarNumerator,
+      bpmBarDenominator,
+      bpmBarBeatOffset,
+      multiTrackEnabled,
+      coverSyncEnabled,
+      timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets,
+      timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+      jukeboxAudioMode,
+      metronomeBeatsPerBar,
+      metronomeBeatOffset,
+      detectedBeatsPerBar,
+    ],
+  );
+
+  const segmentCount = React.useMemo(
+    () =>
+      resolveBpmBarActiveSegment(
+        bpmBarConfig,
+        null,
+        null,
+        vizDataRef.current?.beats,
+      ).segmentCount,
+    [bpmBarConfig],
+  );
+
+  const isSmoothStyle = isSmoothBpmBarStyle(bpmBarStyle);
+  const showSegmentOverlay =
+    bpmBarStyle === "smooth-pulse" && segmentCount !== null;
+
+  bpmBarRuntimeRef.current = {
+    bpmBarConfig,
+    bpmBarEnabled,
+    bpmBarStyle,
+    isSmoothStyle,
+    playMode,
+  };
+
+  /**
+   * Drives BPM bar pulse classes and smooth-fill CSS properties directly on the DOM
+   * so high-frequency beat callbacks never force React component commits.
+   */
+  function triggerBpmBarPulse(
+    beatIndex: number | null,
+    beat: BpmBarPulseBeat | null,
+  ) {
+    const runtime = bpmBarRuntimeRef.current;
+    const el = vizStatsRef.current;
+    if (!el || !runtime.bpmBarConfig) {
+      return;
+    }
+    if (!runtime.bpmBarEnabled) {
+      clearBpmBarPulse();
+      return;
+    }
+    el.classList.remove("pulse");
+    const { segmentCount: activeSegCount, activeSegmentIndex } =
+      resolveBpmBarActiveSegment(
+        runtime.bpmBarConfig,
+        beatIndex,
+        beat,
+        vizDataRef.current?.beats,
+      );
+    const fillEl = smoothFillRef.current;
+    if (runtime.isSmoothStyle) {
+      if (!fillEl) {
+        return;
+      }
+      const player = playerRef.current;
+      const playbackRate =
+        runtime.playMode === "jukebox" ? (player?.getPlaybackRate?.() ?? 1) : 1;
+      const currentTimeSec =
+        runtime.playMode === "jukebox" && player?.isPlaying?.()
+          ? player.getCurrentTime()
+          : null;
+      const anim = resolveBpmBarSmoothAnimation({
+        segmentCount: activeSegCount,
+        activeSegmentIndex,
+        beatIndex,
+        beat,
+        playbackRate,
+        currentTimeSec,
+      });
+      fillEl.classList.remove("is-animating", "is-downbeat");
+      if (!anim) {
+        for (const segEl of segmentRefs.current) {
+          segEl?.classList.remove("is-pulsing");
+        }
+        return;
+      }
+      fillEl.style.setProperty("--bpm-bar-from", String(anim.fromFraction));
+      fillEl.style.setProperty("--bpm-bar-to", String(anim.toFraction));
+      fillEl.style.setProperty("--bpm-bar-duration", `${anim.durationMs}ms`);
+      void fillEl.offsetWidth;
+      if (anim.isDownbeat) {
+        fillEl.classList.add("is-downbeat");
+      }
+      fillEl.classList.add("is-animating");
+      if (runtime.bpmBarStyle === "smooth-pulse") {
+        if (activeSegCount !== null && activeSegmentIndex !== null) {
+          const segEl = segmentRefs.current[activeSegmentIndex];
+          if (segEl) {
+            segEl.classList.remove("is-pulsing");
+            void segEl.offsetWidth;
+            segEl.classList.add("is-pulsing");
+          }
+        } else if (activeSegCount === null) {
+          void el.offsetWidth;
+          el.classList.add("pulse");
+        }
+      }
+      return;
+    }
+    if (activeSegCount !== null) {
+      if (activeSegmentIndex !== null) {
+        const segEl = segmentRefs.current[activeSegmentIndex];
+        if (segEl) {
+          segEl.classList.remove("is-pulsing");
+          void segEl.offsetWidth;
+          segEl.classList.add("is-pulsing");
+        }
+      }
+      return;
+    }
+    void el.offsetWidth;
+    el.classList.add("pulse");
+  }
+
+  React.useLayoutEffect(() => {
+    clearBpmBarPulse();
+  }, [bpmBarEnabled, bpmBarStyle, segmentCount, clearBpmBarPulse]);
+
+  const renderBpmBarSegments = (overlay: boolean) => {
+    if (segmentCount === null) {
+      return null;
+    }
+    const baseClass =
+      segmentCount > 8 ? "bpm-bar-segments is-dense" : "bpm-bar-segments";
+    return (
+      <div
+        id="bpm-bar-segments"
+        className={overlay ? `${baseClass} is-overlay` : baseClass}
+        aria-hidden="true"
+      >
+        {Array.from({ length: segmentCount }, (_, idx) => (
+          <span
+            key={idx}
+            ref={(node) => {
+              segmentRefs.current[idx] = node;
+            }}
+            data-bpm-segment={idx + 1}
+            className={
+              idx === 0 ? "bpm-bar-segment is-downbeat" : "bpm-bar-segment"
+            }
+          />
+        ))}
+      </div>
+    );
+  };
 
   const graph = engineRef.current?.getGraphState();
   const totalBeats = graph?.totalBeats ?? analysis?.beats.length ?? 0;
@@ -1914,13 +3181,14 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   // The tabs stay hidden until the analysis steps have played out.
   const analysisShown = loading.shown?.task === "localAnalysis" || loading.shown?.task === "track";
   React.useEffect(() => {
-    setIsListenLoading(isAnalyzing || analysisShown);
+    setIsListenLoading(isAnalyzing || analysisShown || isMixing);
     return () => {
       setIsListenLoading(false);
     };
-  }, [isAnalyzing, analysisShown, setIsListenLoading]);
+  }, [isAnalyzing, analysisShown, isMixing, setIsListenLoading]);
   const showPlaybackUi =
     !loading.shown &&
+    !isMixing &&
     Boolean(analysis) &&
     !isAnalyzing &&
     preparingMode === null &&
@@ -1975,14 +3243,305 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
 
   // Computed before the early return (and file-guarded) so the marquee hooks
   // below run unconditionally on every render, keeping hook order stable.
-  const displayTitle = file
-    ? formatTrackTitle(file.name, playMode, jukeboxAudioMode, t)
+  const baseTitle = mixTitleOverride ?? file?.name ?? "";
+  const displayTitle = baseTitle
+    ? formatTrackTitle(baseTitle, playMode, jukeboxAudioMode, t)
     : "";
   // The marquee controller owns each title node's text imperatively, so the
   // title <div>s are left empty in JSX (see .play-title / .viz-title) and wired
   // through these ref callbacks.
   const playTitleRef = useMarquee(displayTitle);
   const vizTitleRef = useMarquee(displayTitle);
+
+  const showTuningReset =
+    tuningNonDefault ||
+    hasNonDefaultExtras({ audioMode: jukeboxAudioMode, bringItHomeMode });
+
+  const resolvedMixTracks =
+    multiTrackEnabled && mixTracksMeta.length > 0
+      ? mixTracksMeta
+      : mixQueue.slice(0, MAX_MIX_TRACKS).map((item, index) => ({
+          title: item.title || t("mix.trackNumber", { index: index + 1 }),
+        }));
+
+  const multiTuningProps = {
+    multiTrackEnabled,
+    mixTracks: resolvedMixTracks,
+    crossTrackOnly,
+    onCrossTrackOnlyChange: (enabled: boolean) => {
+      setCrossTrackOnly(enabled);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({ crossTrackOnly: enabled });
+      rebuildGraphAndSyncViz();
+      syncTuneFormFromEngine();
+      if (engineRef.current) {
+        setTuningNonDefault(hasNonDefaultTuning(engineRef.current));
+      }
+    },
+    coverSyncEnabled,
+    onCoverSyncChange: (enabled: boolean) => {
+      setCoverSyncEnabled(enabled);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({ coverSync: enabled });
+      rebuildGraphAndSyncViz();
+      syncTuneFormFromEngine();
+      if (engineRef.current) {
+        setTuningNonDefault(hasNonDefaultTuning(engineRef.current));
+      }
+    },
+    tempoSyncEnabled,
+    onTempoSyncChange: (enabled: boolean) => {
+      setTempoSyncEnabled(enabled);
+      if (multiTrackEnabledRef.current && cachedMixSourcesRef.current) {
+        stopPlayback();
+        applyLoadedMixSources(cachedMixSourcesRef.current, {
+          tempoSyncEnabled: enabled,
+        });
+      }
+    },
+    normalizeVolumeEnabled,
+    onNormalizeVolumeChange: (enabled: boolean) => {
+      setNormalizeVolumeEnabled(enabled);
+      if (multiTrackEnabledRef.current && cachedMixSourcesRef.current) {
+        stopPlayback();
+        applyLoadedMixSources(cachedMixSourcesRef.current, {
+          normalizeVolumeEnabled: enabled,
+        });
+      }
+    },
+    postMixNormalizeVolumeEnabled,
+    onPostMixNormalizeVolumeChange: (enabled: boolean) => {
+      setPostMixNormalizeVolumeEnabled(enabled);
+      if (multiTrackEnabledRef.current) {
+        playerRef.current?.setPostMixNormalization?.(enabled);
+      }
+    },
+    mixTrackGainsPct,
+    onMixTrackGainChange: (index: number, gainPct: number) => {
+      const clamped = clampMixTrackGainPct(gainPct);
+      const next = mixTrackGainsPct.slice();
+      while (next.length <= index) {
+        next.push(DEFAULT_MIX_TRACK_GAIN_PCT);
+      }
+      next[index] = clamped;
+      setMixTrackGainsPct(next);
+      if (multiTrackEnabledRef.current) {
+        playerRef.current?.setPostMixTrackGains?.(next.map((p) => p / 100));
+      }
+    },
+    timeSignatureBranchingEnabled,
+    onTimeSignatureBranchingChange: (enabled: boolean) => {
+      const nextMode: TimeSignatureBranchMode =
+        enabled &&
+        timeSignatureSimilarityRestrictEnabled &&
+        timeSignatureBranchMode === "overwrite"
+          ? "combine"
+          : timeSignatureBranchMode;
+      setTimeSignatureBranchingEnabled(enabled);
+      setTimeSignatureBranchMode(nextMode);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({
+        timeSignatureBranching: enabled,
+        timeSignatureBranchMode: nextMode,
+        timeSignatureNumerator,
+        timeSignatureDenominator,
+        timeSignatureTrackOffsets,
+      });
+      rebuildGraphAndSyncViz();
+      syncTuneFormFromEngine();
+    },
+    timeSignatureBranchMode,
+    onTimeSignatureBranchModeChange: (mode: TimeSignatureBranchMode) => {
+      const normalized = normalizeTimeSignatureBranchMode(mode);
+      setTimeSignatureBranchMode(normalized);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({ timeSignatureBranchMode: normalized });
+      if (timeSignatureBranchingEnabled) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+    },
+    timeSignatureNumerator,
+    onTimeSignatureNumeratorChange: (numerator: number) => {
+      const clamped = clampTimeSignatureNumerator(numerator);
+      setTimeSignatureNumerator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({ timeSignatureNumerator: clamped });
+      if (timeSignatureBranchingEnabled) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+    },
+    timeSignatureDenominator,
+    onTimeSignatureDenominatorChange: (denominator: number) => {
+      const clamped = clampTimeSignatureDenominator(denominator);
+      setTimeSignatureDenominator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        return;
+      }
+      engineRef.current?.updateConfig({ timeSignatureDenominator: clamped });
+      if (timeSignatureBranchingEnabled) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+    },
+    timeSignatureTrackOffsets,
+    onTimeSignatureTrackOffsetChange: (trackIndex: number, offset: number) => {
+      const clamped = clampTimeSignatureTrackOffset(offset);
+      const next = timeSignatureTrackOffsets.slice();
+      while (next.length <= trackIndex) {
+        next.push(0);
+      }
+      next[trackIndex] = clamped;
+      setTimeSignatureTrackOffsets(next);
+      if (trackIndex === 0) {
+        setBpmBarBeatOffset(clamped);
+      }
+      const targetId = multiTrackEnabledRef.current
+        ? cachedMixSourcesRef.current?.[trackIndex]?.fingerprint
+        : fingerprintRef.current;
+      storeBpmBarBeatOffsetForTrack(targetId, clamped);
+      engineRef.current?.updateConfig({ timeSignatureTrackOffsets: next });
+      if (
+        timeSignatureSimilarityRestrictEnabled ||
+        (multiTrackEnabledRef.current && timeSignatureBranchingEnabled)
+      ) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+      persistCurrentTuning();
+    },
+    timeSignatureSimilarityRestrictEnabled,
+    onTimeSignatureSimilarityRestrictChange: (enabled: boolean) => {
+      const nextMode: TimeSignatureBranchMode =
+        enabled &&
+        timeSignatureBranchingEnabled &&
+        timeSignatureBranchMode === "overwrite"
+          ? "combine"
+          : timeSignatureBranchMode;
+      setTimeSignatureSimilarityRestrictEnabled(enabled);
+      setTimeSignatureBranchMode(nextMode);
+      engineRef.current?.updateConfig({
+        timeSignatureSimilarityRestrict: enabled,
+        timeSignatureSimilarityNumerator,
+        timeSignatureSimilarityDenominator,
+        timeSignatureTrackOffsets,
+        ...(multiTrackEnabledRef.current && timeSignatureBranchingEnabled
+          ? { timeSignatureBranchMode: nextMode }
+          : {}),
+      });
+      rebuildGraphAndSyncViz();
+      syncTuneFormFromEngine();
+      persistCurrentTuning();
+    },
+    timeSignatureSimilarityNumerator,
+    onTimeSignatureSimilarityNumeratorChange: (numerator: number) => {
+      const clamped = clampTimeSignatureNumerator(numerator);
+      setTimeSignatureSimilarityNumerator(clamped);
+      engineRef.current?.updateConfig({
+        timeSignatureSimilarityNumerator: clamped,
+      });
+      const isOverwrite =
+        multiTrackEnabledRef.current &&
+        timeSignatureBranchingEnabled &&
+        timeSignatureBranchMode === "overwrite";
+      if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+      persistCurrentTuning();
+    },
+    timeSignatureSimilarityDenominator,
+    onTimeSignatureSimilarityDenominatorChange: (denominator: number) => {
+      const clamped = clampTimeSignatureDenominator(denominator);
+      setTimeSignatureSimilarityDenominator(clamped);
+      engineRef.current?.updateConfig({
+        timeSignatureSimilarityDenominator: clamped,
+      });
+      const isOverwrite =
+        multiTrackEnabledRef.current &&
+        timeSignatureBranchingEnabled &&
+        timeSignatureBranchMode === "overwrite";
+      if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+        rebuildGraphAndSyncViz();
+        syncTuneFormFromEngine();
+      }
+      persistCurrentTuning();
+    },
+  };
+
+  const visualsTuningProps = {
+    visualPreferences,
+    onVisualPreferencesChange: (patch: Partial<VisualPreferences>) => {
+      const next = { ...visualPreferences, ...patch };
+      storeVisualPreferences(patch);
+      setVisualPreferences(next);
+      vizControllerRef.current?.setVisualPreferences?.(next);
+    },
+    bpmBarEnabled,
+    onBpmBarEnabledChange: (enabled: boolean) => {
+      storeBpmBarEnabled(enabled);
+      setBpmBarEnabled(enabled);
+    },
+    bpmBarStyle,
+    onBpmBarStyleChange: (style: BpmBarStyle) => {
+      const normalized = normalizeBpmBarStyle(style);
+      storeBpmBarStyle(normalized);
+      setBpmBarStyle(normalized);
+    },
+    bpmBarTimeSignatureMode,
+    onBpmBarTimeSignatureModeChange: (mode: BpmBarTimeSignatureMode) => {
+      const normalized = normalizeBpmBarTimeSignatureMode(mode);
+      storeBpmBarTimeSignatureMode(normalized);
+      setBpmBarTimeSignatureMode(normalized);
+    },
+    bpmBarNumerator,
+    onBpmBarNumeratorChange: (numerator: number) => {
+      const clamped = clampTimeSignatureNumerator(numerator);
+      storeBpmBarNumerator(clamped);
+      setBpmBarNumerator(clamped);
+    },
+    bpmBarDenominator,
+    onBpmBarDenominatorChange: (denominator: number) => {
+      const clamped = clampTimeSignatureDenominator(denominator);
+      storeBpmBarDenominator(clamped);
+      setBpmBarDenominator(clamped);
+    },
+    bpmBarBeatOffset,
+    onBpmBarBeatOffsetChange: (offset: number) => {
+      const clamped = clampTimeSignatureTrackOffset(offset);
+      const id = multiTrackEnabledRef.current
+        ? cachedMixSourcesRef.current?.[0]?.fingerprint
+        : fingerprintRef.current;
+      storeBpmBarBeatOffsetForTrack(id, clamped);
+      setBpmBarBeatOffset(clamped);
+    },
+    branchLookaheadEnabled,
+    onBranchLookaheadEnabledChange: (enabled: boolean) => {
+      storeBranchLookaheadEnabled(enabled);
+      branchLookaheadEnabledRef.current = enabled;
+      setBranchLookaheadEnabled(enabled);
+      syncPredictedJumps();
+    },
+    branchLookaheadCount,
+    onBranchLookaheadCountChange: (count: number) => {
+      const clamped = clampBranchLookaheadCount(count);
+      storeBranchLookaheadCount(clamped);
+      branchLookaheadCountRef.current = clamped;
+      setBranchLookaheadCount(clamped);
+      syncPredictedJumps();
+    },
+  };
 
   if (!file) {
     return (
@@ -1995,6 +3554,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       </>
     );
   }
+
+  const activeMixEnabled =
+    playMode === "autocanonizer" ? autocanonizerMixEnabled : multiTrackEnabled;
+  const trackDurationSeconds =
+    mixDurationOverrideSec ?? analysis?.track?.duration ?? 0;
 
   return (
     <>
@@ -2054,6 +3618,36 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
               onFinishOutSongChange={setFinishOutSong}
               loopTrack={loopTrack}
               onLoopTrackChange={setLoopTrack}
+              canMix={Boolean(analysis)}
+              activeMixEnabled={activeMixEnabled}
+              autocanonizerMixEnabled={autocanonizerMixEnabled}
+              autocanonizerMixAlignment={autocanonizerMixAlignment}
+              autocanonizerQuadMode={autocanonizerQuadMode}
+              autocanonizerQuadBranchMode={autocanonizerQuadBranchMode}
+              onToggleMix={onToggleMix}
+              onSwapAutocanonizerMix={onSwapAutocanonizerMix}
+              onToggleAutocanonizerQuad={() => {
+                const next = !autocanonizerQuadMode;
+                setAutocanonizerQuadMode(next);
+                if (autocanonizerMixEnabledRef.current) {
+                  autocanonizerRef.current?.setQuadMode?.(next);
+                }
+              }}
+              onAutocanonizerQuadBranchModeChange={(mode) => {
+                setAutocanonizerQuadBranchMode(mode);
+                if (
+                  autocanonizerMixEnabledRef.current &&
+                  autocanonizerQuadMode
+                ) {
+                  autocanonizerRef.current?.setQuadBranchMode?.(mode);
+                }
+              }}
+              onAutocanonizerMixAlignmentChange={(mode) => {
+                setAutocanonizerMixAlignment(mode);
+                if (autocanonizerMixEnabledRef.current) {
+                  autocanonizerRef.current?.setDualAlignmentMode?.(mode);
+                }
+              }}
               action={
                 customAnchorEnabled && playMode === "jukebox" ? (
                   <CustomAnchorButton
@@ -2082,7 +3676,42 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           <div id="viz-layer" className="viz-layer" ref={vizLayerRef} />
           <div id="canonizer-layer" className="canonizer-layer" ref={canonizerLayerRef} />
           <div id="wubmachine-layer" className="wubmachine-layer" ref={wubMachineLayerRef} />
-          <div className="viz-bottom" id="viz-stats">
+          <div className="viz-bottom" id="viz-stats" ref={vizStatsRef}>
+            {bpmBarEnabled && isSmoothStyle ? (
+              <div
+                id="bpm-bar-smooth"
+                className={
+                  isPaused ? "bpm-bar-smooth is-paused" : "bpm-bar-smooth"
+                }
+                aria-hidden="true"
+              >
+                <span
+                  id="bpm-bar-smooth-fill"
+                  ref={smoothFillRef}
+                  className="bpm-bar-smooth-fill"
+                />
+                {showSegmentOverlay ? renderBpmBarSegments(true) : null}
+                {segmentCount !== null && segmentCount >= 2 ? (
+                  <div
+                    id="bpm-bar-smooth-ticks"
+                    className="bpm-bar-smooth-ticks"
+                  >
+                    {Array.from({ length: segmentCount - 1 }, (_, idx) => (
+                      <span
+                        key={idx}
+                        data-bpm-tick={idx + 1}
+                        className="bpm-bar-smooth-tick"
+                        style={{
+                          left: `${((idx + 1) / segmentCount) * 100}%`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : bpmBarEnabled && segmentCount !== null ? (
+              renderBpmBarSegments(false)
+            ) : null}
             <div className="viz-bottom-left">
               <button
                 id="viz-play"
@@ -2103,12 +3732,40 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                 playMode={playMode}
                 counters={counters}
                 wubMachineDurationSeconds={wubMachineDurationSeconds}
-                trackDurationSeconds={analysis?.track?.duration ?? 0}
+                trackDurationSeconds={trackDurationSeconds}
                 beatsLabel={beatsLabel}
                 bringItHomeMode={bringItHomeMode}
+                forceBranchActive={forceBranchActive}
+                isQuadMix={autocanonizerMixEnabled && autocanonizerQuadMode}
+                autocanonizerOtherDurationSeconds={
+                  autocanonizerOtherDurationSec
+                }
               />
             </div>
             <div className="viz-bottom-right">
+              {mixQueue.length > 0 ? (
+                <button
+                  id="playlist-open"
+                  className="playlist-control playlist-open-control"
+                  type="button"
+                  aria-label={t("mixQueue.openTitle", {
+                    count: mixQueue.length,
+                  })}
+                  title={t("mixQueue.openTitle", { count: mixQueue.length })}
+                  onClick={() => setIsQueueOpen(true)}
+                >
+                  <svg
+                    className="playlist-control-svg"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z" />
+                  </svg>
+                </button>
+              ) : null}
               {playMode === "autocanonizer" ? (
                 <PanPopover
                   isOpen={isPanOpen}
@@ -2116,7 +3773,20 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                   buttonRef={panButtonRef}
                   mainPan={autocanonizerMainPan}
                   otherPan={autocanonizerOtherPan}
+                  pinkPan={autocanonizerPinkPan}
+                  goldPan={autocanonizerGoldPan}
+                  mainGainPct={autocanonizerMainGainPct}
+                  otherGainPct={autocanonizerOtherGainPct}
+                  pinkGainPct={autocanonizerPinkGainPct}
+                  goldGainPct={autocanonizerGoldGainPct}
+                  isDualMix={autocanonizerMixEnabled}
+                  isQuadMix={autocanonizerQuadMode}
+                  mixTrackTitles={autocanonizerMixTrackTitles}
                   onPanChange={onAutocanonizerStreamPanChange}
+                  onQuadPanChange={onAutocanonizerQuadPanChange}
+                  onGainChange={onAutocanonizerStreamGainChange}
+                  onQuadGainChange={onAutocanonizerQuadGainChange}
+                  onResetBalance={onResetAutocanonizerBalance}
                   onToggle={togglePan}
                 />
               ) : null}
@@ -2151,6 +3821,23 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         </div>
       </div>
 
+      {isTuningOpen ? (
+        <TuningModal
+          open={isTuningOpen}
+          playMode={playMode}
+          tuneForm={tuneForm}
+          onTuneFormChange={handleTuneFormChange}
+          extrasForm={extrasForm}
+          onExtrasFormChange={handleExtrasFormChange}
+          multi={multiTuningProps}
+          visuals={visualsTuningProps}
+          detectedBeatsPerBar={detectedBeatsPerBar}
+          onClose={() => setIsTuningOpen(false)}
+          showReset={showTuningReset}
+          onReset={handleResetTuningAndExtras}
+        />
+      ) : null}
+
       {isExportOpen ? (
         <ExportModal
           form={exportForm}
@@ -2169,32 +3856,41 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         />
       ) : null}
 
-      {isTuningOpen ? (
-        <TuningModal
-          playMode={playMode}
-          activeTab={tuningActiveTab}
-          onTabChange={setTuningActiveTab}
-          tuneForm={tuneForm}
-          setTuneForm={setTuneForm}
-          extrasForm={extrasForm}
-          setExtrasForm={setExtrasForm}
-          detectedBeatsPerBar={detectedBeatsPerBar}
-          onClose={() => setIsTuningOpen(false)}
-          showReset={showTuningReset}
-          onReset={onResetTuningModal}
-          onApply={onApplyTuningModal}
-        />
-      ) : null}
-
       {isInfoOpen ? (
         <InfoModal
-          trackDurationSeconds={analysis?.track?.duration ?? 0}
+          trackDurationSeconds={trackDurationSeconds}
           totalBeats={totalBeats}
           totalBranches={totalBranches}
           deletedBranches={deletedBranches}
           onClose={() => setIsInfoOpen(false)}
         />
       ) : null}
+
+      <MixQueueModal
+        open={isQueueOpen}
+        tracks={mixQueue}
+        activeIndex={activeQueueIndex}
+        playMode={playMode}
+        isMixActive={activeMixEnabled}
+        onSelectIndex={(index) => {
+          selectMixQueueIndex?.(index);
+        }}
+        onMoveItem={(fromIndex, toIndex) => {
+          moveMixQueueItem?.(fromIndex, toIndex);
+        }}
+        onRemoveItem={(index) => {
+          removeFromMixQueue?.(index);
+        }}
+        onAddFiles={(entries: AudioFileEntry[]) => {
+          addFilesToMixQueue?.(entries);
+        }}
+        onClear={() => {
+          clearMixQueue?.();
+        }}
+        onToggleMix={onToggleMix}
+        onClose={() => setIsQueueOpen(false)}
+      />
+
       <ShortcutToastStack queue={shortcutToastQueue} />
       </section>
       {settingsModal}

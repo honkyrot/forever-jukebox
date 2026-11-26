@@ -8,6 +8,9 @@ import {
 import {
   CANONIZER_MASTER_BLEND,
   CANONIZER_MAX_SKEW_DELTA,
+  QUAD_BRANCH_BLEND,
+  QUAD_MAIN_BLEND,
+  QUAD_SYNC_MAX_SKEW_DELTA,
   planCanonizerRender,
   type CanonizerRenderPlan,
 } from "./canonizerRenderPlan";
@@ -46,9 +49,6 @@ const VOLUME_WINDOW = 20;
 const MIN_STREAM_GAIN = 0;
 const MAX_STREAM_GAIN = 2;
 const SECTION_FOLD_BAR_MISMATCH_PENALTY = 15;
-const QUAD_MAIN_BLEND = 0.28;
-const QUAD_BRANCH_BLEND = 0.22;
-const QUAD_SYNC_MAX_SKEW_DELTA = 0.025;
 
 export type AutocanonizerCursorTimes = {
   mainSeconds: number;
@@ -157,6 +157,16 @@ class AutocanonizerPlayer {
   setBuffers(mainBuffer: AudioBuffer, otherBuffer: AudioBuffer | null) {
     this.buffer = mainBuffer;
     this.otherBuffer = otherBuffer;
+  }
+
+  /**
+   * Returns the main and optional secondary AudioBuffers currently assigned to the player.
+   */
+  getBuffers(): { mainBuffer: AudioBuffer; otherBuffer: AudioBuffer | null } {
+    return {
+      mainBuffer: this.buffer,
+      otherBuffer: this.otherBuffer,
+    };
   }
 
   setVolume(volume: number) {
@@ -818,13 +828,35 @@ export class AutocanonizerController {
   }
 
   // The canon as a timed plan for offline rendering, with the current
-  // finish-out setting and stream pans. Null until an analysis is set.
+  // finish-out setting, stream pans/gains, and dual/quad mix state. Null until an analysis is set.
   planRender(): CanonizerRenderPlan | null {
     return planCanonizerRender(this.beats, {
       finishOutSong: this.finishOutSong,
       mainPan: this.mainStreamPan,
       otherPan: this.otherStreamPan,
+      mainGain: this.mainStreamGain,
+      otherGain: this.otherStreamGain,
+      pinkPan: this.pinkStreamPan,
+      pinkGain: this.pinkStreamGain,
+      goldPan: this.goldStreamPan,
+      goldGain: this.goldStreamGain,
+      isDual: this.otherBeats.length > 0,
+      quadMode: this.quadMode,
+      otherBeats: this.otherBeats,
     });
+  }
+
+  /**
+   * Returns the active main and optional secondary AudioBuffers for offline rendering.
+   */
+  getAudioBuffers(): {
+    mainBuffer: AudioBuffer | null;
+    otherBuffer: AudioBuffer | null;
+  } {
+    if (!this.player) {
+      return { mainBuffer: null, otherBuffer: null };
+    }
+    return this.player.getBuffers();
   }
 
   start() {

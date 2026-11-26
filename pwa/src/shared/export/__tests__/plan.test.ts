@@ -3,6 +3,7 @@ import type { AnalysisOutput } from "@/shared/analysis-schema/schema";
 import {
   buildJumpGraph,
   calculateMinLongBranch,
+  mergeTrackAnalyses,
   normalizeAnalysis,
   type JukeboxConfig,
 } from "@forever-jukebox/shared";
@@ -373,6 +374,62 @@ describe("planJukeboxPath", () => {
       jumps.every(
         (segment) =>
           Math.abs((segment.jumpFromIndex ?? 0) - segment.beatIndex) >= 12,
+      ),
+    ).toBe(true);
+  });
+
+  it("clones merged multi-track TrackAnalysis and tags segment trackIndex without dropping beats", () => {
+    const trackOne = normalizeAnalysis(createAnalysis(24, 0.5));
+    const trackTwo = normalizeAnalysis(createAnalysis(24, 0.5));
+    const merged = mergeTrackAnalyses([
+      { analysis: trackOne, durationSec: 12, title: "Track 1" },
+      { analysis: trackTwo, durationSec: 12, title: "Track 2" },
+    ]);
+
+    const planned = planJukeboxPath({
+      analysis: merged,
+      bufferDurationSeconds: 24,
+      durationSeconds: 18,
+      config: {
+        ...baseConfig,
+        minRandomBranchChance: 0.6,
+        maxRandomBranchChance: 0.9,
+      },
+      randomMode: "seeded",
+      seed: 17,
+    });
+
+    expect(planned.segments.length).toBeGreaterThan(0);
+    expect(planned.segments.every((seg) => seg.trackIndex === 0 || seg.trackIndex === 1)).toBe(
+      true,
+    );
+  });
+
+  it("caps jump distance using maxLongBranchPercent", () => {
+    const analysis = createAnalysis(40, 0.5);
+    const planned = planJukeboxPath({
+      analysis,
+      bufferDurationSeconds: 20,
+      durationSeconds: 20,
+      config: {
+        ...baseConfig,
+        maxLongBranchPercent: 25,
+        minRandomBranchChance: 1,
+        maxRandomBranchChance: 1,
+        randomBranchChanceDelta: 0,
+      },
+      randomMode: "seeded",
+      seed: 9,
+    });
+
+    const jumps = planned.segments.filter(
+      (segment) => segment.jumped && segment.jumpFromIndex !== null,
+    );
+    const maxSpan = Math.round(0.25 * 40);
+    expect(
+      jumps.every(
+        (segment) =>
+          Math.abs((segment.jumpFromIndex ?? 0) - segment.beatIndex) <= maxSpan,
       ),
     ).toBe(true);
   });

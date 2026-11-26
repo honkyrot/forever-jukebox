@@ -140,4 +140,31 @@ describe("renderCanonizerAudio", () => {
       expect(sampleAt(rendered, at)[0]).toBeCloseTo(0.8 * 0.5 * 0.5);
     }
   });
+
+  it("uses otherSourceBuffer when a voice specifies sourceIndex 1", async () => {
+    const mainSource = makeSource([0.4]);
+    const otherSource = makeSource([0.8]);
+    const rendered = await renderCanonizerAudio(
+      mainSource,
+      {
+        durationSeconds: 1,
+        voices: [
+          {
+            pan: 0,
+            sourceIndex: 0,
+            segments: [{ outputStart: 0, duration: 1, sourceOffset: 0, gain: 0.5 }],
+          },
+          {
+            pan: 0,
+            sourceIndex: 1,
+            segments: [{ outputStart: 0, duration: 1, sourceOffset: 0, gain: 0.25 }],
+          },
+        ],
+      },
+      { otherSourceBuffer: otherSource },
+    );
+
+    const [left] = sampleAt(rendered, 0.5);
+    expect(left).toBeCloseTo(0.4 * 0.5 + 0.8 * 0.25);
+  });
 });

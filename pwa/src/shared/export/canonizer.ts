@@ -4,11 +4,16 @@ import { clampGain, createOutputBuffer } from "./render";
 // Output seconds mixed between yields to the event loop.
 const MIX_SLICE_SECONDS = 30;
 
-// Mixes the planned canon voices from the source into a stereo buffer.
+// Mixes the planned canon voices from the source (and optional secondary song)
+// into a stereo buffer.
 export async function renderCanonizerAudio(
   sourceBuffer: AudioBuffer,
   plan: CanonizerRenderPlan,
-  options: { gain?: number; onProgress?: (progress: number) => void } = {},
+  options: {
+    gain?: number;
+    otherSourceBuffer?: AudioBuffer | null;
+    onProgress?: (progress: number) => void;
+  } = {},
 ): Promise<AudioBuffer> {
   const sampleRate = sourceBuffer.sampleRate;
   const output = createOutputBuffer(
@@ -17,18 +22,25 @@ export async function renderCanonizerAudio(
     sampleRate,
   );
   const volume = clampGain(options.gain ?? 1);
-  const sourceLeft = sourceBuffer.getChannelData(0);
-  const sourceRight = sourceBuffer.getChannelData(
-    Math.min(1, sourceBuffer.numberOfChannels - 1),
-  );
   const outLeft = output.getChannelData(0);
   const outRight = output.getChannelData(1);
   const voices = plan.voices.map((voice) => {
+    const voiceBuffer =
+      voice.sourceIndex === 1 && options.otherSourceBuffer
+        ? options.otherSourceBuffer
+        : sourceBuffer;
+    const sourceLeft = voiceBuffer.getChannelData(0);
+    const sourceRight = voiceBuffer.getChannelData(
+      Math.min(1, voiceBuffer.numberOfChannels - 1),
+    );
     // Stereo-input law of a StereoPannerNode.
     const pan = Math.max(-1, Math.min(1, voice.pan));
     const angle = ((pan <= 0 ? pan + 1 : pan) * Math.PI) / 2;
     return {
       segments: voice.segments,
+      sourceLeft,
+      sourceRight,
+      sourceLength: voiceBuffer.length,
       leftToLeft: pan <= 0 ? 1 : Math.cos(angle),
       rightToLeft: pan <= 0 ? Math.cos(angle) : 0,
       leftToRight: pan <= 0 ? 0 : Math.sin(angle),
@@ -52,11 +64,11 @@ export async function renderCanonizerAudio(
         const end = Math.min(
           sliceEnd,
           Math.round((segment.outputStart + segment.duration) * sampleRate),
-          sourceBuffer.length - shift,
+          voice.sourceLength - shift,
         );
         for (let frame = first; frame < end; frame += 1) {
-          const left = (sourceLeft[frame + shift] as number) * gain;
-          const right = (sourceRight[frame + shift] as number) * gain;
+          const left = (voice.sourceLeft[frame + shift] as number) * gain;
+          const right = (voice.sourceRight[frame + shift] as number) * gain;
           outLeft[frame] =
             (outLeft[frame] as number) +
             left * voice.leftToLeft +

@@ -10,7 +10,15 @@ import {
 } from "@/core/infrastructure/cache/fileHandleStore";
 import { computeFingerprint } from "@/shared/utils/fingerprint";
 
-const appState = vi.hoisted(() => ({ setFile: vi.fn() }));
+const appState = vi.hoisted(() => ({
+  setFile: vi.fn(),
+  mixQueue: [] as Array<{ id: string; title: string; fingerprint?: string | null }>,
+  mixAddSticky: false,
+  setMixAddSticky: vi.fn(),
+  addToMixQueue: vi.fn(),
+  addFilesToMixQueue: vi.fn(),
+  clearMixQueue: vi.fn(),
+}));
 vi.mock("../state/AppState", () => ({ useAppState: () => appState }));
 
 vi.mock("@/core/infrastructure/cache/analysisCache", () => ({
@@ -64,6 +72,12 @@ describe("Home cached tracks", () => {
 
   beforeEach(() => {
     appState.setFile.mockReset();
+    appState.mixQueue = [];
+    appState.mixAddSticky = false;
+    appState.setMixAddSticky.mockReset();
+    appState.addToMixQueue.mockReset();
+    appState.addFilesToMixQueue.mockReset();
+    appState.clearMixQueue.mockReset();
     vi.mocked(getFileHandle).mockReset().mockResolvedValue(null);
     vi.mocked(readFileFromHandle).mockReset().mockResolvedValue(null);
     vi.mocked(deleteFileHandle).mockClear();
@@ -188,5 +202,73 @@ describe("Home cached tracks", () => {
     expect(readFileFromHandle).toHaveBeenCalledWith(handle);
     expect(appState.setFile).not.toHaveBeenCalled();
     expect(inputClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues a cached track when its + button is clicked", async () => {
+    vi.mocked(getFileHandle).mockResolvedValue(handle);
+    vi.mocked(readFileFromHandle).mockResolvedValue(song);
+    await renderHome();
+
+    const addBtn = screen.getByRole("button", { name: /^Add Song — Band/ });
+    await act(async () => {
+      fireEvent.click(addBtn);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(appState.addToMixQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: song,
+        fileHandle: handle,
+        fingerprint: "fp-1",
+      }),
+    );
+  });
+
+  it("forwards multi-file drops to addFilesToMixQueue and navigates to Listen", async () => {
+    const songTwo = new File([new Uint8Array([2])], "song2.mp3");
+    const { container } = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/listen" element={<div>Listen page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /^Song — Band/ });
+
+    fireEvent.drop(container.querySelector(".drop-zone")!, {
+      dataTransfer: {
+        files: [song, songTwo],
+        items: [{ kind: "file" }, { kind: "file" }],
+      },
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(appState.addFilesToMixQueue).toHaveBeenCalledWith(
+      [
+        { file: song, handle: null },
+        { file: songTwo, handle: null },
+      ],
+      { activateFirst: true },
+    );
+    expect(screen.getByText("Listen page")).toBeTruthy();
+  });
+
+  it("displays the mix queue bar on Home and clears it when requested", async () => {
+    appState.mixQueue = [
+      { id: "fp-1", title: "Track One", fingerprint: "fp-1" },
+      { id: "fp-2", title: "Track Two", fingerprint: "fp-2" },
+    ];
+    await renderHome();
+
+    const queueBar = document.querySelector("#home-mix-queue");
+    expect(queueBar?.textContent).toContain("Track One × Track Two");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(appState.clearMixQueue).toHaveBeenCalledTimes(1);
   });
 });

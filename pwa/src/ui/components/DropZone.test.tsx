@@ -94,4 +94,29 @@ describe("DropZone", () => {
 
     expect(onFile).toHaveBeenCalledWith(song, null);
   });
+
+  it("forwards multiple dropped and picked files when multiple mode is enabled", async () => {
+    const songTwo = new File([new Uint8Array([4, 5, 6])], "song2.mp3", {
+      type: "audio/mpeg",
+    });
+    const onFiles = vi.fn();
+    const { container } = render(
+      <DropZone onFile={vi.fn()} onFiles={onFiles} multiple={true} />,
+    );
+    const input = container.querySelector<HTMLInputElement>("input[type=file]")!;
+    expect(input.multiple).toBe(true);
+
+    fireEvent.drop(container.querySelector(".drop-zone")!, {
+      dataTransfer: {
+        files: [song, songTwo],
+        items: [{ kind: "file" }, { kind: "file" }],
+      },
+    });
+    await settle();
+
+    expect(onFiles).toHaveBeenCalledWith([
+      { file: song, handle: null },
+      { file: songTwo, handle: null },
+    ]);
+  });
 });
