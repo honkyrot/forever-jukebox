@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi  } from "vitest";
 import type { AppContext, AppState } from "./context";
 import {
+  disableSongSyncMix,
+  loadSongSyncMix,
   loadTrackById,
   loadTrackByJobId,
   togglePlayback,
@@ -36,6 +38,8 @@ vi.mock("./playback", async (importActual) => ({
   ...(await importActual<typeof import("./playback")>()),
   loadTrackById: vi.fn(async () => true),
   loadTrackByJobId: vi.fn(async () => true),
+  loadSongSyncMix: vi.fn(async () => true),
+  disableSongSyncMix: vi.fn(async () => true),
   togglePlayback: vi.fn(),
 }));
 vi.mock("./playback-ui", () => ({
@@ -85,6 +89,9 @@ function createDeps(overrides?: Partial<AppState>) {
   }
   const context = {
     defaultConfig: { ...DEFAULT_JUKEBOX_CONFIG },
+    jukebox: {},
+    autocanonizer: {},
+    wubmachine: {},
   } as unknown as AppContext;
   const playbackDeps: PlaybackDeps = {};
   setAppRuntime(context);
@@ -646,5 +653,37 @@ describe("playlist handlers", () => {
     playlistNext();
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("reloads Song Sync when tracks are added, reordered, removed, or cleared", () => {
+    const { context } = createDeps({
+      playMode: "songsync",
+      songSyncEnabled: true,
+      playlist: {
+        tracks: [track("a"), track("b")],
+        currentIndex: 0,
+      },
+    } as Partial<AppState>);
+
+    addToPlaylist(track("c"), "search");
+    expect(loadSongSyncMix).toHaveBeenCalledTimes(1);
+    expect(loadSongSyncMix).toHaveBeenLastCalledWith(context);
+
+    movePlaylistIndex(2, 1);
+    expect(loadSongSyncMix).toHaveBeenCalledTimes(2);
+
+    removePlaylistIndex(2);
+    expect(loadSongSyncMix).toHaveBeenCalledTimes(3);
+
+    removePlaylistIndex(1);
+    expect(disableSongSyncMix).toHaveBeenCalledTimes(1);
+    expect(disableSongSyncMix).toHaveBeenLastCalledWith(context);
+
+    useAppStore.setState({
+      songSyncEnabled: true,
+      playlist: { tracks: [track("a"), track("b")], currentIndex: 0 },
+    });
+    clearPlaylist();
+    expect(disableSongSyncMix).toHaveBeenCalledTimes(2);
   });
 });

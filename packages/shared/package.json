@@ -8,6 +8,7 @@
     "./types": "./src/engine/types.ts",
     "./audio/*": "./src/audio/*.ts",
     "./autocanonizer/*": "./src/autocanonizer/*.ts",
+    "./songsync/*": "./src/songsync/*.ts",
     "./wubmachine/*": "./src/wubmachine/*.ts",
     "./viz/*": "./src/viz/*.ts",
     "./background": "./src/background/backgroundTimer.ts",

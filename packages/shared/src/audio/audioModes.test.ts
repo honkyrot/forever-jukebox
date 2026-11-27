@@ -38,10 +38,15 @@ describe("clampAudioModeIntensity", () => {
 });
 
 describe("audioModeSupportsIntensity", () => {
-  it("supports exactly nightcore, daycore, and vaporwave", () => {
+  it("supports exactly nightcore, daycore, vaporwave, and eight_bit", () => {
     const supported = ALL_MODES.filter(audioModeSupportsIntensity);
     expect(new Set(supported)).toEqual(INTENSITY_AUDIO_MODES);
-    expect(supported).toEqual(["nightcore", "daycore", "vaporwave"]);
+    expect(supported).toEqual([
+      "nightcore",
+      "daycore",
+      "vaporwave",
+      "eight_bit",
+    ]);
   });
 });
 
@@ -80,6 +85,20 @@ describe("scaleAudioModeSettings", () => {
     expect(high.rate).toBeCloseTo(0.475, 10);
     expect(high.reverbMix).toBeCloseTo(0.9, 10);
     expect(high.lowPassFrequency).toBeCloseTo(1000 * 2 ** -0.5, 6);
+  });
+
+  it("scales eight_bit bit depth and sample rate at the range endpoints", () => {
+    const low = scaleAudioModeSettings(AUDIO_MODE_SETTINGS.eight_bit, 50);
+    expect(low.crushBitDepth).toBe(13);
+    expect(low.crushSampleRate).toBe(16000);
+
+    const mid = scaleAudioModeSettings(AUDIO_MODE_SETTINGS.eight_bit, 100);
+    expect(mid).toBe(AUDIO_MODE_SETTINGS.eight_bit);
+
+    const high = scaleAudioModeSettings(AUDIO_MODE_SETTINGS.eight_bit, 150);
+    expect(high.crushBitDepth).toBe(3);
+    expect(high.crushSampleRate).toBe(4000);
+    expect(getAudioModeSettings("eight_bit", 150)).toEqual(high);
   });
 
   it("caps reverbMix at 1 and leaves null filters null", () => {

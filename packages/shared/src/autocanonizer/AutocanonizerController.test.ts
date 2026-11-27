@@ -621,4 +621,35 @@ describe("AutocanonizerController", () => {
     expect(quadPlan?.voices).toHaveLength(4);
     expect(quadPlan?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 1, 1]);
   });
+
+  it("mutes unmatched solo sections instead of clamping onto Song 2 when lengths differ", () => {
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains, sources } = createAudioContext();
+    const mainBuffer = { duration: 10 } as AudioBuffer;
+    const otherBuffer = { duration: 4 } as AudioBuffer;
+
+    controller.setDualAudio(mainBuffer, otherBuffer, context);
+    const other0 = createBeat(0, 0);
+    const main0 = createBeat(0, 0);
+    const main1 = createBeat(1, 1);
+    main0.next = main1;
+    main1.prev = main0;
+    main0.other = other0;
+    main0.otherGain = 1;
+    main1.other = other0;
+    main1.otherGain = 0;
+
+    (controller as unknown as { beats: CanonizerBeat[] }).beats = [main0, main1];
+
+    controller.startAtIndex(0);
+    expect(gains[1].gain.value).toBeCloseTo(0.45);
+    expect(sources).toHaveLength(2);
+
+    // Selecting beat 1 (otherGain=0) mutes otherGain and stops secondary source.
+    controller.selectIndex(1, false);
+    // Re-trigger via startAtIndex(1)
+    controller.startAtIndex(1);
+    expect(gains[1].gain.value).toBe(0);
+    controller.stop();
+  });
 });

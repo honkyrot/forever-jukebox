@@ -1023,6 +1023,84 @@ describe("JukeboxViz", () => {
       });
       expect((viz as any).multiTrackMode).toBe(false);
     });
+
+    it("positions multi-track beats proportionally to track duration", () => {
+      const container = {
+        append: vi.fn(),
+        getBoundingClientRect: () => ({ width: 600, height: 400 }),
+      } as unknown as HTMLElement;
+      const viz = new JukeboxViz(container);
+      const beats = [
+        // Track 0: 4s (0, 1, 2, 3)
+        ...Array.from({ length: 4 }, (_, i) => ({
+          which: i,
+          localWhich: i,
+          trackIndex: 0,
+          trackBeatCount: 4,
+          start: i,
+          duration: 1,
+          overlappingSegments: [],
+          neighbors: [],
+          allNeighbors: [],
+          prev: null,
+          next: null,
+        })),
+        // Track 1: 2s (startTimeOffset 4 -> local 0, 1)
+        ...Array.from({ length: 2 }, (_, i) => ({
+          which: 4 + i,
+          localWhich: i,
+          trackIndex: 1,
+          trackBeatCount: 2,
+          start: 4 + i,
+          duration: 1,
+          overlappingSegments: [],
+          neighbors: [],
+          allNeighbors: [],
+          prev: null,
+          next: null,
+        })),
+      ];
+      viz.setData({
+        beats: beats as any,
+        beatVisits: beats.map(() => 0),
+        beatColors: beats.map(() => "#fff"),
+        edges: [],
+        lastBranchPoint: -1,
+        anchorEdgeId: null,
+        userAnchorEdgeId: null,
+        putBackAnchorEdgeId: null,
+        tracks: [
+          {
+            trackIndex: 0,
+            title: "Long",
+            duration: 4,
+            tempo: 60,
+            tempoRatio: 1,
+            startTimeOffset: 0,
+            startBeatIndex: 0,
+            beatCount: 4,
+          },
+          {
+            trackIndex: 1,
+            title: "Short",
+            duration: 2,
+            tempo: 60,
+            tempoRatio: 1,
+            startTimeOffset: 4,
+            startBeatIndex: 4,
+            beatCount: 2,
+          },
+        ],
+      });
+      const positions = (viz as any).activeViz.positions as Array<{
+        x: number;
+        y: number;
+      }>;
+      const longSpan = positions[3].x - positions[0].x;
+      const shortSpan = positions[5].x - positions[4].x;
+      // Track 0 last beat starts at t=3/4, Track 1 last beat starts at t=1/4 -> ratio 1/3.
+      expect(shortSpan / longSpan).toBeCloseTo(1 / 3, 2);
+    });
   });
 
   describe("engine-based coloring", () => {

@@ -54,6 +54,7 @@ export interface ExportJukeboxAudioOptions {
   gain?: number;
   audioMode: JukeboxAudioMode;
   audioIntensityPct?: number;
+  metronomeEnabled?: boolean;
   metronomeVolumePct?: number;
   metronomeBeatsPerBar?: number | null;
   metronomeBeatOffset?: number;
@@ -121,8 +122,8 @@ export async function exportJukeboxAudio(
     userAnchorEdge: options.userAnchorEdge,
   });
   const renderedDurationSeconds = plan.renderDurationSeconds / playbackRate;
-  const cowbellEvents =
-    options.audioMode === "cowbell"
+  const cowbellEvents = [
+    ...(options.audioMode === "cowbell"
       ? planCowbellExportEvents({
           analysis: options.analysis,
           segments: plan.segments,
@@ -131,17 +132,19 @@ export async function exportJukeboxAudio(
           volume: options.gain ?? 1,
           seed: options.seed,
         })
-      : options.audioMode === "metronome"
-        ? planMetronomeExportEvents({
-            analysis: options.analysis,
-            segments: plan.segments,
-            sampleRate: sourceBuffer.sampleRate,
-            volume: options.gain ?? 1,
-            metronomeVolumePct: options.metronomeVolumePct,
-            metronomeBeatsPerBar: options.metronomeBeatsPerBar,
-            metronomeBeatOffset: options.metronomeBeatOffset,
-          })
-        : [];
+      : []),
+    ...(options.metronomeEnabled
+      ? planMetronomeExportEvents({
+          analysis: options.analysis,
+          segments: plan.segments,
+          sampleRate: sourceBuffer.sampleRate,
+          volume: options.gain ?? 1,
+          metronomeVolumePct: options.metronomeVolumePct,
+          metronomeBeatsPerBar: options.metronomeBeatsPerBar,
+          metronomeBeatOffset: options.metronomeBeatOffset,
+        })
+      : []),
+  ].sort((a, b) => a.outputStart - b.outputStart);
 
   let encoded;
 

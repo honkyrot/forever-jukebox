@@ -36,7 +36,6 @@ import {
 } from "@forever-jukebox/shared";
 import {
   DEFAULT_BEATS_PER_BAR,
-  DEFAULT_METRONOME_BEAT_OFFSET,
   DEFAULT_METRONOME_VOLUME_PCT,
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { getTuningParamsStringFromUrl } from "./tuning";
@@ -500,9 +499,8 @@ const createPlaybackSlice: Slice<
     | "bringItHomeMode"
     | "jukeboxAudioMode"
     | "audioIntensity"
+    | "metronomeEnabled"
     | "metronomeVolumePct"
-    | "metronomeBeatsPerBar"
-    | "metronomeBeatOffset"
     | "metronomeDetectedBeatsPerBar"
     | "audioModePreparing"
     | "audioModeRenderToken"
@@ -541,9 +539,8 @@ const createPlaybackSlice: Slice<
   bringItHomeMode: false,
   jukeboxAudioMode: "off",
   audioIntensity: 100,
+  metronomeEnabled: false,
   metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
-  metronomeBeatsPerBar: null,
-  metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
   metronomeDetectedBeatsPerBar: DEFAULT_BEATS_PER_BAR,
   audioModePreparing: false,
   audioModeRenderToken: 0,
@@ -608,6 +605,13 @@ const createTuningSlice: Slice<
     | "normalizeVolumeEnabled"
     | "postMixNormalizeVolumeEnabled"
     | "mixTrackGainsPct"
+    | "songSyncEnabled"
+    | "songSyncLoop"
+    | "songSyncTempoSyncEnabled"
+    | "songSyncNormalizeVolumeEnabled"
+    | "songSyncMasterTrackIndex"
+    | "songSyncTracks"
+    | "songSyncTrackSeconds"
     | "playlistAddSticky"
   >
 > = () => ({
@@ -631,6 +635,13 @@ const createTuningSlice: Slice<
   normalizeVolumeEnabled: true,
   postMixNormalizeVolumeEnabled: false,
   mixTrackGainsPct: [],
+  songSyncEnabled: false,
+  songSyncLoop: false,
+  songSyncTempoSyncEnabled: true,
+  songSyncNormalizeVolumeEnabled: true,
+  songSyncMasterTrackIndex: 0,
+  songSyncTracks: [],
+  songSyncTrackSeconds: [],
   playlistAddSticky: false,
 });
 

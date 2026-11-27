@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QuantumBase } from "@forever-jukebox/shared";
 import {
   DEFAULT_BPM_BAR_SMOOTH_DURATION_MS,
@@ -6,25 +6,31 @@ import {
   DEFAULT_BPM_BAR_TIME_SIGNATURE_MODE,
   MAX_BPM_BAR_SEGMENTS,
   MAX_BPM_BAR_SMOOTH_DURATION_MS,
+  MAX_STORED_SIMILARITY_RESTRICT_TRACKS,
   MIN_BPM_BAR_SMOOTH_DURATION_MS,
+  isBpmBarDownbeat,
   isPulseBpmBarStyle,
   isSmoothBpmBarStyle,
   normalizeBpmBarStyle,
   normalizeBpmBarTimeSignatureMode,
   readStoredBpmBarOffsetMap,
+  readStoredTimeSignatureSimilarityRestrictMap,
   resolveBpmBarActiveSegment,
   resolveBpmBarSegmentCount,
   resolveBpmBarSmoothAnimation,
+  resolveEffectiveMetronomeConfig,
   resolveStoredBpmBarBeatOffsetForTrack,
   resolveStoredBpmBarDenominator,
   resolveStoredBpmBarNumerator,
   resolveStoredBpmBarStyle,
   resolveStoredBpmBarTimeSignatureMode,
+  resolveStoredTimeSignatureSimilarityRestrictForTrack,
   storeBpmBarBeatOffsetForTrack,
   storeBpmBarDenominator,
   storeBpmBarNumerator,
   storeBpmBarStyle,
   storeBpmBarTimeSignatureMode,
+  storeTimeSignatureSimilarityRestrictForTrack,
   type BpmBarTimeSignatureInput,
 } from "./bpmBarTimeSignature";
 
@@ -46,9 +52,7 @@ function makeInput(
     timeSignatureSimilarityRestrictEnabled: false,
     timeSignatureSimilarityNumerator: 4,
     timeSignatureSimilarityDenominator: 4,
-    jukeboxAudioMode: "off",
-    metronomeBeatsPerBar: null,
-    metronomeBeatOffset: 0,
+    metronomeEnabled: false,
     metronomeDetectedBeatsPerBar: 4,
     ...overrides,
   };
@@ -190,13 +194,12 @@ describe("bpmBarTimeSignature", () => {
     ).toEqual({ segmentCount: 8, activeSegmentIndex: 7 });
   });
 
-  it("follows metronome time signature and offset in auto mode", () => {
+  it("follows metronome detected bar structure and BPM bar offset in auto mode", () => {
     const bar3 = { start: 0, duration: 1.5, which: 0, prev: null, next: null, overlappingSegments: [], neighbors: [], allNeighbors: [], children: [{}, {}, {}] as QuantumBase[] };
     const input = makeInput({
-      jukeboxAudioMode: "metronome",
-      metronomeBeatsPerBar: null,
+      metronomeEnabled: true,
       metronomeDetectedBeatsPerBar: 3,
-      metronomeBeatOffset: 1,
+      bpmBarBeatOffset: 1,
     });
     expect(
       resolveBpmBarActiveSegment(
@@ -205,19 +208,31 @@ describe("bpmBarTimeSignature", () => {
         makeBeat(2, { indexInParent: 2, parent: bar3 }),
       ),
     ).toEqual({ segmentCount: 3, activeSegmentIndex: 1 });
-
-    // Explicit metronome override uses modular localWhich counting.
     expect(
-      resolveBpmBarActiveSegment(
-        makeInput({
-          jukeboxAudioMode: "metronome",
-          metronomeBeatsPerBar: 6,
-          metronomeBeatOffset: 2,
-        }),
-        7,
-        makeBeat(7, { localWhich: 7 }),
-      ),
-    ).toEqual({ segmentCount: 6, activeSegmentIndex: 5 });
+      isBpmBarDownbeat(input, 1, makeBeat(1, { indexInParent: 1, parent: bar3 })),
+    ).toBe(true);
+    expect(
+      isBpmBarDownbeat(input, 2, makeBeat(2, { indexInParent: 2, parent: bar3 })),
+    ).toBe(false);
+
+    // Custom 6/4 with negative offset drives both BPM bar segments and metronome downbeats.
+    const custom64 = makeInput({
+      bpmBarTimeSignatureMode: "custom",
+      bpmBarNumerator: 6,
+      bpmBarDenominator: 4,
+      bpmBarBeatOffset: -1,
+      metronomeEnabled: true,
+    });
+    expect(resolveEffectiveMetronomeConfig(custom64)).toEqual({
+      beatsPerBarOverride: 6,
+      beatOffset: -1,
+    });
+    expect(
+      resolveBpmBarActiveSegment(custom64, 5, makeBeat(5, { localWhich: 5 })),
+    ).toEqual({ segmentCount: 6, activeSegmentIndex: 0 });
+    expect(isBpmBarDownbeat(custom64, 5, makeBeat(5, { localWhich: 5 }))).toBe(
+      true,
+    );
   });
 
   it("supports custom time signatures and caps segments at MAX_BPM_BAR_SEGMENTS", () => {
@@ -387,5 +402,94 @@ describe("bpmBarTimeSignature", () => {
         beat: makeBeat(0, { duration: 25 }),
       })?.durationMs,
     ).toBe(MAX_BPM_BAR_SMOOTH_DURATION_MS);
+  });
+
+  it("persists, clamps, evicts, and clears per-song similarity restriction settings", () => {
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-a")).toBeNull();
+    expect(readStoredTimeSignatureSimilarityRestrictMap()).toEqual({});
+
+    storeTimeSignatureSimilarityRestrictForTrack("song-a", {
+      numerator: 3,
+      denominator: 4,
+    });
+    storeTimeSignatureSimilarityRestrictForTrack("song-b", {
+      numerator: 99,
+      denominator: 99,
+    });
+
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-a")).toEqual({
+      numerator: 3,
+      denominator: 4,
+    });
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-b")).toEqual({
+      numerator: 64,
+      denominator: 16,
+    });
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-c")).toBeNull();
+
+    // Clearing song-a removes only its entry; clearing song-b removes the key from storage.
+    storeTimeSignatureSimilarityRestrictForTrack("song-a", null);
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-a")).toBeNull();
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack("song-b")).toEqual({
+      numerator: 64,
+      denominator: 16,
+    });
+    storeTimeSignatureSimilarityRestrictForTrack("song-b", null);
+    expect(localStorage.getItem("fj-ts-similarity-restrict")).toBeNull();
+
+    // Null/empty track IDs are safe no-ops.
+    storeTimeSignatureSimilarityRestrictForTrack(null, { numerator: 5, denominator: 4 });
+    storeTimeSignatureSimilarityRestrictForTrack("   ", { numerator: 5, denominator: 4 });
+    expect(resolveStoredTimeSignatureSimilarityRestrictForTrack(null)).toBeNull();
+
+    // Malformed JSON and invalid entries are ignored cleanly.
+    localStorage.setItem("fj-ts-similarity-restrict", "{bad-json");
+    expect(readStoredTimeSignatureSimilarityRestrictMap()).toEqual({});
+    localStorage.setItem(
+      "fj-ts-similarity-restrict",
+      JSON.stringify({
+        "": { numerator: 3, denominator: 4 },
+        badScalar: 4,
+        badNums: { numerator: "3", denominator: 4 },
+        valid: { numerator: 7, denominator: 8 },
+      }),
+    );
+    expect(readStoredTimeSignatureSimilarityRestrictMap()).toEqual({
+      valid: { numerator: 7, denominator: 8 },
+    });
+
+    // LRU eviction caps stored tracks at MAX_STORED_SIMILARITY_RESTRICT_TRACKS.
+    localStorage.clear();
+    for (let i = 0; i < MAX_STORED_SIMILARITY_RESTRICT_TRACKS + 2; i += 1) {
+      storeTimeSignatureSimilarityRestrictForTrack(`track-${i}`, {
+        numerator: 5,
+        denominator: 4,
+      });
+    }
+    const afterEviction = readStoredTimeSignatureSimilarityRestrictMap();
+    expect(Object.keys(afterEviction).length).toBe(
+      MAX_STORED_SIMILARITY_RESTRICT_TRACKS,
+    );
+    expect(afterEviction["track-0"]).toBeUndefined();
+    expect(afterEviction["track-1"]).toBeUndefined();
+    expect(afterEviction[`track-${MAX_STORED_SIMILARITY_RESTRICT_TRACKS + 1}`]).toEqual({
+      numerator: 5,
+      denominator: 4,
+    });
+
+    // Storage access errors are swallowed gracefully.
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(readStoredTimeSignatureSimilarityRestrictMap()).toEqual({});
+    expect(() =>
+      storeTimeSignatureSimilarityRestrictForTrack("song-x", {
+        numerator: 3,
+        denominator: 4,
+      }),
+    ).not.toThrow();
   });
 });

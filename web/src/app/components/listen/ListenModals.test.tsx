@@ -65,9 +65,6 @@ const EXTRAS_FORM: ExtrasFormValues = {
   customAnchorEnabled: false,
   audioMode: "off",
   audioIntensity: 100,
-  metronomeVolumePct: 100,
-  metronomeBeatsPerBar: null,
-  metronomeBeatOffset: 0,
 };
 
 beforeEach(() => {
@@ -110,6 +107,8 @@ beforeEach(() => {
       bpmBarNumerator: 4,
       bpmBarDenominator: 4,
       bpmBarBeatOffset: 0,
+      metronomeEnabled: false,
+      metronomeVolumePct: 100,
       tempoSyncEnabled: true,
       normalizeVolumeEnabled: true,
       postMixNormalizeVolumeEnabled: false,
@@ -258,92 +257,144 @@ describe("TuningModal", () => {
     await userEvent.click(screen.getByLabelText("Nightcore"));
     expect(document.getElementById("audio-intensity")).not.toBeNull();
 
+    await userEvent.click(screen.getByLabelText("8-Bit"));
+    const eightBitSlider = document.getElementById(
+      "audio-intensity",
+    ) as HTMLInputElement | null;
+    expect(eightBitSlider).not.toBeNull();
+    fireEvent.change(eightBitSlider!, { target: { value: "135" } });
+    expect(applyExtrasChanges).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ audioMode: "eight_bit", audioIntensity: 135 }),
+    );
+
     await userEvent.click(screen.getByLabelText("LoFi"));
     expect(document.getElementById("audio-intensity")).toBeNull();
   });
 
-  it("renders Metronome under Playback Styles without an intensity slider", async () => {
+  it("detaches Metronome from Audio Modes and merges it into the BPM bar panel", async () => {
+    const setMetronomeVolumePct = vi.fn();
+    const setBeatsPerBarOverride = vi.fn();
+    const setBeatOffset = vi.fn();
+    const enable = vi.fn();
+    const disable = vi.fn();
+    vi.mocked(getAppContext).mockReturnValue({
+      metronomeOverlay: {
+        setMetronomeVolumePct,
+        setBeatsPerBarOverride,
+        setBeatOffset,
+        enable,
+        disable,
+      },
+      engine: {
+        updateConfig: vi.fn(),
+        rebuildGraph: vi.fn(),
+        getGraphState: vi.fn(() => null),
+        getVisualizationData: vi.fn(() => null),
+        getPredictedJumps: vi.fn(() => []),
+      },
+      player: { getDuration: vi.fn(() => 0) },
+    } as unknown as ReturnType<typeof getAppContext>);
+
+    act(() => {
+      useAppStore.setState({
+        bpmBarEnabled: true,
+        bpmBarTimeSignatureMode: "off",
+        metronomeEnabled: false,
+        metronomeVolumePct: 100,
+      });
+    });
+
     render(<TuningModal />);
     act(() => {
       useAppStore.setState({ tuningModalOpen: true, tuningModalTab: "extras" });
     });
 
-    const metronomeInput = document.getElementById(
-      "audio-mode-metronome",
-    ) as HTMLInputElement | null;
-    expect(metronomeInput).not.toBeNull();
-    const stylesSection = metronomeInput?.closest(".audio-mode-section");
-    expect(stylesSection?.querySelector(".audio-mode-section-title")?.textContent).toBe(
-      "Playback Styles",
-    );
-
-    await userEvent.click(screen.getByLabelText("Metronome"));
-    expect(applyExtrasChanges).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ audioMode: "metronome" }),
-    );
-    expect(document.getElementById("audio-intensity")).toBeNull();
-    expect(document.getElementById("metronome-volume")).not.toBeNull();
-    expect(document.getElementById("metronome-time-signature")).not.toBeNull();
-    expect(document.getElementById("metronome-beat-offset")).not.toBeNull();
-  });
-
-  it("hides metronome controls outside metronome mode and applies volume, time signature, and clamped offset", async () => {
-    act(() => {
-      useAppStore.setState({ metronomeDetectedBeatsPerBar: 3 });
-    });
-    render(<TuningModal />);
-    act(() => {
-      useAppStore.setState({ tuningModalOpen: true, tuningModalTab: "extras" });
-    });
+    expect(document.getElementById("audio-mode-metronome")).toBeNull();
     expect(document.getElementById("metronome-volume")).toBeNull();
-    expect(document.getElementById("metronome-time-signature")).toBeNull();
-    expect(document.getElementById("metronome-beat-offset")).toBeNull();
+    expect(document.getElementById("bpm-bar-beat-offset")).toBeNull();
 
-    await userEvent.click(screen.getByLabelText("Metronome"));
-    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
-      "Auto (3/4)",
-    );
+    const metronomeToggle = document.getElementById(
+      "bpm-bar-metronome-toggle",
+    ) as HTMLInputElement;
+    expect(metronomeToggle).not.toBeNull();
+
+    await userEvent.click(metronomeToggle);
+    expect(useAppStore.getState().metronomeEnabled).toBe(true);
+    // Turning on metronome while BPM bar time signature is "off" switches it to "auto".
+    expect(useAppStore.getState().bpmBarTimeSignatureMode).toBe("auto");
+    expect(enable).toHaveBeenCalled();
+    expect(document.getElementById("metronome-volume")).not.toBeNull();
+    expect(document.getElementById("bpm-bar-beat-offset")).not.toBeNull();
 
     fireEvent.change(document.getElementById("metronome-volume")!, {
       target: { value: "145" },
     });
-    expect(applyExtrasChanges).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.objectContaining({ metronomeVolumePct: 145 }),
+    expect(useAppStore.getState().metronomeVolumePct).toBe(145);
+    expect(setMetronomeVolumePct).toHaveBeenLastCalledWith(145);
+
+    // Turning off Show BPM bar disables Metronome as well.
+    await userEvent.click(document.getElementById("bpm-bar-toggle")!);
+    expect(useAppStore.getState().bpmBarEnabled).toBe(false);
+    expect(useAppStore.getState().metronomeEnabled).toBe(false);
+    expect(disable).toHaveBeenCalled();
+  });
+
+  it("syncs BPM bar time signature and beat offset with similarity restriction and forces panel on when BPM bar is off", () => {
+    const updateConfig = vi.fn();
+    const rebuildGraph = vi.fn();
+    vi.mocked(getAppContext).mockReturnValue({
+      engine: {
+        updateConfig,
+        rebuildGraph,
+        getGraphState: vi.fn(() => null),
+        getVisualizationData: vi.fn(() => null),
+        getPredictedJumps: vi.fn(() => []),
+      },
+      player: { getDuration: vi.fn(() => 0) },
+    } as unknown as ReturnType<typeof getAppContext>);
+
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        playMode: "jukebox",
+        multiTrackEnabled: false,
+        bpmBarEnabled: true,
+        bpmBarTimeSignatureMode: "custom",
+        bpmBarNumerator: 3,
+        bpmBarDenominator: 4,
+        bpmBarBeatOffset: 2,
+        timeSignatureTrackOffsets: [],
+      });
+    });
+
+    render(<TuningModal />);
+    fireEvent.click(
+      document.getElementById("time-signature-similarity-restrict-enabled")!,
     );
 
-    // Switch to 4/4 (index 3 in [null, 2, 3, 4, 5, 6, 7, 8]) and set offset to 3 (Beat 4).
-    fireEvent.change(document.getElementById("metronome-time-signature")!, {
-      target: { value: "3" },
-    });
-    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
-      "4/4",
-    );
-    fireEvent.change(document.getElementById("metronome-beat-offset")!, {
-      target: { value: "3" },
-    });
-    expect(document.getElementById("metronome-beat-offset-val")?.textContent).toBe(
-      "+3 (Beat 4)",
-    );
-
-    // Switching down to 3/4 (index 2) clamps beat offset from 3 to 2.
-    fireEvent.change(document.getElementById("metronome-time-signature")!, {
-      target: { value: "2" },
-    });
-    expect(document.getElementById("metronome-time-signature-val")?.textContent).toBe(
-      "3/4",
-    );
-    expect(document.getElementById("metronome-beat-offset-val")?.textContent).toBe(
-      "+2 (Beat 3)",
-    );
-    expect(applyExtrasChanges).toHaveBeenLastCalledWith(
-      expect.anything(),
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(3);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(4);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([2]);
+    expect(updateConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        metronomeBeatsPerBar: 3,
-        metronomeBeatOffset: 2,
+        timeSignatureSimilarityRestrict: true,
+        timeSignatureSimilarityNumerator: 3,
+        timeSignatureSimilarityDenominator: 4,
+        timeSignatureTrackOffsets: [2],
       }),
     );
+
+    // Disabling Show BPM bar keeps the time signature fraction & beat offset visible
+    // while hiding BPM bar visual style and Metronome toggle.
+    fireEvent.click(document.getElementById("bpm-bar-toggle")!);
+    expect(useAppStore.getState().bpmBarEnabled).toBe(false);
+    expect(document.getElementById("bpm-bar-time-sig-controls")).not.toBeNull();
+    expect(document.getElementById("bpm-bar-style")).toBeNull();
+    expect(document.getElementById("bpm-bar-metronome-toggle")).toBeNull();
+    expect(document.getElementById("bpm-bar-numerator")).not.toBeNull();
+    expect(document.getElementById("bpm-bar-beat-offset")).not.toBeNull();
   });
 
   it("resets intensity for a new mode and restores it when reselecting the opened mode", async () => {
@@ -474,6 +525,62 @@ describe("TuningModal", () => {
       useAppStore.setState({ tuningModalOpen: true });
     });
     expect(document.getElementById("sleep-timer-open")).toBeNull();
+  });
+
+  it("shows BPM bar and Metronome controls in autocanonizer mode", () => {
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        playMode: "autocanonizer",
+        bpmBarEnabled: true,
+        metronomeEnabled: true,
+      });
+    });
+    render(<TuningModal />);
+    expect(document.getElementById("tuning-panel-visuals")).not.toBeNull();
+    expect(document.getElementById("tuning-panel-tuning")).toBeNull();
+    expect(document.getElementById("bpm-bar-toggle")).not.toBeNull();
+    expect(document.getElementById("bpm-bar-metronome-toggle")).not.toBeNull();
+    expect(document.getElementById("instrumental-branching-enabled")).toBeNull();
+  });
+
+  it("shows Song Sync controls and BPM bar when playMode is songsync", () => {
+    act(() => {
+      useAppStore.setState({
+        tuningModalOpen: true,
+        playMode: "songsync",
+        bpmBarEnabled: true,
+        songSyncMasterTrackIndex: 0,
+        songSyncTracks: [
+          {
+            title: "JP Version",
+            color: "#4cc9f0",
+            duration: 240,
+            gainPct: 100,
+            pan: 0,
+            muted: false,
+            solo: false,
+            beatOffset: 0,
+          },
+          {
+            title: "EN Version",
+            color: "#51cf66",
+            duration: 120,
+            gainPct: 100,
+            pan: 0,
+            muted: false,
+            solo: false,
+            beatOffset: 0,
+          },
+        ],
+      });
+    });
+    render(<TuningModal />);
+    expect(document.getElementById("tuning-panel-songsync")).not.toBeNull();
+    expect(document.getElementById("tuning-panel-tuning")).toBeNull();
+    expect(document.getElementById("songsync-master-track")).not.toBeNull();
+    expect(document.getElementById("songsync-track-mute-1")).not.toBeNull();
+    expect(document.getElementById("bpm-bar-toggle")).not.toBeNull();
   });
 
   it("hides Multi Tuning when not actively in a multi-song mix, even with 2+ playlist tracks", () => {

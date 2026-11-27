@@ -48,6 +48,7 @@ export function VizInfo({
   forceBranchActive = false,
   isQuadMix = false,
   autocanonizerOtherDurationSeconds = null,
+  songSyncTrackTimes = [],
 }: {
   vizTitleRef: React.RefCallback<HTMLDivElement>;
   playMode: PlayMode;
@@ -59,6 +60,7 @@ export function VizInfo({
   forceBranchActive?: boolean;
   isQuadMix?: boolean;
   autocanonizerOtherDurationSeconds?: number | null;
+  songSyncTrackTimes?: readonly { title: string; color: string; durationSec: number }[];
 }) {
   const { t } = useTranslation();
   const jukeboxTimeRef = React.useRef<HTMLSpanElement | null>(null);
@@ -66,6 +68,7 @@ export function VizInfo({
   const otherTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const pinkTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const goldTimeRef = React.useRef<HTMLSpanElement | null>(null);
+  const songSyncTimeRefs = React.useRef<Array<HTMLSpanElement | null>>([]);
   const wubTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const listenTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const beatsPlayedRef = React.useRef<HTMLSpanElement | null>(null);
@@ -83,6 +86,9 @@ export function VizInfo({
       setText(otherTimeRef.current, formatTime(values.autocanonizerOtherSeconds));
       setText(pinkTimeRef.current, formatTime(values.autocanonizerPinkSeconds));
       setText(goldTimeRef.current, formatTime(values.autocanonizerGoldSeconds));
+      values.songSyncTrackSeconds.forEach((sec, idx) => {
+        setText(songSyncTimeRefs.current[idx] ?? null, formatTime(sec));
+      });
       setText(wubTimeRef.current, formatTime(values.wubMachineSeconds));
       setText(listenTimeRef.current, formatDuration(values.listenSeconds));
       setText(beatsPlayedRef.current, String(values.beatsPlayed));
@@ -100,10 +106,11 @@ export function VizInfo({
     };
     write(counters.get());
     return counters.subscribe(write);
-  }, [counters, forceBranchActive, isQuadMix]);
+  }, [counters, forceBranchActive, isQuadMix, songSyncTrackTimes.length]);
 
   const isJukebox = playMode === "jukebox";
   const isCanonizer = playMode === "autocanonizer";
+  const isSongSync = playMode === "songsync";
   const isWubMachine = playMode === "wubmachine";
   const hideBeats = playMode !== "jukebox";
   const hideBpm = playMode === "wubmachine";
@@ -173,6 +180,32 @@ export function VizInfo({
           <span id="wubmachine-total-time">
             {formatTime(wubMachineDurationSeconds)}
           </span>
+        </span>
+        <span
+          id="songsync-times"
+          className={`autocanonizer-times ${isSongSync ? "" : "is-hidden"}`}
+        >
+          {songSyncTrackTimes.map((track, idx) => (
+            <React.Fragment key={idx}>
+              {idx > 0 ? (
+                <span className="viz-divider" aria-hidden="true">
+                  ·
+                </span>
+              ) : null}
+              <span className="songsync-track-time">
+                <span
+                  ref={(el) => {
+                    songSyncTimeRefs.current[idx] = el;
+                  }}
+                  style={{ color: track.color }}
+                >
+                  0:00
+                </span>
+                <span aria-hidden="true">/</span>
+                <span>{formatTime(track.durationSec)}</span>
+              </span>
+            </React.Fragment>
+          ))}
         </span>
         <span className="viz-meta-stats">
           <span>{t("listen.listenTime")}</span>

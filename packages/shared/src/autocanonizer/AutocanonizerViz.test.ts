@@ -317,4 +317,54 @@ describe("AutocanonizerViz", () => {
     expect(greenArc!.cy).toBeGreaterThan(greenArc!.startY);
     expect(goldArc!.cy).toBeLessThan(goldArc!.startY);
   });
+
+  it("scales dual-lane widths proportionally to the longer track duration", () => {
+    const container = createContainer();
+    const viz = new AutocanonizerViz(container);
+    viz.setVisible(true);
+
+    const makeBeats = (count: number, dur: number) =>
+      Array.from({ length: count }, (_, which) => ({
+        which,
+        start: which * dur,
+        duration: dur,
+        volume: 1,
+        median_volume: 1,
+        color: "#fff",
+        section: 0,
+        otherGain: 1,
+      })) as any[];
+
+    const mainBeats = makeBeats(4, 1); // 4s total
+    const otherBeats = makeBeats(2, 1); // 2s total (half length)
+    mainBeats.forEach((b, i) => {
+      b.other = otherBeats[i % 2];
+    });
+    otherBeats.forEach((b) => {
+      b.other = b;
+    });
+
+    viz.setDualData(
+      mainBeats,
+      4,
+      [{ start: 0, duration: 4 }],
+      otherBeats,
+      2,
+      [{ start: 0, duration: 2 }],
+    );
+
+    const inner = viz as unknown as {
+      layouts: Array<{ x: number; width: number }>;
+      otherLayouts: Array<{ x: number; width: number }>;
+    };
+    const mainEnd =
+      inner.layouts[inner.layouts.length - 1].x +
+      inner.layouts[inner.layouts.length - 1].width;
+    const otherEnd =
+      inner.otherLayouts[inner.otherLayouts.length - 1].x +
+      inner.otherLayouts[inner.otherLayouts.length - 1].width;
+    const mainSpan = mainEnd - inner.layouts[0].x;
+    const otherSpan = otherEnd - inner.otherLayouts[0].x;
+    expect(otherSpan / mainSpan).toBeCloseTo(0.5, 2);
+  });
 });

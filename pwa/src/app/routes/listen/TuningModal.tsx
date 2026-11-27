@@ -18,8 +18,8 @@ import type {
 } from "@forever-jukebox/shared/viz/JukeboxViz";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import {
-  DEFAULT_BEATS_PER_BAR,
-  clampMetronomeBeatOffset,
+  MAX_METRONOME_VOLUME_PCT,
+  MIN_METRONOME_VOLUME_PCT,
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { SymbolIcon } from "@/ui/components/SymbolIcon";
 import { AudioModeOptions } from "./AudioModeOptions";
@@ -45,6 +45,31 @@ import {
   MAX_MIX_TRACK_GAIN_PCT,
   MIN_MIX_TRACK_GAIN_PCT,
 } from "./localMix";
+
+export type SongSyncTrackUiState = {
+  title: string;
+  color: string;
+  gainPct: number;
+  pan: number;
+  muted: boolean;
+  solo: boolean;
+  beatOffset: number;
+};
+
+export type SongSyncTuningProps = {
+  tracks: readonly SongSyncTrackUiState[];
+  masterTrackIndex: number;
+  tempoSyncEnabled: boolean;
+  normalizeVolumeEnabled: boolean;
+  onMasterTrackChange: (index: number) => void;
+  onTempoSyncChange: (enabled: boolean) => void;
+  onNormalizeVolumeChange: (enabled: boolean) => void;
+  onTrackGainChange: (index: number, gainPct: number) => void;
+  onTrackPanChange: (index: number, pan: number) => void;
+  onTrackMutedChange: (index: number, muted: boolean) => void;
+  onTrackSoloChange: (index: number, solo: boolean) => void;
+  onTrackBeatOffsetChange: (index: number, beatOffset: number) => void;
+};
 
 const VISUAL_COLORING_OPTIONS: Array<{
   id: string;
@@ -146,6 +171,10 @@ export type VisualsTuningProps = {
   onVisualPreferencesChange: (patch: Partial<VisualPreferences>) => void;
   bpmBarEnabled: boolean;
   onBpmBarEnabledChange: (enabled: boolean) => void;
+  metronomeEnabled: boolean;
+  onMetronomeEnabledChange: (enabled: boolean) => void;
+  metronomeVolumePct: number;
+  onMetronomeVolumeChange: (volumePct: number) => void;
   bpmBarStyle: BpmBarStyle;
   onBpmBarStyleChange: (style: BpmBarStyle) => void;
   bpmBarTimeSignatureMode: BpmBarTimeSignatureMode;
@@ -171,7 +200,7 @@ export function TuningModal({
   onExtrasFormChange,
   multi,
   visuals,
-  detectedBeatsPerBar = DEFAULT_BEATS_PER_BAR,
+  songSync,
   onClose,
   showReset,
   onReset,
@@ -185,6 +214,7 @@ export function TuningModal({
   multi: MultiTuningProps;
   visuals: VisualsTuningProps;
   detectedBeatsPerBar?: number;
+  songSync?: SongSyncTuningProps;
   onClose: () => void;
   showReset: boolean;
   onReset: () => void;
@@ -195,7 +225,9 @@ export function TuningModal({
     return null;
   }
 
-  const hasExtras = playMode === "jukebox";
+  const isJukeboxMode = playMode === "jukebox";
+  const isSongSyncMode = playMode === "songsync";
+  const hasExtras = isJukeboxMode;
   const isTimeSignatureOverwrite =
     multi.multiTrackEnabled &&
     multi.timeSignatureBranchingEnabled &&
@@ -218,6 +250,18 @@ export function TuningModal({
       ),
     ),
   );
+  const requiresTimeSignature =
+    isJukeboxMode &&
+    (multi.timeSignatureSimilarityRestrictEnabled ||
+      (multi.multiTrackEnabled && multi.timeSignatureBranchingEnabled));
+  const showBpmBarPanel = visuals.bpmBarEnabled || requiresTimeSignature;
+  const showTimeSignatureFraction =
+    visuals.bpmBarTimeSignatureMode === "custom" ||
+    (!visuals.bpmBarEnabled && requiresTimeSignature);
+  const showBeatOffsetStepper =
+    visuals.bpmBarTimeSignatureMode === "custom" ||
+    (visuals.bpmBarEnabled && visuals.metronomeEnabled) ||
+    requiresTimeSignature;
 
   const renderSimilarityRestrictGroup = (includeSingleTrackOffset: boolean) => {
     const singleTrackOffset = clampTimeSignatureTrackOffset(
@@ -377,7 +421,8 @@ export function TuningModal({
           </div>
         </div>
         <div className="modal-body tuning-body">
-          <div id="tuning-panel-tuning" className="tuning-section-grid">
+          {isJukeboxMode ? (
+            <div id="tuning-panel-tuning" className="tuning-section-grid">
             <div className="tuning-sliders-col">
               <RangeRow
                 id="threshold"
@@ -859,6 +904,196 @@ export function TuningModal({
               ) : null}
             </div>
           </div>
+          ) : null}
+
+          {isSongSyncMode && songSync ? (
+            <div id="tuning-panel-songsync" className="tuning-multi-section">
+              <h3>{t("tuning.songSyncTitle")}</h3>
+              <div className="checkbox-row multi-checkbox-row">
+                <label>
+                  <input
+                    id="songsync-tempo-sync-enabled"
+                    type="checkbox"
+                    checked={songSync.tempoSyncEnabled}
+                    onChange={(event) =>
+                      songSync.onTempoSyncChange(event.target.checked)
+                    }
+                  />
+                  <span>{t("tuning.tempoSync")}</span>
+                </label>
+                <label>
+                  <input
+                    id="songsync-normalize-volume-enabled"
+                    type="checkbox"
+                    checked={songSync.normalizeVolumeEnabled}
+                    onChange={(event) =>
+                      songSync.onNormalizeVolumeChange(event.target.checked)
+                    }
+                  />
+                  <span>{t("tuning.normalizeVolume")}</span>
+                </label>
+              </div>
+              {songSync.tracks.length > 0 ? (
+                <>
+                  <div className="multi-time-sig-mode">
+                    <label htmlFor="songsync-master-track">
+                      {t("tuning.masterTrack")}
+                    </label>
+                    <select
+                      id="songsync-master-track"
+                      value={songSync.masterTrackIndex}
+                      onChange={(event) =>
+                        songSync.onMasterTrackChange(Number(event.target.value))
+                      }
+                    >
+                      {songSync.tracks.map((track, idx) => (
+                        <option key={idx} value={idx}>
+                          {track.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="songsync-tracks-list">
+                    {songSync.tracks.map((track, idx) => (
+                      <div key={idx} className="songsync-track-row">
+                        <div className="songsync-track-header">
+                          <span className="songsync-track-title">
+                            <span
+                              className="songsync-track-dot"
+                              style={{ background: track.color }}
+                              aria-hidden="true"
+                            />
+                            <span>{track.title}</span>
+                          </span>
+                          <div className="checkbox-row">
+                            <label>
+                              <input
+                                id={`songsync-track-mute-${idx}`}
+                                type="checkbox"
+                                checked={track.muted}
+                                onChange={(event) =>
+                                  songSync.onTrackMutedChange(
+                                    idx,
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              <span>{t("tuning.mute")}</span>
+                            </label>
+                            <label>
+                              <input
+                                id={`songsync-track-solo-${idx}`}
+                                type="checkbox"
+                                checked={track.solo}
+                                onChange={(event) =>
+                                  songSync.onTrackSoloChange(
+                                    idx,
+                                    event.target.checked,
+                                  )
+                                }
+                              />
+                              <span>{t("tuning.solo")}</span>
+                            </label>
+                          </div>
+                        </div>
+                        <div className="songsync-track-controls">
+                          <RangeRow
+                            id={`songsync-track-gain-${idx}`}
+                            label={t("tuning.trackVolume", {
+                              index: idx + 1,
+                              title: track.title,
+                            })}
+                            valueText={`${track.gainPct}%`}
+                            min={MIN_MIX_TRACK_GAIN_PCT}
+                            max={MAX_MIX_TRACK_GAIN_PCT}
+                            step={1}
+                            value={track.gainPct}
+                            onChange={(value) =>
+                              songSync.onTrackGainChange(idx, value)
+                            }
+                          />
+                          <RangeRow
+                            id={`songsync-track-pan-${idx}`}
+                            label={t("tuning.pan")}
+                            valueText={`${track.pan}`}
+                            min={-100}
+                            max={100}
+                            step={1}
+                            value={track.pan}
+                            onChange={(value) =>
+                              songSync.onTrackPanChange(idx, value)
+                            }
+                          />
+                          <div className="multi-time-sig-offset-row">
+                            <div className="multi-time-sig-offset-header">
+                              <span>{t("tuning.beatOffset")}</span>
+                            </div>
+                            <div className="multi-time-sig-stepper">
+                              <button
+                                type="button"
+                                id={`songsync-track-offset-dec-${idx}`}
+                                aria-label="-"
+                                disabled={
+                                  track.beatOffset <=
+                                  MIN_TIME_SIGNATURE_TRACK_OFFSET
+                                }
+                                onClick={() =>
+                                  songSync.onTrackBeatOffsetChange(
+                                    idx,
+                                    track.beatOffset - 1,
+                                  )
+                                }
+                              >
+                                -
+                              </button>
+                              <input
+                                id={`songsync-track-offset-${idx}`}
+                                type="number"
+                                min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
+                                max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
+                                step={1}
+                                aria-label={t("tuning.beatOffset")}
+                                value={track.beatOffset}
+                                onChange={(event) => {
+                                  const parsed = Number.parseInt(
+                                    event.target.value,
+                                    10,
+                                  );
+                                  if (Number.isFinite(parsed)) {
+                                    songSync.onTrackBeatOffsetChange(
+                                      idx,
+                                      parsed,
+                                    );
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                id={`songsync-track-offset-inc-${idx}`}
+                                aria-label="+"
+                                disabled={
+                                  track.beatOffset >=
+                                  MAX_TIME_SIGNATURE_TRACK_OFFSET
+                                }
+                                onClick={() =>
+                                  songSync.onTrackBeatOffsetChange(
+                                    idx,
+                                    track.beatOffset + 1,
+                                  )
+                                }
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
 
           <div id="tuning-panel-visuals" className="tuning-visuals-section">
             <h3>{t("tuning.visuals")}</h3>
@@ -874,212 +1109,249 @@ export function TuningModal({
                 />
                 <span>{t("tuning.showBpmBar")}</span>
               </label>
-              <label>
-                <input
-                  id="use-square-beats"
-                  type="checkbox"
-                  checked={visuals.visualPreferences.useSquareBeats}
-                  onChange={(event) =>
-                    visuals.onVisualPreferencesChange({
-                      useSquareBeats: event.target.checked,
-                    })
-                  }
-                />
-                <span>{t("tuning.squareBeats")}</span>
-              </label>
-              <label>
-                <input
-                  id="use-alt-seek-shape"
-                  type="checkbox"
-                  checked={visuals.visualPreferences.useAltSeekShape}
-                  onChange={(event) =>
-                    visuals.onVisualPreferencesChange({
-                      useAltSeekShape: event.target.checked,
-                    })
-                  }
-                />
-                <span>{t("tuning.altSeekShape")}</span>
-              </label>
-              <label>
-                <input
-                  id="branch-lookahead-toggle"
-                  type="checkbox"
-                  checked={visuals.branchLookaheadEnabled}
-                  onChange={(event) =>
-                    visuals.onBranchLookaheadEnabledChange(event.target.checked)
-                  }
-                />
-                <span>{t("tuning.showUpcomingBranches")}</span>
-              </label>
+              {isJukeboxMode ? (
+                <>
+                  <label>
+                    <input
+                      id="use-square-beats"
+                      type="checkbox"
+                      checked={visuals.visualPreferences.useSquareBeats}
+                      onChange={(event) =>
+                        visuals.onVisualPreferencesChange({
+                          useSquareBeats: event.target.checked,
+                        })
+                      }
+                    />
+                    <span>{t("tuning.squareBeats")}</span>
+                  </label>
+                  <label>
+                    <input
+                      id="use-alt-seek-shape"
+                      type="checkbox"
+                      checked={visuals.visualPreferences.useAltSeekShape}
+                      onChange={(event) =>
+                        visuals.onVisualPreferencesChange({
+                          useAltSeekShape: event.target.checked,
+                        })
+                      }
+                    />
+                    <span>{t("tuning.altSeekShape")}</span>
+                  </label>
+                  <label>
+                    <input
+                      id="branch-lookahead-toggle"
+                      type="checkbox"
+                      checked={visuals.branchLookaheadEnabled}
+                      onChange={(event) =>
+                        visuals.onBranchLookaheadEnabledChange(
+                          event.target.checked,
+                        )
+                      }
+                    />
+                    <span>{t("tuning.showUpcomingBranches")}</span>
+                  </label>
+                </>
+              ) : null}
             </div>
-            {visuals.bpmBarEnabled ? (
+            {showBpmBarPanel ? (
               <div
                 id="bpm-bar-time-sig-controls"
                 className="multi-time-sig-controls"
               >
-                <div className="multi-time-sig-mode">
-                  <label htmlFor="bpm-bar-style">
-                    {t("tuning.bpmBarStyleLabel")}
-                  </label>
-                  <select
-                    id="bpm-bar-style"
-                    aria-label={t("tuning.bpmBarStyleLabel")}
-                    value={visuals.bpmBarStyle}
-                    onChange={(event) =>
-                      visuals.onBpmBarStyleChange(
-                        event.target.value as BpmBarStyle,
-                      )
-                    }
-                  >
-                    <option value="pulse">
-                      {t("tuning.bpmBarStylePulse")}
-                    </option>
-                    <option value="smooth">
-                      {t("tuning.bpmBarStyleSmooth")}
-                    </option>
-                    <option value="smooth-pulse">
-                      {t("tuning.bpmBarStyleSmoothPulse")}
-                    </option>
-                  </select>
-                </div>
-                <div className="multi-time-sig-mode">
-                  <label htmlFor="bpm-bar-time-sig-mode">
-                    {t("tuning.bpmBarTimeSignatureLabel")}
-                  </label>
-                  <select
-                    id="bpm-bar-time-sig-mode"
-                    aria-label={t("tuning.bpmBarTimeSignatureLabel")}
-                    value={visuals.bpmBarTimeSignatureMode}
-                    onChange={(event) =>
-                      visuals.onBpmBarTimeSignatureModeChange(
-                        event.target.value as BpmBarTimeSignatureMode,
-                      )
-                    }
-                  >
-                    <option value="auto">
-                      {t("tuning.bpmBarTimeSignatureAuto")}
-                    </option>
-                    <option value="off">
-                      {t("tuning.bpmBarTimeSignatureOff")}
-                    </option>
-                    <option value="custom">
-                      {t("tuning.bpmBarTimeSignatureCustom")}
-                    </option>
-                  </select>
-                </div>
-                {visuals.bpmBarTimeSignatureMode === "custom" ? (
+                {visuals.bpmBarEnabled ? (
                   <>
-                    <div className="multi-time-sig-fraction">
-                      <input
-                        id="bpm-bar-numerator"
-                        type="number"
-                        min={MIN_TIME_SIGNATURE_NUMERATOR}
-                        max={MAX_TIME_SIGNATURE_NUMERATOR}
-                        step={1}
-                        aria-label={t("tuning.timeSignatureNumeratorAria")}
-                        value={visuals.bpmBarNumerator}
-                        onChange={(event) => {
-                          const parsed = Number.parseInt(
-                            event.target.value,
-                            10,
-                          );
-                          if (Number.isFinite(parsed)) {
-                            visuals.onBpmBarNumeratorChange(parsed);
-                          }
-                        }}
-                      />
-                      <span className="multi-time-sig-slash">/</span>
+                    <div className="multi-time-sig-mode">
+                      <label htmlFor="bpm-bar-style">
+                        {t("tuning.bpmBarStyleLabel")}
+                      </label>
                       <select
-                        id="bpm-bar-denominator"
-                        aria-label={t("tuning.timeSignatureDenominatorAria")}
-                        value={visuals.bpmBarDenominator}
-                        onChange={(event) => {
-                          const parsed = Number.parseInt(
-                            event.target.value,
-                            10,
-                          );
-                          if (Number.isFinite(parsed)) {
-                            visuals.onBpmBarDenominatorChange(parsed);
-                          }
-                        }}
+                        id="bpm-bar-style"
+                        aria-label={t("tuning.bpmBarStyleLabel")}
+                        value={visuals.bpmBarStyle}
+                        onChange={(event) =>
+                          visuals.onBpmBarStyleChange(
+                            event.target.value as BpmBarStyle,
+                          )
+                        }
                       >
-                        {TIME_SIGNATURE_DENOMINATOR_OPTIONS.map((den) => (
-                          <option key={den} value={den}>
-                            {den}
-                          </option>
-                        ))}
+                        <option value="pulse">
+                          {t("tuning.bpmBarStylePulse")}
+                        </option>
+                        <option value="smooth">
+                          {t("tuning.bpmBarStyleSmooth")}
+                        </option>
+                        <option value="smooth-pulse">
+                          {t("tuning.bpmBarStyleSmoothPulse")}
+                        </option>
                       </select>
-                      <span id="bpm-bar-step-beats" className="hint">
-                        {t(
-                          isSmoothBpmBarStyle(visuals.bpmBarStyle)
-                            ? "tuning.bpmBarBeats"
-                            : "tuning.bpmBarSegments",
-                          { count: bpmBarSegmentCount },
-                        )}
-                      </span>
                     </div>
-                    <div className="multi-time-sig-offset-row">
-                      <div className="multi-time-sig-offset-header">
-                        <span>{t("tuning.bpmBarBeatOffset")}</span>
-                      </div>
-                      <div className="multi-time-sig-stepper">
-                        <button
-                          type="button"
-                          id="bpm-bar-beat-offset-dec"
-                          aria-label="-"
-                          disabled={
-                            visuals.bpmBarBeatOffset <=
-                            MIN_TIME_SIGNATURE_TRACK_OFFSET
-                          }
-                          onClick={() =>
-                            visuals.onBpmBarBeatOffsetChange(
-                              visuals.bpmBarBeatOffset - 1,
-                            )
-                          }
-                        >
-                          -
-                        </button>
+                    <div className="checkbox-row">
+                      <label>
                         <input
-                          id="bpm-bar-beat-offset"
-                          type="number"
-                          min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
-                          max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
-                          step={1}
-                          aria-label={t("tuning.bpmBarBeatOffset")}
-                          value={visuals.bpmBarBeatOffset}
-                          onChange={(event) => {
-                            const parsed = Number.parseInt(
-                              event.target.value,
-                              10,
-                            );
-                            if (Number.isFinite(parsed)) {
-                              visuals.onBpmBarBeatOffsetChange(parsed);
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          id="bpm-bar-beat-offset-inc"
-                          aria-label="+"
-                          disabled={
-                            visuals.bpmBarBeatOffset >=
-                            MAX_TIME_SIGNATURE_TRACK_OFFSET
-                          }
-                          onClick={() =>
-                            visuals.onBpmBarBeatOffsetChange(
-                              visuals.bpmBarBeatOffset + 1,
+                          id="bpm-bar-metronome-toggle"
+                          type="checkbox"
+                          checked={visuals.metronomeEnabled}
+                          onChange={(event) =>
+                            visuals.onMetronomeEnabledChange(
+                              event.target.checked,
                             )
                           }
-                        >
-                          +
-                        </button>
-                      </div>
+                        />
+                        <span>{t("audioModes.metronome")}</span>
+                      </label>
+                    </div>
+                    {visuals.metronomeEnabled ? (
+                      <RangeRow
+                        id="metronome-volume"
+                        label={t("audioModes.metronomeVolume")}
+                        valueText={`${visuals.metronomeVolumePct}%`}
+                        min={MIN_METRONOME_VOLUME_PCT}
+                        max={MAX_METRONOME_VOLUME_PCT}
+                        step={5}
+                        value={visuals.metronomeVolumePct}
+                        onChange={visuals.onMetronomeVolumeChange}
+                      />
+                    ) : null}
+                    <div className="multi-time-sig-mode">
+                      <label htmlFor="bpm-bar-time-sig-mode">
+                        {t("tuning.bpmBarTimeSignatureLabel")}
+                      </label>
+                      <select
+                        id="bpm-bar-time-sig-mode"
+                        aria-label={t("tuning.bpmBarTimeSignatureLabel")}
+                        value={visuals.bpmBarTimeSignatureMode}
+                        onChange={(event) =>
+                          visuals.onBpmBarTimeSignatureModeChange(
+                            event.target.value as BpmBarTimeSignatureMode,
+                          )
+                        }
+                      >
+                        <option value="auto">
+                          {t("tuning.bpmBarTimeSignatureAuto")}
+                        </option>
+                        <option value="off">
+                          {t("tuning.bpmBarTimeSignatureOff")}
+                        </option>
+                        <option value="custom">
+                          {t("tuning.bpmBarTimeSignatureCustom")}
+                        </option>
+                      </select>
                     </div>
                   </>
                 ) : null}
+                {showTimeSignatureFraction ? (
+                  <div className="multi-time-sig-fraction">
+                    <input
+                      id="bpm-bar-numerator"
+                      type="number"
+                      min={MIN_TIME_SIGNATURE_NUMERATOR}
+                      max={MAX_TIME_SIGNATURE_NUMERATOR}
+                      step={1}
+                      aria-label={t("tuning.timeSignatureNumeratorAria")}
+                      value={visuals.bpmBarNumerator}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(
+                          event.target.value,
+                          10,
+                        );
+                        if (Number.isFinite(parsed)) {
+                          visuals.onBpmBarNumeratorChange(parsed);
+                        }
+                      }}
+                    />
+                    <span className="multi-time-sig-slash">/</span>
+                    <select
+                      id="bpm-bar-denominator"
+                      aria-label={t("tuning.timeSignatureDenominatorAria")}
+                      value={visuals.bpmBarDenominator}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(
+                          event.target.value,
+                          10,
+                        );
+                        if (Number.isFinite(parsed)) {
+                          visuals.onBpmBarDenominatorChange(parsed);
+                        }
+                      }}
+                    >
+                      {TIME_SIGNATURE_DENOMINATOR_OPTIONS.map((den) => (
+                        <option key={den} value={den}>
+                          {den}
+                        </option>
+                      ))}
+                    </select>
+                    <span id="bpm-bar-step-beats" className="hint">
+                      {t(
+                        isSmoothBpmBarStyle(visuals.bpmBarStyle)
+                          ? "tuning.bpmBarBeats"
+                          : "tuning.bpmBarSegments",
+                        { count: bpmBarSegmentCount },
+                      )}
+                    </span>
+                  </div>
+                ) : null}
+                {showBeatOffsetStepper ? (
+                  <div className="multi-time-sig-offset-row">
+                    <div className="multi-time-sig-offset-header">
+                      <span>{t("tuning.bpmBarBeatOffset")}</span>
+                    </div>
+                    <div className="multi-time-sig-stepper">
+                      <button
+                        type="button"
+                        id="bpm-bar-beat-offset-dec"
+                        aria-label="-"
+                        disabled={
+                          visuals.bpmBarBeatOffset <=
+                          MIN_TIME_SIGNATURE_TRACK_OFFSET
+                        }
+                        onClick={() =>
+                          visuals.onBpmBarBeatOffsetChange(
+                            visuals.bpmBarBeatOffset - 1,
+                          )
+                        }
+                      >
+                        -
+                      </button>
+                      <input
+                        id="bpm-bar-beat-offset"
+                        type="number"
+                        min={MIN_TIME_SIGNATURE_TRACK_OFFSET}
+                        max={MAX_TIME_SIGNATURE_TRACK_OFFSET}
+                        step={1}
+                        aria-label={t("tuning.bpmBarBeatOffset")}
+                        value={visuals.bpmBarBeatOffset}
+                        onChange={(event) => {
+                          const parsed = Number.parseInt(
+                            event.target.value,
+                            10,
+                          );
+                          if (Number.isFinite(parsed)) {
+                            visuals.onBpmBarBeatOffsetChange(parsed);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        id="bpm-bar-beat-offset-inc"
+                        aria-label="+"
+                        disabled={
+                          visuals.bpmBarBeatOffset >=
+                          MAX_TIME_SIGNATURE_TRACK_OFFSET
+                        }
+                        onClick={() =>
+                          visuals.onBpmBarBeatOffsetChange(
+                            visuals.bpmBarBeatOffset + 1,
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
-            {visuals.branchLookaheadEnabled ? (
+            {isJukeboxMode && visuals.branchLookaheadEnabled ? (
               <RangeRow
                 id="branch-lookahead-count"
                 label={t("tuning.upcomingBranches")}
@@ -1091,35 +1363,37 @@ export function TuningModal({
                 onChange={visuals.onBranchLookaheadCountChange}
               />
             ) : null}
-            <div className="visual-mode-group">
-              <div className="label-line">{t("tuning.coloring")}</div>
-              <div
-                className="visual-mode-options"
-                role="radiogroup"
-                aria-label={t("tuning.coloring")}
-              >
-                {VISUAL_COLORING_OPTIONS.map((option) => (
-                  <label key={option.id} className="visual-mode-option">
-                    <input
-                      id={option.id}
-                      type="radio"
-                      name="visual-effect-mode"
-                      value={option.value}
-                      checked={
-                        visuals.visualPreferences.visualEffectMode ===
-                        option.value
-                      }
-                      onChange={() =>
-                        visuals.onVisualPreferencesChange({
-                          visualEffectMode: option.value,
-                        })
-                      }
-                    />
-                    <span>{t(option.labelKey)}</span>
-                  </label>
-                ))}
+            {isJukeboxMode ? (
+              <div className="visual-mode-group">
+                <div className="label-line">{t("tuning.coloring")}</div>
+                <div
+                  className="visual-mode-options"
+                  role="radiogroup"
+                  aria-label={t("tuning.coloring")}
+                >
+                  {VISUAL_COLORING_OPTIONS.map((option) => (
+                    <label key={option.id} className="visual-mode-option">
+                      <input
+                        id={option.id}
+                        type="radio"
+                        name="visual-effect-mode"
+                        value={option.value}
+                        checked={
+                          visuals.visualPreferences.visualEffectMode ===
+                          option.value
+                        }
+                        onChange={() =>
+                          visuals.onVisualPreferencesChange({
+                            visualEffectMode: option.value,
+                          })
+                        }
+                      />
+                      <span>{t(option.labelKey)}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
 
           <div
@@ -1186,46 +1460,28 @@ export function TuningModal({
                 onIntensityChange={(audioIntensity) =>
                   onExtrasFormChange({ ...extrasForm, audioIntensity })
                 }
-                metronomeVolumePct={extrasForm.metronomeVolumePct}
-                onMetronomeVolumeChange={(metronomeVolumePct) =>
-                  onExtrasFormChange({ ...extrasForm, metronomeVolumePct })
-                }
-                metronomeBeatsPerBar={extrasForm.metronomeBeatsPerBar}
-                detectedBeatsPerBar={detectedBeatsPerBar}
-                onMetronomeBeatsPerBarChange={(metronomeBeatsPerBar) =>
-                  onExtrasFormChange({
-                    ...extrasForm,
-                    metronomeBeatsPerBar,
-                    metronomeBeatOffset: clampMetronomeBeatOffset(
-                      extrasForm.metronomeBeatOffset,
-                      metronomeBeatsPerBar ?? detectedBeatsPerBar,
-                    ),
-                  })
-                }
-                metronomeBeatOffset={extrasForm.metronomeBeatOffset}
-                onMetronomeBeatOffsetChange={(metronomeBeatOffset) =>
-                  onExtrasFormChange({ ...extrasForm, metronomeBeatOffset })
-                }
               />
             </div>
           </div>
 
-          <div id="tuning-panel-advanced" className="tuning-advanced-section">
-            <h3>{t("tuning.advanced")}</h3>
-            <RangeRow
-              id="max-branches"
-              label={t("tuning.maxBranches")}
-              valueText={String(tuneForm.maxBranches)}
-              min={MIN_MAX_BRANCHES}
-              max={MAX_MAX_BRANCHES}
-              step={1}
-              value={tuneForm.maxBranches}
-              onChange={(maxBranches) =>
-                onTuneFormChange({ ...tuneForm, maxBranches })
-              }
-              hint={<div className="hint">{t("tuning.maxBranchesHint")}</div>}
-            />
-          </div>
+          {isJukeboxMode ? (
+            <div id="tuning-panel-advanced" className="tuning-advanced-section">
+              <h3>{t("tuning.advanced")}</h3>
+              <RangeRow
+                id="max-branches"
+                label={t("tuning.maxBranches")}
+                valueText={String(tuneForm.maxBranches)}
+                min={MIN_MAX_BRANCHES}
+                max={MAX_MAX_BRANCHES}
+                step={1}
+                value={tuneForm.maxBranches}
+                onChange={(maxBranches) =>
+                  onTuneFormChange({ ...tuneForm, maxBranches })
+                }
+                hint={<div className="hint">{t("tuning.maxBranchesHint")}</div>}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

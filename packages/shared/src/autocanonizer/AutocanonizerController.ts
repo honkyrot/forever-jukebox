@@ -16,7 +16,7 @@ import {
 } from "./canonizerRenderPlan";
 import { computeBeatColors } from "../engine/beatColors";
 import {
-  alignTrackPairDtw,
+  alignTrackPairMultiSectionDtw,
   computeCoverBeatDistance,
   extractTrackBeatFeatures,
 } from "../engine/coverSync";
@@ -279,7 +279,14 @@ class AutocanonizerPlayer {
     const otherBuf = this.quadMode
       ? this.buffer
       : (this.otherBuffer ?? this.buffer);
-    if (
+    if (clampedOtherGain === 0) {
+      // Stop silent voice during unmatched solo sections so its last beat does not repeat.
+      this.stopSource(this.otherSource);
+      this.otherSource = null;
+      this.skewDelta = 0;
+    } else if (
+      !this.otherSource ||
+      this.currentBeat?.otherGain === 0 ||
       this.currentBeat?.other.next !== beat.other ||
       Math.abs(this.skewDelta) > this.maxSkewDelta
     ) {
@@ -296,49 +303,67 @@ class AutocanonizerPlayer {
       );
       this.otherDeltaTime = this.context.currentTime - beat.other.start;
     }
-    this.skewDelta += beat.duration - beat.other.duration;
+    if (clampedOtherGain > 0) {
+      this.skewDelta += beat.duration - beat.other.duration;
+    }
 
     if (this.quadMode && beat.pink && beat.gold) {
       const song2Buf = this.otherBuffer ?? this.buffer;
       this.pinkBeatGain = Math.max(0, Math.min(1, beat.pinkGain ?? 1));
       this.applyPinkGain();
-      if (
-        this.currentBeat?.pink?.next !== beat.pink ||
-        Math.abs(this.pinkSkewDelta) > QUAD_SYNC_MAX_SKEW_DELTA
-      ) {
+      if (this.pinkBeatGain === 0) {
+        this.stopSource(this.pinkSource);
+        this.pinkSource = null;
         this.pinkSkewDelta = 0;
-        if (this.pinkSource) {
-          this.pinkSource.stop();
+      } else {
+        if (
+          !this.pinkSource ||
+          this.currentBeat?.pinkGain === 0 ||
+          this.currentBeat?.pink?.next !== beat.pink ||
+          Math.abs(this.pinkSkewDelta) > QUAD_SYNC_MAX_SKEW_DELTA
+        ) {
+          this.pinkSkewDelta = 0;
+          if (this.pinkSource) {
+            this.pinkSource.stop();
+          }
+          const pinkDur = song2Buf.duration - beat.pink.start;
+          this.pinkSource = this.playBuffer(
+            song2Buf,
+            beat.pink.start,
+            pinkDur,
+            this.pinkPanner ?? this.pinkGain,
+          );
         }
-        const pinkDur = song2Buf.duration - beat.pink.start;
-        this.pinkSource = this.playBuffer(
-          song2Buf,
-          beat.pink.start,
-          pinkDur,
-          this.pinkPanner ?? this.pinkGain,
-        );
+        this.pinkSkewDelta += beat.duration - beat.pink.duration;
       }
-      this.pinkSkewDelta += beat.duration - beat.pink.duration;
 
       this.goldBeatGain = Math.max(0, Math.min(1, beat.goldGain ?? 1));
       this.applyGoldGain();
-      if (
-        this.currentBeat?.gold?.next !== beat.gold ||
-        Math.abs(this.goldSkewDelta) > this.maxSkewDelta
-      ) {
+      if (this.goldBeatGain === 0) {
+        this.stopSource(this.goldSource);
+        this.goldSource = null;
         this.goldSkewDelta = 0;
-        if (this.goldSource) {
-          this.goldSource.stop();
+      } else {
+        if (
+          !this.goldSource ||
+          this.currentBeat?.goldGain === 0 ||
+          this.currentBeat?.gold?.next !== beat.gold ||
+          Math.abs(this.goldSkewDelta) > this.maxSkewDelta
+        ) {
+          this.goldSkewDelta = 0;
+          if (this.goldSource) {
+            this.goldSource.stop();
+          }
+          const goldDur = song2Buf.duration - beat.gold.start;
+          this.goldSource = this.playBuffer(
+            song2Buf,
+            beat.gold.start,
+            goldDur,
+            this.goldPanner ?? this.goldGain,
+          );
         }
-        const goldDur = song2Buf.duration - beat.gold.start;
-        this.goldSource = this.playBuffer(
-          song2Buf,
-          beat.gold.start,
-          goldDur,
-          this.goldPanner ?? this.goldGain,
-        );
+        this.goldSkewDelta += beat.duration - beat.gold.duration;
       }
-      this.goldSkewDelta += beat.duration - beat.gold.duration;
     }
 
     this.currentBeat = beat;
@@ -1026,16 +1051,20 @@ function scaleAnalysisTiming(analysis: TrackAnalysis, timeScale: number) {
 
 /**
  * Builds a beat-index lookup mapping each beat of Song 1 to the structurally
- * aligned beat index in Song 2 via Semi-Global DTW, linearly extrapolating any
- * unaligned intro/outro beats and clamping to valid indices.
+ * aligned beat index in Song 2 via multi-section local DTW, recording which
+ * Song 1 beats belong to an aligned span (`matchedMask`) so unique sections in
+ * differing-length covers can play solo instead of clamping onto Song 2's end.
  */
 function buildCoverSyncIndexMap(
   featuresA: ReturnType<typeof extractTrackBeatFeatures>,
   featuresB: ReturnType<typeof extractTrackBeatFeatures>,
   mainLength: number,
   otherLength: number,
-): number[] {
-  const aligned = alignTrackPairDtw(featuresA, featuresB);
+): { indexMap: number[]; matchedMask: boolean[] } {
+  const { pairs: aligned, spans } = alignTrackPairMultiSectionDtw(
+    featuresA,
+    featuresB,
+  );
   const bestByA = new Map<number, { indexB: number; distance: number }>();
   for (const pair of aligned) {
     const existing = bestByA.get(pair.indexA);
@@ -1053,26 +1082,47 @@ function buildCoverSyncIndexMap(
   const lastB = bestByA.get(lastA)?.indexB ?? 0;
   const maxOtherIndex = Math.max(0, otherLength - 1);
 
-  const map = new Array<number>(mainLength);
+  const isMultiSpan = spans.length > 1 || mainLength / Math.max(1, otherLength) > 1.25;
+  const indexMap = new Array<number>(mainLength);
+  const matchedMask = new Array<boolean>(mainLength);
+
   for (let i = 0; i < mainLength; i += 1) {
     let targetIdx: number;
     const mapped = bestByA.get(i);
     if (mapped) {
       targetIdx = mapped.indexB;
+      matchedMask[i] = true;
     } else if (coveredIndices.length === 0) {
       targetIdx = Math.min(i, maxOtherIndex);
+      matchedMask[i] = !isMultiSpan && i < otherLength;
     } else if (i < firstA) {
       // Extrapolate backward linearly before the DTW-aligned span begins.
-      targetIdx = firstB - (firstA - i);
+      const candidate = firstB - (firstA - i);
+      targetIdx = candidate;
+      matchedMask[i] = !isMultiSpan || (candidate >= 0 && candidate <= maxOtherIndex);
     } else if (i > lastA) {
       // Extrapolate forward linearly after the DTW-aligned span ends.
-      targetIdx = lastB + (i - lastA);
+      const candidate = lastB + (i - lastA);
+      targetIdx = candidate;
+      matchedMask[i] = !isMultiSpan || (candidate >= 0 && candidate <= maxOtherIndex);
     } else {
-      targetIdx = firstB;
+      // Gap between matched spans (e.g. Verse 2 / Bridge unique to Song 1):
+      // interpolate nearest anchor for visuals while marking unmatched so voice mutes.
+      let nearestA = firstA;
+      let nearestDist = Math.abs(i - firstA);
+      for (const idxA of coveredIndices) {
+        const d = Math.abs(i - idxA);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearestA = idxA;
+        }
+      }
+      targetIdx = bestByA.get(nearestA)?.indexB ?? firstB;
+      matchedMask[i] = false;
     }
-    map[i] = Math.max(0, Math.min(maxOtherIndex, targetIdx));
+    indexMap[i] = Math.max(0, Math.min(maxOtherIndex, targetIdx));
   }
-  return map;
+  return { indexMap, matchedMask };
 }
 
 /**
@@ -1147,7 +1197,7 @@ function applyDualAlignment(
   }
   const featuresA = extractTrackBeatFeatures(mainBeats);
   const featuresB = extractTrackBeatFeatures(otherBeats);
-  const syncedOtherIndices = buildCoverSyncIndexMap(
+  const { indexMap: syncedOtherIndices, matchedMask } = buildCoverSyncIndexMap(
     featuresA,
     featuresB,
     mainBeats.length,
@@ -1173,8 +1223,13 @@ function applyDualAlignment(
         continue;
       }
       const counter = new Map<number, number>();
+      let matchedCanonCount = 0;
       for (const beat of list) {
-        const syncedTarget = syncedOtherIndices[beat.other.which] ?? 0;
+        const canonIdx = beat.other.which;
+        if (matchedMask[canonIdx]) {
+          matchedCanonCount += 1;
+        }
+        const syncedTarget = syncedOtherIndices[canonIdx] ?? 0;
         const delta = beat.which - syncedTarget;
         counter.set(delta, (counter.get(delta) ?? 0) + 1);
       }
@@ -1185,13 +1240,13 @@ function applyDualAlignment(
         syncedOtherIndices,
         -1,
       );
+      const sectionSolo = matchedCanonCount === 0;
       for (const beat of list) {
-        const clampedIdx = Math.max(
-          0,
-          Math.min(maxOtherIndex, beat.which - bestDelta),
-        );
+        const rawIdx = beat.which - bestDelta;
+        const inBounds = rawIdx >= 0 && rawIdx <= maxOtherIndex;
+        const clampedIdx = Math.max(0, Math.min(maxOtherIndex, rawIdx));
         beat.other = otherBeats[clampedIdx];
-        beat.otherGain = 1;
+        beat.otherGain = !sectionSolo && inBounds ? 1 : 0;
       }
     }
     applyOtherSeamDucking(mainBeats);
@@ -1282,7 +1337,7 @@ function applyQuadAlignment(
 ) {
   const featuresA = extractTrackBeatFeatures(mainBeats);
   const featuresB = extractTrackBeatFeatures(otherBeats);
-  const syncedOtherIndices = buildCoverSyncIndexMap(
+  const { indexMap: syncedOtherIndices, matchedMask } = buildCoverSyncIndexMap(
     featuresA,
     featuresB,
     mainBeats.length,
@@ -1294,17 +1349,19 @@ function applyQuadAlignment(
   calculateNearestNeighbors(mainBeats);
   foldBySection(mainBeats);
 
-  // Pink stays structurally synced to Song 1's Blue cursor.
+  // Pink stays structurally synced to Song 1's Blue cursor, muting during unmatched sections.
   for (let i = 0; i < mainBeats.length; i += 1) {
     const beat = mainBeats[i];
     beat.pink = otherBeats[syncedOtherIndices[i] ?? 0];
-    beat.pinkGain = 1;
+    beat.pinkGain = matchedMask[i] ? 1 : 0;
   }
   applyStreamSeamDucking(
     mainBeats,
     (beat) => beat.pink,
     (beat, gain) => {
-      beat.pinkGain = gain;
+      if ((beat.pinkGain ?? 0) > 0) {
+        beat.pinkGain = gain;
+      }
     },
   );
 
@@ -1321,8 +1378,13 @@ function applyQuadAlignment(
         continue;
       }
       const counter = new Map<number, number>();
+      let matchedCanonCount = 0;
       for (const beat of list) {
-        const syncedTarget = syncedOtherIndices[beat.other.which] ?? 0;
+        const canonIdx = beat.other.which;
+        if (matchedMask[canonIdx]) {
+          matchedCanonCount += 1;
+        }
+        const syncedTarget = syncedOtherIndices[canonIdx] ?? 0;
         const delta = beat.which - syncedTarget;
         counter.set(delta, (counter.get(delta) ?? 0) + 1);
       }
@@ -1333,13 +1395,13 @@ function applyQuadAlignment(
         syncedOtherIndices,
         -1,
       );
+      const sectionSolo = matchedCanonCount === 0;
       for (const beat of list) {
-        const clampedIdx = Math.max(
-          0,
-          Math.min(maxOtherIndex, beat.which - bestDelta),
-        );
+        const rawIdx = beat.which - bestDelta;
+        const inBounds = rawIdx >= 0 && rawIdx <= maxOtherIndex;
+        const clampedIdx = Math.max(0, Math.min(maxOtherIndex, rawIdx));
         beat.gold = otherBeats[clampedIdx];
-        beat.goldGain = 1;
+        beat.goldGain = !sectionSolo && inBounds ? 1 : 0;
       }
     }
   } else {
@@ -1348,7 +1410,7 @@ function applyQuadAlignment(
     foldBySection(otherBeats);
     for (const beat of mainBeats) {
       beat.gold = beat.pink?.other ?? otherBeats[0];
-      beat.goldGain = 1;
+      beat.goldGain = beat.pinkGain ?? 1;
     }
   }
 
@@ -1356,7 +1418,9 @@ function applyQuadAlignment(
     mainBeats,
     (beat) => beat.gold,
     (beat, gain) => {
-      beat.goldGain = gain;
+      if ((beat.goldGain ?? 0) > 0) {
+        beat.goldGain = gain;
+      }
     },
   );
 }
@@ -1398,7 +1462,9 @@ function applyOtherSeamDucking(beats: BeatWithSim[]) {
     beats,
     (beat) => beat.other,
     (beat, gain) => {
-      beat.otherGain = gain;
+      if (beat.otherGain > 0) {
+        beat.otherGain = gain;
+      }
     },
   );
 }

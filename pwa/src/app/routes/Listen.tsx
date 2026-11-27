@@ -22,13 +22,10 @@ import {
 import { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
 import {
   DEFAULT_BEATS_PER_BAR,
-  DEFAULT_METRONOME_BEAT_OFFSET,
   DEFAULT_METRONOME_VOLUME_PCT,
   MetronomeOverlayService,
-  clampMetronomeBeatOffset,
   clampMetronomeVolumePct,
   detectTrackBeatsPerBar,
-  resolveMetronomeTimeSignatureOverride,
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import {
   DEFAULT_AUDIO_MODE_INTENSITY,
@@ -58,6 +55,7 @@ import {
   hasNonDefaultExtras,
   hasNonDefaultTuning,
   isCustomAnchorEdge,
+  normalizeAnalysis,
   normalizeTimeSignatureBranchMode,
   type QuantumBase,
   type TimeSignatureBranchMode,
@@ -74,6 +72,7 @@ import {
   type AutocanonizerMixAlignmentMode,
   type AutocanonizerQuadBranchMode,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import { SongSyncController } from "@forever-jukebox/shared/songsync/SongSyncController";
 import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import {
   renderWubMachineBuffer,
@@ -137,11 +136,12 @@ import { ExportModal } from "./listen/ExportModal";
 import { InfoModal } from "./listen/InfoModal";
 import { MixQueueModal } from "./listen/MixQueueModal";
 import { PanPopover } from "./listen/PanPopover";
+import { SongSyncMixerPopover } from "./listen/SongSyncMixerPopover";
 import { PlayMenu } from "./listen/PlayMenu";
 import { SettingsModal } from "./listen/SettingsModal";
 import { StatusPanel, liveLoading, type PreparingPhase } from "./listen/StatusPanel";
 import { usePresentedLoading } from "@forever-jukebox/shared/ui/LoadingProgress";
-import { TuningModal } from "./listen/TuningModal";
+import { TuningModal, type SongSyncTrackUiState } from "./listen/TuningModal";
 import { VizInfo } from "./listen/VizInfo";
 import { createPlaybackCounters } from "./listen/playbackCounters";
 import { VizTop } from "./listen/VizTop";
@@ -164,11 +164,13 @@ import {
   type BpmTrackerState,
 } from "./listen/liveBpm";
 import {
+  isBpmBarDownbeat,
   isSmoothBpmBarStyle,
   normalizeBpmBarStyle,
   normalizeBpmBarTimeSignatureMode,
   resolveBpmBarActiveSegment,
   resolveBpmBarSmoothAnimation,
+  resolveEffectiveMetronomeConfig,
   resolveStoredBpmBarBeatOffsetForTrack,
   resolveStoredBpmBarDenominator,
   resolveStoredBpmBarNumerator,
@@ -207,6 +209,7 @@ import {
   MAX_MIX_TRACKS,
   buildAutocanonizerMix,
   buildJukeboxMix,
+  buildSongSyncMix,
   clampMixTrackGainPct,
   resolveLocalMixSources,
   type LoadedLocalMixSource,
@@ -216,6 +219,7 @@ import type { AudioFileEntry } from "@/ui/components/DropZone";
 const VIZ_CLASS_NAMES: Record<PlayMode, string> = {
   jukebox: "",
   autocanonizer: "is-canonizer",
+  songsync: "is-songsync",
   wubmachine: "is-wubmachine",
 };
 
@@ -343,14 +347,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     initialAudioIntensity,
   );
   const audioIntensityRef = React.useRef(initialAudioIntensity);
+  const [metronomeEnabled, setMetronomeEnabled] = React.useState(false);
   const [metronomeVolumePct, setMetronomeVolumePct] = React.useState(
     DEFAULT_METRONOME_VOLUME_PCT,
-  );
-  const [metronomeBeatsPerBar, setMetronomeBeatsPerBar] = React.useState<
-    number | null
-  >(null);
-  const [metronomeBeatOffset, setMetronomeBeatOffset] = React.useState(
-    DEFAULT_METRONOME_BEAT_OFFSET,
   );
   const [detectedBeatsPerBar, setDetectedBeatsPerBar] = React.useState(
     DEFAULT_BEATS_PER_BAR,
@@ -463,6 +462,20 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   >(null);
   const [isMixing, setIsMixing] = React.useState(false);
 
+  // Song Sync & instrumental-only branching state.
+  const [songSyncTracks, setSongSyncTracks] = React.useState<
+    SongSyncTrackUiState[]
+  >([]);
+  const [songSyncTrackTimes, setSongSyncTrackTimes] = React.useState<
+    Array<{ title: string; color: string; durationSec: number }>
+  >([]);
+  const [songSyncMasterTrackIndex, setSongSyncMasterTrackIndex] =
+    React.useState(0);
+  const [songSyncTempoSyncEnabled, setSongSyncTempoSyncEnabled] =
+    React.useState(true);
+  const [songSyncNormalizeVolumeEnabled, setSongSyncNormalizeVolumeEnabled] =
+    React.useState(true);
+
   const [tuneForm, setTuneForm] = React.useState<TuneFormState>(() =>
     createDefaultTuneForm(initialVolume, highlightAnchorBranch),
   );
@@ -472,14 +485,12 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
     audioMode: initialAudioMode,
     audioIntensity: initialAudioIntensity,
-    metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
-    metronomeBeatsPerBar: null,
-    metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
   });
 
   const vizPanelRef = React.useRef<HTMLDivElement | null>(null);
   const vizLayerRef = React.useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = React.useRef<HTMLDivElement | null>(null);
+  const songSyncLayerRef = React.useRef<HTMLDivElement | null>(null);
   const wubMachineLayerRef = React.useRef<HTMLDivElement | null>(null);
   const vizStatsRef = React.useRef<HTMLDivElement | null>(null);
   const segmentRefs = React.useRef<Array<HTMLSpanElement | null>>([]);
@@ -515,6 +526,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }, []);
   const vizControllerRef = React.useRef<JukeboxController | null>(null);
   const autocanonizerRef = React.useRef<AutocanonizerController | null>(null);
+  const songsyncRef = React.useRef<SongSyncController | null>(null);
   const wubmachineRef = React.useRef<WubMachineController | null>(null);
   // The loaded track's remix, kept across mode switches until the track changes.
   const wubMachineRenderRef = React.useRef<WubMachineRender | null>(null);
@@ -524,6 +536,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   const cachedAutocanonizerMixSourcesRef = React.useRef<
     [LoadedLocalMixSource, LoadedLocalMixSource] | null
   >(null);
+  const cachedSongSyncSourcesRef = React.useRef<LoadedLocalMixSource[] | null>(
+    null,
+  );
+  const loadedSongSyncSignatureRef = React.useRef("");
   const mixLoadGenerationRef = React.useRef(0);
 
   // Live BPM tracker refs.
@@ -721,9 +737,54 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       vizPanelRef,
       vizControllerRef,
       autocanonizerRef,
+      songsyncRef,
       wubmachineRef,
       playModeRef,
     });
+  // BPM bar + metronome time-signature config shared by UI, playback, and export.
+  const bpmBarConfig: BpmBarTimeSignatureInput = React.useMemo(
+    () => ({
+      bpmBarTimeSignatureMode,
+      bpmBarNumerator,
+      bpmBarDenominator,
+      bpmBarBeatOffset,
+      multiTrackEnabled,
+      coverSyncEnabled,
+      timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets,
+      timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+      metronomeEnabled,
+      metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
+    }),
+    [
+      bpmBarTimeSignatureMode,
+      bpmBarNumerator,
+      bpmBarDenominator,
+      bpmBarBeatOffset,
+      multiTrackEnabled,
+      coverSyncEnabled,
+      timeSignatureBranchingEnabled,
+      timeSignatureBranchMode,
+      timeSignatureNumerator,
+      timeSignatureDenominator,
+      timeSignatureTrackOffsets,
+      timeSignatureSimilarityRestrictEnabled,
+      timeSignatureSimilarityNumerator,
+      timeSignatureSimilarityDenominator,
+      metronomeEnabled,
+      detectedBeatsPerBar,
+    ],
+  );
+  const effectiveMetronomeConfig = React.useMemo(
+    () => resolveEffectiveMetronomeConfig(bpmBarConfig),
+    [bpmBarConfig],
+  );
+
   const {
     isExportOpen,
     isExporting,
@@ -745,9 +806,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     playMode,
     jukeboxAudioMode,
     audioIntensity,
+    metronomeEnabled: bpmBarEnabled && metronomeEnabled,
     metronomeVolumePct,
-    metronomeBeatsPerBar,
-    metronomeBeatOffset,
+    metronomeBeatsPerBar: effectiveMetronomeConfig.beatsPerBarOverride,
+    metronomeBeatOffset: effectiveMetronomeConfig.beatOffset,
     multiTrackEnabled,
     mixTrackGainsPct,
     postMixNormalizeVolumeEnabled,
@@ -803,28 +865,19 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   // at default intensity.
   function resetAudioModeToOff(player: BufferedAudioPlayer) {
     cowbellOverlayRef.current?.disable();
-    metronomeOverlayRef.current?.disable();
-    metronomeOverlayRef.current?.setBeatsPerBarOverride(null);
-    metronomeOverlayRef.current?.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
     stopPreparing();
     jukeboxAudioModeRef.current = "off";
     audioIntensityRef.current = DEFAULT_AUDIO_MODE_INTENSITY;
     setJukeboxAudioMode("off");
     setAudioIntensity(DEFAULT_AUDIO_MODE_INTENSITY);
-    setMetronomeBeatsPerBar(null);
-    setMetronomeBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
     setExtrasForm((prev) =>
       prev.audioMode === "off" &&
-      prev.audioIntensity === DEFAULT_AUDIO_MODE_INTENSITY &&
-      prev.metronomeBeatsPerBar === null &&
-      prev.metronomeBeatOffset === DEFAULT_METRONOME_BEAT_OFFSET
+      prev.audioIntensity === DEFAULT_AUDIO_MODE_INTENSITY
         ? prev
         : {
             ...prev,
             audioMode: "off",
             audioIntensity: DEFAULT_AUDIO_MODE_INTENSITY,
-            metronomeBeatsPerBar: null,
-            metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
           },
     );
     player.setJukeboxAudioMode("off", DEFAULT_AUDIO_MODE_INTENSITY);
@@ -850,6 +903,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       autocanonizerOtherSeconds: 0,
       autocanonizerPinkSeconds: 0,
       autocanonizerGoldSeconds: 0,
+      songSyncTrackSeconds: [],
       wubMachineSeconds: 0,
     });
   }
@@ -894,9 +948,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (jukeboxAudioMode === "cowbell") {
       cowbellOverlay.enable();
       player.setJukeboxAudioMode("cowbell", audioIntensity);
-    } else if (jukeboxAudioMode === "metronome") {
-      metronomeOverlay.enable();
-      player.setJukeboxAudioMode("metronome", audioIntensity);
     } else if (
       jukeboxAudioMode !== "swing" &&
       jukeboxAudioMode !== "instrumental"
@@ -917,6 +968,26 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       playerRef.current = null;
     };
   }, []);
+
+  React.useEffect(() => {
+    const overlay = metronomeOverlayRef.current;
+    if (!overlay) {
+      return;
+    }
+    overlay.setMetronomeVolumePct(metronomeVolumePct);
+    overlay.setBeatsPerBarOverride(effectiveMetronomeConfig.beatsPerBarOverride);
+    overlay.setBeatOffset(effectiveMetronomeConfig.beatOffset);
+    if (bpmBarEnabled && metronomeEnabled) {
+      overlay.enable();
+    } else {
+      overlay.disable();
+    }
+  }, [
+    bpmBarEnabled,
+    metronomeEnabled,
+    metronomeVolumePct,
+    effectiveMetronomeConfig,
+  ]);
 
   React.useEffect(() => {
     vizControllerRef.current?.setActiveIndex(activeVizIndex);
@@ -948,15 +1019,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (
       !vizLayerRef.current ||
       !canonizerLayerRef.current ||
+      !songSyncLayerRef.current ||
       !wubMachineLayerRef.current
     ) {
       return;
     }
     const controller = new JukeboxController(vizLayerRef.current);
     const autocanonizer = new AutocanonizerController(canonizerLayerRef.current);
+    const songsync = new SongSyncController(songSyncLayerRef.current);
     const wubmachine = new WubMachineController(wubMachineLayerRef.current);
     vizControllerRef.current = controller;
     autocanonizerRef.current = autocanonizer;
+    songsyncRef.current = songsync;
     wubmachineRef.current = wubmachine;
 
     controller.setActiveIndex(activeVizIndex);
@@ -984,6 +1058,14 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
       updateLiveBpmForBeat(beat);
+      const runtimeConfig = bpmBarRuntimeRef.current.bpmBarConfig;
+      metronomeOverlayRef.current?.handleBeatEnter(
+        index,
+        beat ?? undefined,
+        runtimeConfig
+          ? isBpmBarDownbeat(runtimeConfig, index, beat ?? null, null)
+          : undefined,
+      );
       triggerBpmBarPulse(index, beat);
     });
     autocanonizer.setOnEnded(() => {
@@ -1018,6 +1100,45 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       }
       startWubMachinePlayback(seconds, { resetSession: false });
     });
+
+    songsync.setVisible(playModeRef.current === "songsync");
+    songsync.setLoop(loopTrack);
+    songsync.setVolume(playerRef.current?.getVolume() ?? 1);
+    songsync.setOnBeat((snapshot) => {
+      lastBeatRef.current = snapshot.masterBeatIndex;
+      counters.set({
+        beatsPlayed: snapshot.masterBeatIndex + 1,
+        songSyncTrackSeconds: snapshot.trackSeconds.map((sec) => sec ?? 0),
+      });
+      const beat = snapshot.masterBeat as QuantumBase | null;
+      updateLiveBpmForBeat(beat);
+      const runtimeConfig = bpmBarRuntimeRef.current.bpmBarConfig;
+      metronomeOverlayRef.current?.handleBeatEnter(
+        snapshot.masterBeatIndex,
+        beat ?? undefined,
+        runtimeConfig
+          ? isBpmBarDownbeat(
+              runtimeConfig,
+              snapshot.masterBeatIndex,
+              beat ?? null,
+              null,
+            )
+          : undefined,
+      );
+      triggerBpmBarPulse(snapshot.masterBeatIndex, beat);
+    });
+    songsync.setOnEnded(() => {
+      if (!isRunningRef.current) {
+        return;
+      }
+      stopPlayback();
+    });
+    songsync.setOnSelect((masterBeatIndex) => {
+      if (playModeRef.current !== "songsync") {
+        return;
+      }
+      startSongSyncPlayback(masterBeatIndex, { resetSession: false });
+    });
     const render = wubMachineRenderRef.current;
     if (render) {
       wubmachine.setRemix(
@@ -1030,6 +1151,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const resizeObserver = new ResizeObserver(() => {
       controller.resizeActive();
       autocanonizer.resizeNow();
+      songsync.resizeNow();
       wubmachine.resizeNow();
     });
     resizeObserver.observe(vizPanelRef.current ?? vizLayerRef.current);
@@ -1040,9 +1162,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       resizeObserver.disconnect();
       controller.destroy();
       autocanonizer.destroy();
+      songsync.destroy();
       wubmachine.destroy();
       vizControllerRef.current = null;
       autocanonizerRef.current = null;
+      songsyncRef.current = null;
       wubmachineRef.current = null;
     };
   }, [file]);
@@ -1073,9 +1197,12 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     playModeRef.current = playMode;
     vizControllerRef.current?.setVisible(playMode === "jukebox");
     autocanonizerRef.current?.setVisible(playMode === "autocanonizer");
+    songsyncRef.current?.setVisible(playMode === "songsync");
     wubmachineRef.current?.setVisible(playMode === "wubmachine");
     if (playMode === "autocanonizer") {
       autocanonizerRef.current?.resizeNow();
+    } else if (playMode === "songsync") {
+      songsyncRef.current?.resizeNow();
     } else if (playMode === "wubmachine") {
       wubmachineRef.current?.resizeNow();
     } else {
@@ -1088,6 +1215,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   React.useEffect(() => {
     storeWubMachineLoop(loopTrack);
     wubmachineRef.current?.setLoop(loopTrack);
+    songsyncRef.current?.setLoop(loopTrack);
   }, [loopTrack]);
 
   React.useEffect(() => {
@@ -1105,15 +1233,19 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     previousFileKeyRef.current = currentFileKey;
     if (isTrackChange) {
       cowbellOverlayRef.current?.setSectionStartBeatIndices([]);
+      metronomeOverlayRef.current?.disable();
       metronomeOverlayRef.current?.setBeatsPerBar(undefined);
+      setMetronomeEnabled(false);
       setDetectedBeatsPerBar(DEFAULT_BEATS_PER_BAR);
       resetAudioModeToOff(playerRef.current);
     }
 
-    // Reset any active multi-track or dual-canonizer mix on single-file load.
+    // Reset any active multi-track, dual-canonizer, or Song Sync state on single-file load.
     mixLoadGenerationRef.current += 1;
     cachedMixSourcesRef.current = null;
     cachedAutocanonizerMixSourcesRef.current = null;
+    cachedSongSyncSourcesRef.current = null;
+    loadedSongSyncSignatureRef.current = "";
     multiTrackEnabledRef.current = false;
     autocanonizerMixEnabledRef.current = false;
     setMultiTrackEnabled(false);
@@ -1124,10 +1256,14 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     setAutocanonizerQuadMode(false);
     setAutocanonizerMixTrackTitles(null);
     setAutocanonizerOtherDurationSec(null);
+    setSongSyncTracks([]);
+    setSongSyncTrackTimes([]);
+    setSongSyncMasterTrackIndex(0);
     setMixTitleOverride(null);
     setMixDurationOverrideSec(null);
     setIsMixing(false);
     autocanonizerRef.current?.setQuadMode?.(false);
+    songsyncRef.current?.reset();
     playerRef.current.clearPostMixTrackGains?.();
     playerRef.current.setPostMixNormalization?.(false);
 
@@ -1209,13 +1345,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           playerRef.current?.getContext() ?? null,
         );
         initializeEngine(result.analysis);
-        restoreSavedTuning(result.fingerprint);
+        restoreSavedTuning(result.fingerprint, storedOffset);
         const audioMode = jukeboxAudioModeRef.current;
         if (audioMode === "cowbell") {
           cowbellOverlayRef.current?.enable();
-        }
-        if (audioMode === "metronome") {
-          metronomeOverlayRef.current?.enable();
         }
         if (audioMode === "swing") {
           playerRef.current?.setJukeboxAudioMode("swing");
@@ -1266,6 +1399,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       autocanonizerRef.current?.stop();
       playerRef.current?.stop();
       autocanonizerRef.current?.resetVisualization();
+    } else if (playModeRef.current === "songsync") {
+      songsyncRef.current?.stop();
+      playerRef.current?.stop();
+      songsyncRef.current?.resetVisualization();
     }
     wubmachineRef.current?.stop();
     engineRef.current?.stopJukebox();
@@ -1313,6 +1450,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playMode === mode) {
       return;
     }
+    if (mode === "songsync" && mixQueue.length < 2) {
+      setMixAddSticky?.(true);
+      showShortcutToast(t("listen.songSyncNeedQueue"));
+      return;
+    }
     if (isRunningRef.current || isPausedRef.current) {
       stopPlayback();
     }
@@ -1325,6 +1467,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (mode !== "autocanonizer" && autocanonizerMixEnabledRef.current) {
       void disableAutocanonizerMix();
     }
+    if (playModeRef.current === "songsync" && mode !== "songsync") {
+      disableSongSyncMix();
+    }
     playModeRef.current = mode;
     setPlayMode(mode);
     counters.set({
@@ -1332,6 +1477,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       autocanonizerOtherSeconds: 0,
       autocanonizerPinkSeconds: 0,
       autocanonizerGoldSeconds: 0,
+      songSyncTrackSeconds: [],
       wubMachineSeconds: 0,
     });
     if (mode !== "jukebox") {
@@ -1340,7 +1486,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       clearSelectedBranch();
     }
     if (mode === "wubmachine") {
+      setIsTuningOpen(false);
       maybePrepareWubMachine();
+    }
+    if (mode === "songsync") {
+      setMixAddSticky?.(false);
     }
   };
 
@@ -1366,9 +1516,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
               beatsSource[state.currentBeatIndex + 1],
             );
           }
+          const runtimeConfig = bpmBarRuntimeRef.current.bpmBarConfig;
           metronomeOverlayRef.current?.handleBeatEnter(
             state.currentBeatIndex,
             beat,
+            runtimeConfig
+              ? isBpmBarDownbeat(
+                  runtimeConfig,
+                  state.currentBeatIndex,
+                  beat ?? null,
+                  beatsSource,
+                )
+              : undefined,
           );
           updateLiveBpmForBeat(beat, {
             beats: beatsSource,
@@ -1562,11 +1721,12 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     });
   };
 
-  const restoreSavedTuning = (fingerprint: string) => {
+  const restoreSavedTuning = (fingerprint: string, fallbackOffset = 0) => {
     const engine = engineRef.current;
     if (!engine) {
       return;
     }
+    const fallbackOffsets = fallbackOffset !== 0 ? [fallbackOffset] : [];
     const saved = loadTuning(fingerprint);
     if (!saved) {
       setTimeSignatureSimilarityRestrictEnabled(false);
@@ -1574,22 +1734,35 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       setTimeSignatureSimilarityDenominator(
         DEFAULT_TIME_SIGNATURE_DENOMINATOR,
       );
+      setTimeSignatureTrackOffsets(fallbackOffsets);
+      if (fallbackOffsets.length > 0) {
+        engine.updateConfig({ timeSignatureTrackOffsets: fallbackOffsets });
+      }
       return;
     }
     engine.updateConfig(saved.config);
-    setTimeSignatureSimilarityRestrictEnabled(
-      Boolean(saved.config.timeSignatureSimilarityRestrict),
-    );
-    setTimeSignatureSimilarityNumerator(
+    const restrictEnabled = Boolean(saved.config.timeSignatureSimilarityRestrict);
+    const savedNum =
       saved.config.timeSignatureSimilarityNumerator ??
-        DEFAULT_TIME_SIGNATURE_NUMERATOR,
-    );
-    setTimeSignatureSimilarityDenominator(
+      DEFAULT_TIME_SIGNATURE_NUMERATOR;
+    const savedDen =
       saved.config.timeSignatureSimilarityDenominator ??
-        DEFAULT_TIME_SIGNATURE_DENOMINATOR,
-    );
+      DEFAULT_TIME_SIGNATURE_DENOMINATOR;
+    setTimeSignatureSimilarityRestrictEnabled(restrictEnabled);
+    setTimeSignatureSimilarityNumerator(savedNum);
+    setTimeSignatureSimilarityDenominator(savedDen);
+    if (restrictEnabled) {
+      storeBpmBarNumerator(savedNum);
+      storeBpmBarDenominator(savedDen);
+      setBpmBarNumerator(savedNum);
+      setBpmBarDenominator(savedDen);
+    }
     if (saved.config.timeSignatureTrackOffsets?.length) {
       setTimeSignatureTrackOffsets(saved.config.timeSignatureTrackOffsets);
+      setBpmBarBeatOffset(saved.config.timeSignatureTrackOffsets[0] ?? 0);
+    } else if (fallbackOffsets.length > 0) {
+      setTimeSignatureTrackOffsets(fallbackOffsets);
+      engine.updateConfig({ timeSignatureTrackOffsets: fallbackOffsets });
     }
     engine.clearDeletedEdges();
     engine.rebuildGraph();
@@ -1906,14 +2079,18 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
   }
 
   const openTuningModalTab = (tab: TuningModalTab) => {
-    if (playModeRef.current !== "jukebox") {
+    if (playModeRef.current === "wubmachine") {
       return;
     }
-    if (!isTuningOpen && engineRef.current) {
+    if (
+      playModeRef.current === "jukebox" &&
+      !isTuningOpen &&
+      engineRef.current
+    ) {
       syncTuneFormFromEngine();
       setTuningNonDefault(hasNonDefaultTuning(engineRef.current));
     }
-    if (tab === "extras") {
+    if (tab === "extras" && playModeRef.current === "jukebox") {
       setIsTuningOpen((prev) => {
         const next = !prev;
         if (next && typeof window !== "undefined") {
@@ -1940,6 +2117,9 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     metronomeOverlayRef.current?.cancelScheduledHits();
     if (playModeRef.current === "autocanonizer") {
       autocanonizerRef.current?.stop();
+      player.stop();
+    } else if (playModeRef.current === "songsync") {
+      songsyncRef.current?.stop();
       player.stop();
     } else if (playModeRef.current === "wubmachine") {
       wubmachineRef.current?.pause();
@@ -2000,6 +2180,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (playMode === "autocanonizer") {
       const startIndex = isPaused ? (lastBeatRef.current ?? 0) : 0;
       startAutocanonizerPlayback(startIndex, { resetSession: !isPaused });
+      return;
+    }
+    if (playMode === "songsync") {
+      const startIndex = isPaused ? (lastBeatRef.current ?? 0) : 0;
+      startSongSyncPlayback(startIndex, { resetSession: !isPaused });
       return;
     }
     if (playMode === "wubmachine") {
@@ -2119,6 +2304,41 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       autocanonizer.resetVisualization();
     }
     autocanonizer.startAtIndex(index);
+    if (resetSession || !isRunningRef.current) {
+      lastPlayStampRef.current = performance.now();
+    }
+    isRunningRef.current = true;
+    isPausedRef.current = false;
+    setIsRunning(true);
+    setIsPaused(false);
+    requestWakeLockIfFullscreen();
+    return true;
+  };
+
+  const startSongSyncPlayback = (
+    masterBeatIndex: number,
+    options?: { resetSession?: boolean },
+  ) => {
+    const songsync = songsyncRef.current;
+    const engine = engineRef.current;
+    const player = playerRef.current;
+    if (!songsync || !engine || !player || !songsync.isReady()) {
+      return false;
+    }
+    const resetSession = options?.resetSession ?? true;
+    player.stop();
+    cowbellOverlayRef.current?.cancelScheduledHits();
+    metronomeOverlayRef.current?.cancelScheduledHits();
+    engine.stopJukebox();
+    if (resetSession) {
+      resetPlaybackSessionMetrics();
+      songsync.resetVisualization();
+    }
+    if (masterBeatIndex <= 0 && resetSession) {
+      songsync.start();
+    } else {
+      songsync.startAtIndex(masterBeatIndex);
+    }
     if (resetSession || !isRunningRef.current) {
       lastPlayStampRef.current = performance.now();
     }
@@ -2277,16 +2497,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const nextAudioIntensity = clampAudioModeIntensity(
       nextExtras.audioIntensity,
     );
-    const nextMetronomeVolumePct = clampMetronomeVolumePct(
-      nextExtras.metronomeVolumePct,
-    );
-    const nextMetronomeBeatsPerBar = resolveMetronomeTimeSignatureOverride(
-      nextExtras.metronomeBeatsPerBar,
-    );
-    const nextMetronomeBeatOffset = clampMetronomeBeatOffset(
-      nextExtras.metronomeBeatOffset,
-      nextMetronomeBeatsPerBar ?? detectedBeatsPerBar,
-    );
     bringItHomeModeRef.current = nextBringItHomeMode;
     setBringItHomeMode(nextBringItHomeMode);
     if (nextBringItHomeMode) {
@@ -2304,23 +2514,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     audioIntensityRef.current = nextAudioIntensity;
     setJukeboxAudioMode(nextAudioMode);
     setAudioIntensity(nextAudioIntensity);
-    setMetronomeVolumePct(nextMetronomeVolumePct);
-    setMetronomeBeatsPerBar(nextMetronomeBeatsPerBar);
-    setMetronomeBeatOffset(nextMetronomeBeatOffset);
-    metronomeOverlayRef.current?.setMetronomeVolumePct(nextMetronomeVolumePct);
-    metronomeOverlayRef.current?.setBeatsPerBarOverride(
-      nextMetronomeBeatsPerBar,
-    );
-    metronomeOverlayRef.current?.setBeatOffset(nextMetronomeBeatOffset);
     if (nextAudioMode === "cowbell") {
       cowbellOverlayRef.current?.enable();
     } else {
       cowbellOverlayRef.current?.disable();
-    }
-    if (nextAudioMode === "metronome") {
-      metronomeOverlayRef.current?.enable();
-    } else {
-      metronomeOverlayRef.current?.disable();
     }
     if (nextAudioMode !== "instrumental") {
       cancelInstrumentalRender();
@@ -2426,9 +2623,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     setExtrasForm((prev) => ({
       ...prev,
       bringItHomeMode: false,
-      metronomeVolumePct: DEFAULT_METRONOME_VOLUME_PCT,
-      metronomeBeatsPerBar: null,
-      metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
     }));
     resetAudioModeToOff(player);
     if (
@@ -2490,9 +2684,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     if (activeAudioMode === "cowbell") {
       cowbellOverlayRef.current?.enable();
       player.setJukeboxAudioMode("cowbell", audioIntensityRef.current);
-    } else if (activeAudioMode === "metronome") {
-      metronomeOverlayRef.current?.enable();
-      player.setJukeboxAudioMode("metronome", audioIntensityRef.current);
     } else if (
       activeAudioMode !== "swing" &&
       activeAudioMode !== "instrumental"
@@ -2625,7 +2816,11 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       setTimeSignatureTrackOffsets([restoredOffset]);
       initializeEngine(analysisRef.current);
       if (fingerprintRef.current) {
-        restoreSavedTuning(fingerprintRef.current);
+        restoreSavedTuning(fingerprintRef.current, restoredOffset);
+      } else if (restoredOffset !== 0) {
+        engineRef.current?.updateConfig({
+          timeSignatureTrackOffsets: [restoredOffset],
+        });
       }
       if (audioMode === "swing") {
         player.setJukeboxAudioMode("swing", audioIntensityRef.current);
@@ -2792,6 +2987,333 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
+  // Song Sync helpers & instrumental-only feature toggle.
+  const syncSongSyncUiFromController = () => {
+    const songsync = songsyncRef.current;
+    if (!songsync) {
+      setSongSyncTracks([]);
+      setSongSyncTrackTimes([]);
+      return;
+    }
+    const meta = songsync.getTrackMeta();
+    setSongSyncMasterTrackIndex(songsync.getMasterTrackIndex());
+    setSongSyncTracks(
+      meta.map((track) => ({
+        title: track.title,
+        color: track.color,
+        gainPct: Math.round(track.gain * 100),
+        pan: Math.round(track.pan * 100),
+        muted: track.muted,
+        solo: track.solo,
+        beatOffset: track.beatOffset,
+      })),
+    );
+    setSongSyncTrackTimes(
+      meta.map((track) => ({
+        title: track.title,
+        color: track.color,
+        durationSec: track.duration,
+      })),
+    );
+  };
+
+  const applyLoadedSongSyncSources = (
+    sources: LoadedLocalMixSource[],
+    options?: {
+      tempoSyncEnabled?: boolean;
+      normalizeVolumeEnabled?: boolean;
+      masterTrackIndex?: number;
+      preservedConfigs?: ReadonlyMap<
+        string,
+        {
+          gain: number;
+          pan: number;
+          muted: boolean;
+          solo: boolean;
+          beatOffset: number;
+        }
+      >;
+    },
+  ) => {
+    const player = playerRef.current;
+    const songsync = songsyncRef.current;
+    if (!player || !songsync) {
+      return;
+    }
+    const nextTempoSync = options?.tempoSyncEnabled ?? songSyncTempoSyncEnabled;
+    const nextNormalize =
+      options?.normalizeVolumeEnabled ?? songSyncNormalizeVolumeEnabled;
+
+    // Default master track to the longest source so shorter edits align within it.
+    let longestIdx = 0;
+    let longestDuration = -1;
+    sources.forEach((source, index) => {
+      const duration = source.analysis.track?.duration ?? source.audioBuffer.duration;
+      if (duration > longestDuration) {
+        longestDuration = duration;
+        longestIdx = index;
+      }
+    });
+    const nextMasterIdx =
+      typeof options?.masterTrackIndex === "number" &&
+      options.masterTrackIndex >= 0 &&
+      options.masterTrackIndex < sources.length
+        ? options.masterTrackIndex
+        : longestIdx;
+
+    const built = buildSongSyncMix(player.getContext(), sources, {
+      tempoSyncEnabled: nextTempoSync,
+      normalizeVolumeEnabled: nextNormalize,
+      masterTrackIndex: nextMasterIdx,
+    });
+
+    songsync.setTracks(
+      sources.map((source, index) => {
+        const preserved = options?.preservedConfigs?.get(source.id);
+        const storedOffset = resolveStoredBpmBarBeatOffsetForTrack(
+          source.fingerprint,
+        );
+        return {
+          title: source.title || t("common.untitled"),
+          buffer: built.prepared.buffers[index],
+          analysis: source.analysis,
+          durationSec: built.prepared.durationsSec[index],
+          tempo: source.tempo,
+          tempoRatio: built.tempoRatios[index],
+          gain: preserved?.gain ?? DEFAULT_MIX_TRACK_GAIN_PCT / 100,
+          pan: preserved?.pan ?? 0,
+          muted: preserved?.muted ?? false,
+          solo: preserved?.solo ?? false,
+          beatOffset: preserved?.beatOffset ?? storedOffset,
+        };
+      }),
+      player.getContext(),
+      {
+        masterTrackIndex: nextMasterIdx,
+        loop: loopTrack,
+      },
+    );
+
+    syncSongSyncUiFromController();
+    const masterSource = sources[nextMasterIdx] ?? sources[0];
+    const detected = detectTrackBeatsPerBar(
+      normalizeAnalysis(masterSource.analysis).beats,
+      masterSource.analysis.track?.time_signature,
+    );
+    setDetectedBeatsPerBar(detected);
+    metronomeOverlayRef.current?.setBeatsPerBar(detected);
+    setMixTitleOverride(
+      sources.map((source) => source.title || t("common.untitled")).join(" + "),
+    );
+    setMixDurationOverrideSec(
+      built.prepared.durationsSec[nextMasterIdx] ??
+        built.prepared.durationsSec[0] ??
+        null,
+    );
+    counters.set({
+      songSyncTrackSeconds: new Array<number>(sources.length).fill(0),
+    });
+    resetLiveBpm(masterSource.tempo ?? null);
+  };
+
+  const loadSongSyncMix = async () => {
+    const player = playerRef.current;
+    if (
+      !player ||
+      playModeRef.current !== "songsync" ||
+      mixQueue.length < 2
+    ) {
+      return false;
+    }
+    const tracks = mixQueue.slice(0, MAX_MIX_TRACKS);
+    const prevSources = cachedSongSyncSourcesRef.current ?? [];
+    const prevMeta = songsyncRef.current?.getTrackMeta() ?? [];
+    const prevById = new Map<string, LoadedLocalMixSource>();
+    const preservedConfigs = new Map<
+      string,
+      {
+        gain: number;
+        pan: number;
+        muted: boolean;
+        solo: boolean;
+        beatOffset: number;
+      }
+    >();
+    prevSources.forEach((source, idx) => {
+      prevById.set(source.id, source);
+      const meta = prevMeta[idx];
+      if (meta) {
+        preservedConfigs.set(source.id, {
+          gain: meta.gain,
+          pan: meta.pan,
+          muted: meta.muted,
+          solo: meta.solo,
+          beatOffset: meta.beatOffset,
+        });
+      }
+    });
+
+    const missingTracks = tracks.filter((track) => !prevById.has(track.id));
+    stopPlayback();
+    const gen = ++mixLoadGenerationRef.current;
+    if (missingTracks.length > 0) {
+      setIsMixing(true);
+    }
+    try {
+      const resolvedMissing =
+        missingTracks.length > 0
+          ? await resolveLocalMixSources(missingTracks, player.getContext(), {
+              isCancelled: () => mixLoadGenerationRef.current !== gen,
+            })
+          : [];
+      if (mixLoadGenerationRef.current !== gen) {
+        return false;
+      }
+      const missingById = new Map(
+        resolvedMissing.map((source) => [source.id, source]),
+      );
+      const sources = tracks
+        .map((track) => prevById.get(track.id) ?? missingById.get(track.id))
+        .filter((source): source is LoadedLocalMixSource => Boolean(source));
+      if (sources.length < 2) {
+        return false;
+      }
+      cachedSongSyncSourcesRef.current = sources;
+      loadedSongSyncSignatureRef.current = tracks.map((t) => t.id).join("|");
+      applyLoadedSongSyncSources(sources, { preservedConfigs });
+      return true;
+    } catch (err) {
+      if (mixLoadGenerationRef.current === gen) {
+        console.warn(`Song Sync mix failed: ${String(err)}`);
+        showShortcutToast(t("mix.loadFailed"));
+      }
+      return false;
+    } finally {
+      if (mixLoadGenerationRef.current === gen) {
+        setIsMixing(false);
+      }
+    }
+  };
+
+  const disableSongSyncMix = () => {
+    mixLoadGenerationRef.current += 1;
+    cachedSongSyncSourcesRef.current = null;
+    loadedSongSyncSignatureRef.current = "";
+    songsyncRef.current?.reset();
+    setSongSyncTracks([]);
+    setSongSyncTrackTimes([]);
+    setSongSyncMasterTrackIndex(0);
+    setMixTitleOverride(null);
+    setMixDurationOverrideSec(null);
+  };
+
+  const songSyncQueueSignature = React.useMemo(
+    () =>
+      mixQueue
+        .slice(0, MAX_MIX_TRACKS)
+        .map((track) => track.id)
+        .join("|"),
+    [mixQueue],
+  );
+
+  React.useEffect(() => {
+    if (playMode !== "songsync") {
+      return;
+    }
+    if (mixQueue.length < 2) {
+      if (
+        cachedSongSyncSourcesRef.current ||
+        loadedSongSyncSignatureRef.current
+      ) {
+        stopPlayback();
+        disableSongSyncMix();
+        showShortcutToast(t("listen.songSyncNeedQueue"));
+      }
+      return;
+    }
+    if (songSyncQueueSignature !== loadedSongSyncSignatureRef.current) {
+      void loadSongSyncMix();
+    }
+  }, [playMode, songSyncQueueSignature, mixQueue.length]);
+
+  const onSongSyncMasterTrackChange = (index: number) => {
+    const sources = cachedSongSyncSourcesRef.current;
+    if (!sources || index < 0 || index >= sources.length) {
+      return;
+    }
+    const wasRunning = isRunningRef.current;
+    stopPlayback();
+    setSongSyncMasterTrackIndex(index);
+    applyLoadedSongSyncSources(sources, { masterTrackIndex: index });
+    if (wasRunning) {
+      startSongSyncPlayback(0, { resetSession: true });
+    }
+  };
+
+  const onSongSyncTempoSyncChange = (enabled: boolean) => {
+    setSongSyncTempoSyncEnabled(enabled);
+    const sources = cachedSongSyncSourcesRef.current;
+    if (sources && playModeRef.current === "songsync") {
+      const wasRunning = isRunningRef.current;
+      stopPlayback();
+      applyLoadedSongSyncSources(sources, {
+        tempoSyncEnabled: enabled,
+        masterTrackIndex: songSyncMasterTrackIndex,
+      });
+      if (wasRunning) {
+        startSongSyncPlayback(0, { resetSession: true });
+      }
+    }
+  };
+
+  const onSongSyncNormalizeVolumeChange = (enabled: boolean) => {
+    setSongSyncNormalizeVolumeEnabled(enabled);
+    const sources = cachedSongSyncSourcesRef.current;
+    if (sources && playModeRef.current === "songsync") {
+      const wasRunning = isRunningRef.current;
+      stopPlayback();
+      applyLoadedSongSyncSources(sources, {
+        normalizeVolumeEnabled: enabled,
+        masterTrackIndex: songSyncMasterTrackIndex,
+      });
+      if (wasRunning) {
+        startSongSyncPlayback(0, { resetSession: true });
+      }
+    }
+  };
+
+  const onSongSyncTrackGainChange = (index: number, gainPct: number) => {
+    const clamped = clampMixTrackGainPct(gainPct);
+    songsyncRef.current?.setTrackConfig(index, { gain: clamped / 100 });
+    syncSongSyncUiFromController();
+  };
+
+  const onSongSyncTrackPanChange = (index: number, pan: number) => {
+    const clamped = Math.max(-100, Math.min(100, Math.round(pan)));
+    songsyncRef.current?.setTrackConfig(index, { pan: clamped / 100 });
+    syncSongSyncUiFromController();
+  };
+
+  const onSongSyncTrackMutedChange = (index: number, muted: boolean) => {
+    songsyncRef.current?.setTrackConfig(index, { muted });
+    syncSongSyncUiFromController();
+  };
+
+  const onSongSyncTrackSoloChange = (index: number, solo: boolean) => {
+    songsyncRef.current?.setTrackConfig(index, { solo });
+    syncSongSyncUiFromController();
+  };
+
+  const onSongSyncTrackBeatOffsetChange = (index: number, offset: number) => {
+    const clamped = clampTimeSignatureTrackOffset(offset);
+    songsyncRef.current?.setTrackConfig(index, { beatOffset: clamped });
+    const source = cachedSongSyncSourcesRef.current?.[index];
+    if (source?.fingerprint) {
+      storeBpmBarBeatOffsetForTrack(source.fingerprint, clamped);
+    }
+    syncSongSyncUiFromController();
+  };
+
   const onToggleMix = () => {
     const isCanonizer = playModeRef.current === "autocanonizer";
     const active = isCanonizer
@@ -2837,6 +3359,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     const volume = value / 100;
     playerRef.current?.setVolume(volume);
     autocanonizerRef.current?.setVolume(volume);
+    songsyncRef.current?.setVolume(volume);
     wubmachineRef.current?.setVolume(volume);
     cowbellOverlayRef.current?.setVolume(volume);
     metronomeOverlayRef.current?.setVolume(volume);
@@ -2968,50 +3491,6 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     toggleSelectedAnchorBranch,
     customAnchor,
   });
-
-  // BPM bar segment calculation + imperative zero-commit DOM pulse updates.
-  const bpmBarConfig: BpmBarTimeSignatureInput = React.useMemo(
-    () => ({
-      bpmBarTimeSignatureMode,
-      bpmBarNumerator,
-      bpmBarDenominator,
-      bpmBarBeatOffset,
-      multiTrackEnabled,
-      coverSyncEnabled,
-      timeSignatureBranchingEnabled,
-      timeSignatureBranchMode,
-      timeSignatureNumerator,
-      timeSignatureDenominator,
-      timeSignatureTrackOffsets,
-      timeSignatureSimilarityRestrictEnabled,
-      timeSignatureSimilarityNumerator,
-      timeSignatureSimilarityDenominator,
-      jukeboxAudioMode,
-      metronomeBeatsPerBar,
-      metronomeBeatOffset,
-      metronomeDetectedBeatsPerBar: detectedBeatsPerBar,
-    }),
-    [
-      bpmBarTimeSignatureMode,
-      bpmBarNumerator,
-      bpmBarDenominator,
-      bpmBarBeatOffset,
-      multiTrackEnabled,
-      coverSyncEnabled,
-      timeSignatureBranchingEnabled,
-      timeSignatureBranchMode,
-      timeSignatureNumerator,
-      timeSignatureDenominator,
-      timeSignatureTrackOffsets,
-      timeSignatureSimilarityRestrictEnabled,
-      timeSignatureSimilarityNumerator,
-      timeSignatureSimilarityDenominator,
-      jukeboxAudioMode,
-      metronomeBeatsPerBar,
-      metronomeBeatOffset,
-      detectedBeatsPerBar,
-    ],
-  );
 
   const segmentCount = React.useMemo(
     () =>
@@ -3429,13 +3908,41 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         timeSignatureBranchMode === "overwrite"
           ? "combine"
           : timeSignatureBranchMode;
+      const clampedBpmOffset = clampTimeSignatureTrackOffset(bpmBarBeatOffset);
+      let nextOffsets = timeSignatureTrackOffsets;
+      let nextNum = timeSignatureSimilarityNumerator;
+      let nextDen = timeSignatureSimilarityDenominator;
+
+      if (enabled) {
+        if (!multiTrackEnabledRef.current) {
+          nextOffsets = clampedBpmOffset !== 0 ? [clampedBpmOffset] : [];
+          if (bpmBarTimeSignatureMode === "custom") {
+            nextNum = clampTimeSignatureNumerator(bpmBarNumerator);
+            nextDen = clampTimeSignatureDenominator(bpmBarDenominator);
+          } else {
+            storeBpmBarNumerator(nextNum);
+            storeBpmBarDenominator(nextDen);
+          }
+          setBpmBarNumerator(nextNum);
+          setBpmBarDenominator(nextDen);
+        } else if (
+          timeSignatureTrackOffsets.length === 0 &&
+          clampedBpmOffset !== 0
+        ) {
+          nextOffsets = [clampedBpmOffset];
+        }
+      }
+
       setTimeSignatureSimilarityRestrictEnabled(enabled);
       setTimeSignatureBranchMode(nextMode);
+      setTimeSignatureTrackOffsets(nextOffsets);
+      setTimeSignatureSimilarityNumerator(nextNum);
+      setTimeSignatureSimilarityDenominator(nextDen);
       engineRef.current?.updateConfig({
         timeSignatureSimilarityRestrict: enabled,
-        timeSignatureSimilarityNumerator,
-        timeSignatureSimilarityDenominator,
-        timeSignatureTrackOffsets,
+        timeSignatureSimilarityNumerator: nextNum,
+        timeSignatureSimilarityDenominator: nextDen,
+        timeSignatureTrackOffsets: nextOffsets,
         ...(multiTrackEnabledRef.current && timeSignatureBranchingEnabled
           ? { timeSignatureBranchMode: nextMode }
           : {}),
@@ -3448,6 +3955,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     onTimeSignatureSimilarityNumeratorChange: (numerator: number) => {
       const clamped = clampTimeSignatureNumerator(numerator);
       setTimeSignatureSimilarityNumerator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        storeBpmBarNumerator(clamped);
+        setBpmBarNumerator(clamped);
+      }
       engineRef.current?.updateConfig({
         timeSignatureSimilarityNumerator: clamped,
       });
@@ -3465,6 +3976,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     onTimeSignatureSimilarityDenominatorChange: (denominator: number) => {
       const clamped = clampTimeSignatureDenominator(denominator);
       setTimeSignatureSimilarityDenominator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        storeBpmBarDenominator(clamped);
+        setBpmBarDenominator(clamped);
+      }
       engineRef.current?.updateConfig({
         timeSignatureSimilarityDenominator: clamped,
       });
@@ -3492,6 +4007,30 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     onBpmBarEnabledChange: (enabled: boolean) => {
       storeBpmBarEnabled(enabled);
       setBpmBarEnabled(enabled);
+      if (!enabled) {
+        setMetronomeEnabled(false);
+        metronomeOverlayRef.current?.disable();
+      }
+    },
+    metronomeEnabled,
+    onMetronomeEnabledChange: (enabled: boolean) => {
+      const nextEnabled = bpmBarEnabled && enabled;
+      if (nextEnabled && bpmBarTimeSignatureMode === "off") {
+        storeBpmBarTimeSignatureMode("auto");
+        setBpmBarTimeSignatureMode("auto");
+      }
+      setMetronomeEnabled(nextEnabled);
+      if (nextEnabled) {
+        metronomeOverlayRef.current?.enable();
+      } else {
+        metronomeOverlayRef.current?.disable();
+      }
+    },
+    metronomeVolumePct,
+    onMetronomeVolumeChange: (volumePct: number) => {
+      const clamped = clampMetronomeVolumePct(volumePct);
+      setMetronomeVolumePct(clamped);
+      metronomeOverlayRef.current?.setMetronomeVolumePct(clamped);
     },
     bpmBarStyle,
     onBpmBarStyleChange: (style: BpmBarStyle) => {
@@ -3510,21 +4049,38 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       const clamped = clampTimeSignatureNumerator(numerator);
       storeBpmBarNumerator(clamped);
       setBpmBarNumerator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        setTimeSignatureSimilarityNumerator(clamped);
+        engineRef.current?.updateConfig({
+          timeSignatureSimilarityNumerator: clamped,
+        });
+        if (timeSignatureSimilarityRestrictEnabled) {
+          rebuildGraphAndSyncViz();
+          syncTuneFormFromEngine();
+        }
+        persistCurrentTuning();
+      }
     },
     bpmBarDenominator,
     onBpmBarDenominatorChange: (denominator: number) => {
       const clamped = clampTimeSignatureDenominator(denominator);
       storeBpmBarDenominator(clamped);
       setBpmBarDenominator(clamped);
+      if (!multiTrackEnabledRef.current) {
+        setTimeSignatureSimilarityDenominator(clamped);
+        engineRef.current?.updateConfig({
+          timeSignatureSimilarityDenominator: clamped,
+        });
+        if (timeSignatureSimilarityRestrictEnabled) {
+          rebuildGraphAndSyncViz();
+          syncTuneFormFromEngine();
+        }
+        persistCurrentTuning();
+      }
     },
     bpmBarBeatOffset,
     onBpmBarBeatOffsetChange: (offset: number) => {
-      const clamped = clampTimeSignatureTrackOffset(offset);
-      const id = multiTrackEnabledRef.current
-        ? cachedMixSourcesRef.current?.[0]?.fingerprint
-        : fingerprintRef.current;
-      storeBpmBarBeatOffsetForTrack(id, clamped);
-      setBpmBarBeatOffset(clamped);
+      multiTuningProps.onTimeSignatureTrackOffsetChange(0, offset);
     },
     branchLookaheadEnabled,
     onBranchLookaheadEnabledChange: (enabled: boolean) => {
@@ -3541,6 +4097,21 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
       setBranchLookaheadCount(clamped);
       syncPredictedJumps();
     },
+  };
+
+  const songSyncTuningProps = {
+    tracks: songSyncTracks,
+    masterTrackIndex: songSyncMasterTrackIndex,
+    tempoSyncEnabled: songSyncTempoSyncEnabled,
+    normalizeVolumeEnabled: songSyncNormalizeVolumeEnabled,
+    onMasterTrackChange: onSongSyncMasterTrackChange,
+    onTempoSyncChange: onSongSyncTempoSyncChange,
+    onNormalizeVolumeChange: onSongSyncNormalizeVolumeChange,
+    onTrackGainChange: onSongSyncTrackGainChange,
+    onTrackPanChange: onSongSyncTrackPanChange,
+    onTrackMutedChange: onSongSyncTrackMutedChange,
+    onTrackSoloChange: onSongSyncTrackSoloChange,
+    onTrackBeatOffsetChange: onSongSyncTrackBeatOffsetChange,
   };
 
   if (!file) {
@@ -3675,6 +4246,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           ) : null}
           <div id="viz-layer" className="viz-layer" ref={vizLayerRef} />
           <div id="canonizer-layer" className="canonizer-layer" ref={canonizerLayerRef} />
+          <div id="songsync-layer" className="songsync-layer" ref={songSyncLayerRef} />
           <div id="wubmachine-layer" className="wubmachine-layer" ref={wubMachineLayerRef} />
           <div className="viz-bottom" id="viz-stats" ref={vizStatsRef}>
             {bpmBarEnabled && isSmoothStyle ? (
@@ -3740,6 +4312,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                 autocanonizerOtherDurationSeconds={
                   autocanonizerOtherDurationSec
                 }
+                songSyncTrackTimes={songSyncTrackTimes}
               />
             </div>
             <div className="viz-bottom-right">
@@ -3790,6 +4363,19 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                   onToggle={togglePan}
                 />
               ) : null}
+              {playMode === "songsync" && songSyncTracks.length > 0 ? (
+                <SongSyncMixerPopover
+                  isOpen={isPanOpen}
+                  panelRef={panPanelRef}
+                  buttonRef={panButtonRef}
+                  tracks={songSyncTracks}
+                  onPanChange={onSongSyncTrackPanChange}
+                  onGainChange={onSongSyncTrackGainChange}
+                  onMutedChange={onSongSyncTrackMutedChange}
+                  onBeatOffsetChange={onSongSyncTrackBeatOffsetChange}
+                  onToggle={togglePan}
+                />
+              ) : null}
               <VolumePopover
                 isOpen={isVolumeOpen}
                 panelRef={volumePanelRef}
@@ -3832,6 +4418,7 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
           multi={multiTuningProps}
           visuals={visualsTuningProps}
           detectedBeatsPerBar={detectedBeatsPerBar}
+          songSync={songSyncTuningProps}
           onClose={() => setIsTuningOpen(false)}
           showReset={showTuningReset}
           onReset={handleResetTuningAndExtras}

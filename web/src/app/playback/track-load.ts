@@ -36,7 +36,12 @@ import {
   type PlaylistSourceType,
   type PlaylistTrack,
 } from "../playlist";
-import { resolveStoredBpmBarBeatOffsetForTrack } from "../bpmBarTimeSignature";
+import {
+  resolveStoredBpmBarBeatOffsetForTrack,
+  resolveStoredBpmBarDenominator,
+  resolveStoredBpmBarNumerator,
+  resolveStoredTimeSignatureSimilarityRestrictForTrack,
+} from "../bpmBarTimeSignature";
 import { resolveTrackBaseTempoBpm } from "../liveBpm";
 import { getCurrentTrackId, useAppStore } from "../store";
 import {
@@ -66,6 +71,7 @@ import {
   DEFAULT_TIME_SIGNATURE_BRANCH_MODE,
   DEFAULT_TIME_SIGNATURE_DENOMINATOR,
   DEFAULT_TIME_SIGNATURE_NUMERATOR,
+  type JukeboxConfig,
 } from "@forever-jukebox/shared";
 import {
   DEFAULT_BEATS_PER_BAR,
@@ -81,7 +87,11 @@ import {
 } from "./wubmachine";
 import { stopPlayback } from "./transport";
 import { discardCustomAnchorEdit } from "./custom-anchor";
-import { clearCachedMultiTrackSources } from "./multi-track-mix";
+import {
+  clearCachedMultiTrackSources,
+  syncMetronomeOverlayFromStore,
+} from "./multi-track-mix";
+import { clearCachedSongSyncSources } from "./song-sync";
 import { syncPredictedJumps } from "./branch-lookahead";
 import {
   applyAnchorBranchFromUrl,
@@ -141,6 +151,7 @@ export function resetForNewTrack(
 ) {
   bumpLoadGeneration();
   clearCachedMultiTrackSources();
+  clearCachedSongSyncSources();
   discardCustomAnchorEdit(context);
   const {
     autocanonizer,
@@ -149,6 +160,7 @@ export function resetForNewTrack(
     jukebox,
     metronomeOverlay,
     player,
+    songsync,
     defaultConfig,
   } = context;
   const shouldClearTuning = options?.clearTuning ?? false;
@@ -172,8 +184,7 @@ export function resetForNewTrack(
   metronomeOverlay.setBeatsPerBarOverride(null);
   metronomeOverlay.setBeatOffset(DEFAULT_METRONOME_BEAT_OFFSET);
   useAppStore.setState({
-    metronomeBeatsPerBar: null,
-    metronomeBeatOffset: DEFAULT_METRONOME_BEAT_OFFSET,
+    metronomeEnabled: false,
     metronomeDetectedBeatsPerBar: DEFAULT_BEATS_PER_BAR,
   });
   cancelInstrumentalRender();
@@ -197,6 +208,12 @@ export function resetForNewTrack(
   useAppStore.setState({ analysisLoaded: false });
   useAppStore.setState({ audioLoadInFlight: false });
   useAppStore.setState({ multiTrackEnabled: false });
+  useAppStore.setState({
+    songSyncEnabled: false,
+    songSyncTracks: [],
+    songSyncTrackSeconds: [],
+    songSyncMasterTrackIndex: 0,
+  });
   useAppStore.setState({
     autocanonizerMixEnabled: false,
     autocanonizerQuadMode: false,
@@ -235,6 +252,7 @@ export function resetForNewTrack(
     stopPlayback(context);
   }
   autocanonizer?.reset();
+  songsync?.reset();
   resetWubMachine(context);
   if (shouldClearTuning) {
     useAppStore.setState({ tuningParams: null });
@@ -358,16 +376,56 @@ export function applyAnalysisResult(
     return false;
   }
   const songId = response.id || getCurrentTrackId();
+  const previousRestrictEnabled =
+    useAppStore.getState().timeSignatureSimilarityRestrictEnabled;
   const savedOffset = resolveStoredBpmBarBeatOffsetForTrack(songId);
   const restoredTrackOffsets = savedOffset !== 0 ? [savedOffset] : [];
+  const savedRestrict =
+    resolveStoredTimeSignatureSimilarityRestrictForTrack(songId);
+  const restoredRestrictEnabled = savedRestrict !== null;
+  const restoredRestrictNumerator =
+    savedRestrict?.numerator ?? DEFAULT_TIME_SIGNATURE_NUMERATOR;
+  const restoredRestrictDenominator =
+    savedRestrict?.denominator ?? DEFAULT_TIME_SIGNATURE_DENOMINATOR;
   useAppStore.setState({
     bpmBarBeatOffset: savedOffset,
     timeSignatureTrackOffsets: restoredTrackOffsets,
+    timeSignatureSimilarityRestrictEnabled: restoredRestrictEnabled,
+    timeSignatureSimilarityNumerator: restoredRestrictNumerator,
+    timeSignatureSimilarityDenominator: restoredRestrictDenominator,
+    ...(restoredRestrictEnabled
+      ? {
+          bpmBarNumerator: restoredRestrictNumerator,
+          bpmBarDenominator: restoredRestrictDenominator,
+        }
+      : previousRestrictEnabled
+        ? {
+            bpmBarNumerator: resolveStoredBpmBarNumerator(),
+            bpmBarDenominator: resolveStoredBpmBarDenominator(),
+          }
+        : {}),
   });
-  if (savedOffset !== 0) {
-    engine.updateConfig({ timeSignatureTrackOffsets: restoredTrackOffsets });
-  }
   applyTuningParamsFromUrl(context);
+  const restoredConfigPatch: Partial<JukeboxConfig> = {};
+  if (savedOffset !== 0) {
+    restoredConfigPatch.timeSignatureTrackOffsets = restoredTrackOffsets;
+  }
+  if (restoredRestrictEnabled) {
+    restoredConfigPatch.timeSignatureSimilarityRestrict = true;
+    restoredConfigPatch.timeSignatureSimilarityNumerator =
+      restoredRestrictNumerator;
+    restoredConfigPatch.timeSignatureSimilarityDenominator =
+      restoredRestrictDenominator;
+  } else if (previousRestrictEnabled) {
+    restoredConfigPatch.timeSignatureSimilarityRestrict = false;
+    restoredConfigPatch.timeSignatureSimilarityNumerator =
+      DEFAULT_TIME_SIGNATURE_NUMERATOR;
+    restoredConfigPatch.timeSignatureSimilarityDenominator =
+      DEFAULT_TIME_SIGNATURE_DENOMINATOR;
+  }
+  if (Object.keys(restoredConfigPatch).length > 0) {
+    engine.updateConfig(restoredConfigPatch);
+  }
   engine.loadAnalysis(response.result);
   cowbellOverlay.setSectionStartBeatIndices(engine.getSectionStartBeatIndices());
   const detectedBeatsPerBar = detectTrackBeatsPerBar(
@@ -376,6 +434,7 @@ export function applyAnalysisResult(
   );
   metronomeOverlay.setBeatsPerBar(detectedBeatsPerBar);
   useAppStore.setState({ metronomeDetectedBeatsPerBar: detectedBeatsPerBar });
+  syncMetronomeOverlayFromStore(context);
   applyDeletedEdgesFromUrl(context);
   applyAnchorBranchFromUrl(context);
   autocanonizer.setAnalysis(response.result, response.result.track?.duration);

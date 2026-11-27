@@ -14,6 +14,10 @@ import {
   setAutocanonizerSongGainPct,
   setAutocanonizerStreamPans,
   setMasterVolume,
+  setSongSyncTrackBeatOffset,
+  setSongSyncTrackGainPct,
+  setSongSyncTrackMuted,
+  setSongSyncTrackPan,
 } from "../../playback";
 import {
   hasActivePlaylistControls,
@@ -122,12 +126,14 @@ export function VizBottomRight() {
   const autocanonizerMixTrackTitles = useAppStore(
     (s) => s.autocanonizerMixTrackTitles,
   );
+  const songSyncTracks = useAppStore((s) => s.songSyncTracks);
   const isFullscreen = useAppStore((s) => s.isFullscreen);
   const [volumeOpen, setVolumeOpen] = useState(false);
   const [panOpen, setPanOpen] = useState(false);
   const volumeWrapRef = useRef<HTMLDivElement | null>(null);
   const panWrapRef = useRef<HTMLDivElement | null>(null);
   const isCanonizer = playMode === "autocanonizer";
+  const isSongSync = playMode === "songsync";
 
   // Click-away closes the open audio panels.
   useEffect(() => {
@@ -151,10 +157,10 @@ export function VizBottomRight() {
   }, [volumeOpen, panOpen]);
 
   useEffect(() => {
-    if (!isCanonizer) {
+    if (!isCanonizer && !isSongSync) {
       setPanOpen(false);
     }
-  }, [isCanonizer]);
+  }, [isCanonizer, isSongSync]);
 
   const hasTracks = hasPlaylistControls(playlist);
   const active = hasActivePlaylistControls(playlist);
@@ -415,6 +421,108 @@ export function VizBottomRight() {
               aria-hidden="true"
             >
               swap_horiz
+            </span>
+          </button>
+        </div>
+      ) : null}
+      {isSongSync && songSyncTracks.length > 0 ? (
+        <div className="pan-control-wrap" ref={panWrapRef}>
+          <div
+            className={
+              panOpen
+                ? "pan-control-panel is-dual"
+                : "pan-control-panel is-dual is-hidden"
+            }
+            id="songsync-mixer-panel"
+          >
+            {songSyncTracks.map((track, idx) => (
+              <div key={idx} className="stream-balance-group">
+                <div
+                  className="stream-balance-song-title"
+                  style={{ color: track.color }}
+                  title={track.title}
+                >
+                  {track.title}
+                </div>
+                <VoiceBalanceControls
+                  panId={`songsync-popover-pan-${idx}`}
+                  gainId={`songsync-popover-gain-${idx}`}
+                  panLabel={t("tuning.pan")}
+                  gainAriaLabel={`${track.title} volume`}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={track.color}
+                  pan={track.pan}
+                  gainPct={track.gainPct}
+                  showGain
+                  onPanChange={(value) =>
+                    setSongSyncTrackPan(getAppContext(), idx, value)
+                  }
+                  onGainChange={(value) =>
+                    setSongSyncTrackGainPct(getAppContext(), idx, value)
+                  }
+                />
+                <div className="songsync-popover-actions">
+                  <button
+                    type="button"
+                    className={
+                      track.muted
+                        ? "custom-anchor-button is-active"
+                        : "custom-anchor-button"
+                    }
+                    onClick={() =>
+                      setSongSyncTrackMuted(getAppContext(), idx, !track.muted)
+                    }
+                  >
+                    {t("tuning.mute")}
+                  </button>
+                  <button
+                    type="button"
+                    className="custom-anchor-button"
+                    onClick={() =>
+                      setSongSyncTrackBeatOffset(
+                        getAppContext(),
+                        idx,
+                        track.beatOffset - 1,
+                      )
+                    }
+                  >
+                    -1b
+                  </button>
+                  <span className="hint">{track.beatOffset >= 0 ? `+${track.beatOffset}` : track.beatOffset}</span>
+                  <button
+                    type="button"
+                    className="custom-anchor-button"
+                    onClick={() =>
+                      setSongSyncTrackBeatOffset(
+                        getAppContext(),
+                        idx,
+                        track.beatOffset + 1,
+                      )
+                    }
+                  >
+                    +1b
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            id="songsync-mixer-button"
+            className="volume-button pan-button"
+            aria-label={t("playback.audioBalance")}
+            title={t("playback.audioBalance")}
+            onClick={() => {
+              setVolumeOpen(false);
+              setPanOpen((prev) => !prev);
+            }}
+          >
+            <span
+              className="material-symbols-outlined pan-icon"
+              aria-hidden="true"
+            >
+              tune
             </span>
           </button>
         </div>

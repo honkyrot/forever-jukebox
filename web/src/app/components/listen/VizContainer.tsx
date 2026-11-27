@@ -18,6 +18,7 @@ import { VizTop } from "./VizTop";
 const VIZ_CLASS_NAMES: Record<PlayMode, string> = {
   jukebox: "viz",
   autocanonizer: "viz is-canonizer",
+  songsync: "viz is-songsync",
   wubmachine: "viz is-wubmachine",
 };
 
@@ -65,9 +66,7 @@ export function VizContainer() {
   const timeSignatureSimilarityDenominator = useAppStore(
     (s) => s.timeSignatureSimilarityDenominator,
   );
-  const jukeboxAudioMode = useAppStore((s) => s.jukeboxAudioMode);
-  const metronomeBeatsPerBar = useAppStore((s) => s.metronomeBeatsPerBar);
-  const metronomeBeatOffset = useAppStore((s) => s.metronomeBeatOffset);
+  const metronomeEnabled = useAppStore((s) => s.metronomeEnabled);
   const metronomeDetectedBeatsPerBar = useAppStore(
     (s) => s.metronomeDetectedBeatsPerBar,
   );
@@ -78,6 +77,7 @@ export function VizContainer() {
   const vizPanelRef = useRef<HTMLDivElement | null>(null);
   const vizLayerRef = useRef<HTMLDivElement | null>(null);
   const canonizerLayerRef = useRef<HTMLDivElement | null>(null);
+  const songSyncLayerRef = useRef<HTMLDivElement | null>(null);
   const wubMachineLayerRef = useRef<HTMLDivElement | null>(null);
 
   const { segmentCount, activeSegmentIndex } = resolveBpmBarActiveSegment(
@@ -96,9 +96,7 @@ export function VizContainer() {
       timeSignatureSimilarityRestrictEnabled,
       timeSignatureSimilarityNumerator,
       timeSignatureSimilarityDenominator,
-      jukeboxAudioMode,
-      metronomeBeatsPerBar,
-      metronomeBeatOffset,
+      metronomeEnabled,
       metronomeDetectedBeatsPerBar,
     },
     vizStatsPulseBeatIndex,
@@ -125,6 +123,9 @@ export function VizContainer() {
           vizPanel: node,
           vizLayer: vizLayerRef.current,
           canonizerLayer: canonizerLayerRef.current,
+          ...(songSyncLayerRef.current
+            ? { songSyncLayer: songSyncLayerRef.current }
+            : {}),
           wubMachineLayer: wubMachineLayerRef.current,
         });
       }
@@ -143,6 +144,7 @@ export function VizContainer() {
       const ctx = getAppContext();
       ctx.jukebox?.resizeNow();
       ctx.autocanonizer?.resizeNow();
+      ctx.songsync?.resizeNow();
       ctx.wubmachine?.resizeNow();
     };
     if (
@@ -264,6 +266,8 @@ export function VizContainer() {
     const ctx = getAppContext();
     if (playMode === "autocanonizer") {
       ctx.autocanonizer?.resizeNow();
+    } else if (playMode === "songsync") {
+      ctx.songsync?.resizeNow();
     } else if (playMode === "wubmachine") {
       ctx.wubmachine?.resizeNow();
     } else {
@@ -323,6 +327,11 @@ export function VizContainer() {
           id="canonizer-layer"
           className="canonizer-layer"
           ref={canonizerLayerRef}
+        ></div>
+        <div
+          id="songsync-layer"
+          className="songsync-layer"
+          ref={songSyncLayerRef}
         ></div>
         <div
           id="wubmachine-layer"

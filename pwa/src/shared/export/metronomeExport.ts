@@ -1,12 +1,14 @@
 import type { AnalysisOutput } from "@/shared/analysis-schema/schema";
-import { normalizeAnalysis } from "@forever-jukebox/shared";
+import {
+  clampTimeSignatureTrackOffset,
+  normalizeAnalysis,
+} from "@forever-jukebox/shared";
 import {
   BASE_METRONOME_GAIN,
   DEFAULT_METRONOME_BEAT_OFFSET,
   DEFAULT_METRONOME_VOLUME_PCT,
   HI_TICK_GAIN,
   LO_TICK_GAIN,
-  clampMetronomeBeatOffset,
   clampMetronomeVolumePct,
   createMetronomeTickBuffers,
   detectTrackBeatsPerBar,
@@ -45,9 +47,8 @@ export function planMetronomeExportEvents(
     options.analysis.track?.time_signature,
   );
   const beatsPerBarOverride = options.metronomeBeatsPerBar ?? null;
-  const beatOffset = clampMetronomeBeatOffset(
+  const beatOffset = clampTimeSignatureTrackOffset(
     options.metronomeBeatOffset ?? DEFAULT_METRONOME_BEAT_OFFSET,
-    beatsPerBarOverride ?? beatsPerBar,
   );
   const metronomeGainScale =
     clampMetronomeVolumePct(

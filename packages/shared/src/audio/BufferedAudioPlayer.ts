@@ -91,6 +91,7 @@ export class BufferedAudioPlayer {
   private stereoPanner: StereoPannerNode | null = null;
   private chainNodes: AudioNode[] = [];
   private chainHighPass: BiquadFilterNode | null = null;
+  private chainBitcrusher: WaveShaperNode | null = null;
   private chainLowPass: BiquadFilterNode | null = null;
   private chainDryGain: GainNode | null = null;
   private chainWetGain: GainNode | null = null;
@@ -445,7 +446,7 @@ export class BufferedAudioPlayer {
 
   // No-op unless eight-bit is the active mode with a valid source buffer.
   private renderEightBitBuffer() {
-    const settings = AUDIO_MODE_SETTINGS.eight_bit;
+    const settings = this.getActiveModeSettings();
     if (
       this.audioMode !== "eight_bit" ||
       !this.originalBuffer ||
@@ -506,8 +507,13 @@ export class BufferedAudioPlayer {
     } else {
       // Intensity only scales AudioParams (rate, filter cutoffs, reverb mix)
       // and never changes a mode's chain topology, so write the params in
-      // place instead of tearing down the node graph. The source restart
-      // below still applies the new playback rate.
+      // place instead of tearing down the node graph. In eight_bit mode,
+      // re-render the crushed buffer so the updated bit depth and sample rate
+      // take effect immediately.
+      if (mode === "eight_bit") {
+        this.renderEightBitBuffer();
+        this.buffer = this.getActiveBuffer();
+      }
       this.updateSourceChainParams(settings);
     }
     if (!this.buffer) {
@@ -1144,6 +1150,7 @@ export class BufferedAudioPlayer {
       bitcrusher.curve = createBitcrusherCurve(settings.crushBitDepth);
       bitcrusher.oversample = "none";
       this.chainNodes.push(bitcrusher);
+      this.chainBitcrusher = bitcrusher;
       lastNode.connect(bitcrusher);
       lastNode = bitcrusher;
     }
@@ -1200,6 +1207,7 @@ export class BufferedAudioPlayer {
     }
     this.chainNodes = [];
     this.chainHighPass = null;
+    this.chainBitcrusher = null;
     this.chainLowPass = null;
     this.chainDryGain = null;
     this.chainWetGain = null;
@@ -1209,6 +1217,11 @@ export class BufferedAudioPlayer {
     this.syncMasterOutputRouting(settings);
     if (this.chainHighPass && settings.highPassFrequency !== null) {
       this.chainHighPass.frequency.value = settings.highPassFrequency;
+    }
+    if (this.chainBitcrusher && settings.crushBitDepth !== undefined) {
+      this.chainBitcrusher.curve = createBitcrusherCurve(
+        settings.crushBitDepth,
+      );
     }
     if (this.chainLowPass && settings.lowPassFrequency !== null) {
       this.chainLowPass.frequency.value = settings.lowPassFrequency;

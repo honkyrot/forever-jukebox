@@ -2604,6 +2604,8 @@ export class JukeboxViz {
 
   /**
    * Positions each song onto its own horizontal lane stacked vertically across the canvas.
+   * Lane widths are scaled proportionally to each track's duration relative to the longest
+   * track so differing song lengths (e.g. full vs short covers) remain visually proportional.
    */
   static createMultiTrackLinePositioner(): Positioner {
     return (data: VisualizationData, width: number, height: number) => {
@@ -2625,6 +2627,23 @@ export class JukeboxViz {
       const bottomY = Math.max(topY, height - Math.max(40, height * 0.2));
       const spanY = Math.max(0, bottomY - topY);
 
+      const maxDuration =
+        tracks && tracks.length > 0
+          ? tracks.reduce(
+              (max, t) =>
+                typeof t.duration === "number" && Number.isFinite(t.duration) && t.duration > 0
+                  ? Math.max(max, t.duration)
+                  : max,
+              0,
+            )
+          : 0;
+      const maxBeatCount = beats.reduce((max, beat, idx) => {
+        const slice = tracks?.[beat.trackIndex ?? 0];
+        const count =
+          beat.trackBeatCount ?? slice?.beatCount ?? (tracks ? 0 : beats.length);
+        return Math.max(max, count, idx === 0 ? 1 : 0);
+      }, 1);
+
       return beats.map((beat, i) => {
         const trackIndex = beat.trackIndex ?? 0;
         const laneY =
@@ -2632,15 +2651,20 @@ export class JukeboxViz {
             ? height * 0.5
             : topY + (trackIndex / (trackCount - 1)) * spanY;
         const trackSlice = tracks?.[trackIndex];
-        const localIdx =
-          beat.localWhich ??
-          (trackSlice ? i - trackSlice.startBeatIndex : i);
-        const trackBeatCount =
-          beat.trackBeatCount ?? trackSlice?.beatCount ?? beats.length;
-        const x =
-          trackBeatCount <= 1
-            ? paddingX + spanX * 0.5
-            : paddingX + (localIdx / (trackBeatCount - 1)) * spanX;
+        let x: number;
+        if (maxDuration > 0 && trackSlice) {
+          const localTime = Math.max(0, beat.start - trackSlice.startTimeOffset);
+          x = paddingX + (localTime / maxDuration) * spanX;
+        } else {
+          const localIdx =
+            beat.localWhich ??
+            (trackSlice ? i - trackSlice.startBeatIndex : i);
+          const denom = Math.max(1, maxBeatCount - 1);
+          x =
+            maxBeatCount <= 1
+              ? paddingX + spanX * 0.5
+              : paddingX + (localIdx / denom) * spanX;
+        }
         return { x, y: laneY };
       });
     };

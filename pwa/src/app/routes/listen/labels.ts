@@ -18,6 +18,9 @@ export function formatTrackTitle(
   if (playMode === "autocanonizer") {
     return `${baseTitle} (${t("listen.autocanonized")})`;
   }
+  if (playMode === "songsync") {
+    return `${baseTitle} (${t("listen.songSynced")})`;
+  }
   if (playMode === "wubmachine") {
     return `${baseTitle} (${t("listen.wubMachineRemix")})`;
   }

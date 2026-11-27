@@ -83,6 +83,7 @@ export function VizTop({
             >
               <option value="autocanonizer">{t("listen.autocanonizer")}</option>
               <option value="jukebox">{t("listen.jukebox")}</option>
+              <option value="songsync">{t("listen.songSync")}</option>
               <option value="wubmachine">{t("listen.wubMachine")}</option>
             </select>
             <SymbolIcon className="viz-select-arrow" name="arrow_drop_down" />
@@ -256,6 +257,15 @@ export function VizTop({
           onChange={(event) => onFinishOutSongChange(event.target.checked)}
         />
         <span>{t("listen.finishTrack")}</span>
+      </label>
+      <label className="songsync-loop">
+        <input
+          id="songsync-loop"
+          type="checkbox"
+          checked={loopTrack}
+          onChange={(event) => onLoopTrackChange(event.target.checked)}
+        />
+        <span>{t("listen.loopTrack")}</span>
       </label>
       <label className="wubmachine-loop">
         <input

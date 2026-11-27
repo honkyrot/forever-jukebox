@@ -1,4 +1,7 @@
-import { alignTrackPairDtw, extractTrackBeatFeatures } from "./coverSync";
+import {
+  alignTrackPairMultiSectionDtw,
+  extractTrackBeatFeatures,
+} from "./coverSync";
 import type { Edge, QuantumBase, TimeSignatureBranchMode } from "./types";
 
 export type { TimeSignatureBranchMode };
@@ -143,7 +146,10 @@ function getMasterCoverSyncAlignments(
 
   for (let t = 1; t < groups.length; t += 1) {
     const targetTrackIndex = groups[t][0]?.trackIndex ?? t;
-    const aligned = alignTrackPairDtw(masterFeatures, featuresByTrack[t]);
+    const aligned = alignTrackPairMultiSectionDtw(
+      masterFeatures,
+      featuresByTrack[t],
+    ).pairs;
     const bestByMasterBeat = new Map<
       number,
       { indexB: number; distance: number }

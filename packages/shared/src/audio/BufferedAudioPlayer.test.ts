@@ -417,9 +417,9 @@ describe("BufferedAudioPlayer", () => {
   it("clamps intensity to the supported range", () => {
     const player = new BufferedAudioPlayer();
     player.setJukeboxAudioModeIntensity(500);
-    expect(player.getJukeboxAudioModeIntensity()).toBe(150);
-    player.setJukeboxAudioModeIntensity(0);
-    expect(player.getJukeboxAudioModeIntensity()).toBe(50);
+    expect(player.getJukeboxAudioModeIntensity()).toBe(200);
+    player.setJukeboxAudioModeIntensity(-50);
+    expect(player.getJukeboxAudioModeIntensity()).toBe(0);
   });
 
   it("builds lofi chain with bandpass filter", async () => {
@@ -493,6 +493,46 @@ describe("BufferedAudioPlayer", () => {
     ).toBe(1);
     expect(lowPass).toBeUndefined();
     expect(context.createdSources[0]?.playbackRate.value).toBe(1);
+  });
+
+  it("re-renders eight-bit buffer and updates bitcrusher curve when intensity changes", async () => {
+    const context = new MockAudioContext();
+    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
+    const sourceBuffer = context.createBuffer(1, 24, 48_000) as AudioBuffer;
+    const samples = Array.from({ length: 24 }, (_, idx) => -1 + (idx / 23) * 2);
+    sourceBuffer.getChannelData(0).set(samples);
+    await player.loadBuffer(sourceBuffer);
+
+    player.setJukeboxAudioMode("eight_bit");
+    player.play();
+
+    const shaper = context.createdWaveShapers[0];
+    const buffer100 = player.getRenderedJukeboxAudioBuffer("eight_bit");
+    expect(shaper?.curve).not.toBeNull();
+    expect(new Set(Array.from(shaper.curve ?? [])).size).toBeLessThanOrEqual(256);
+
+    player.setJukeboxAudioModeIntensity(150);
+    const buffer150 = player.getRenderedJukeboxAudioBuffer("eight_bit");
+    expect(buffer150).not.toBe(buffer100);
+    expect(player.getBuffer()).toBe(buffer150);
+    // 48kHz / 4000Hz = 12-frame sample hold and 3-bit (8-level) curve.
+    expect(new Set(Array.from(shaper.curve ?? [])).size).toBeLessThanOrEqual(8);
+    expect(
+      new Set(Array.from(buffer150?.getChannelData(0).slice(0, 12) ?? [])).size,
+    ).toBe(1);
+
+    player.setJukeboxAudioModeIntensity(50);
+    const buffer50 = player.getRenderedJukeboxAudioBuffer("eight_bit");
+    expect(buffer50).not.toBe(buffer150);
+    expect(player.getBuffer()).toBe(buffer50);
+    // 48kHz / 16000Hz = 3-frame sample hold and 13-bit curve (>256 levels).
+    expect(new Set(Array.from(shaper.curve ?? [])).size).toBeGreaterThan(256);
+    expect(
+      new Set(Array.from(buffer50?.getChannelData(0).slice(0, 3) ?? [])).size,
+    ).toBe(1);
+    expect(buffer50?.getChannelData(0)[3]).not.toBe(
+      buffer50?.getChannelData(0)[0],
+    );
   });
 
   it("renders eight-bit buffers lazily and releases them after switching away", async () => {
@@ -638,22 +678,6 @@ describe("BufferedAudioPlayer", () => {
 
     masterGain?.connect.mockClear();
     player.setJukeboxAudioMode("cowbell");
-    expect(masterGain?.connect).toHaveBeenCalledWith(context.destination);
-    expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
-  });
-
-  it("keeps metronome mode at rate 1 and off the limiter", () => {
-    const context = new MockAudioContext();
-    const player = new BufferedAudioPlayer(context as unknown as AudioContext);
-
-    const limiter = context.createdCompressors[0];
-    const masterGain = context.createdGains[0];
-    player.setJukeboxAudioMode("vaporwave");
-    expect(masterGain?.connect).toHaveBeenCalledWith(limiter);
-
-    masterGain?.connect.mockClear();
-    player.setJukeboxAudioMode("metronome");
-    expect(player.getPlaybackRate()).toBe(1);
     expect(masterGain?.connect).toHaveBeenCalledWith(context.destination);
     expect(masterGain?.connect).not.toHaveBeenCalledWith(limiter);
   });

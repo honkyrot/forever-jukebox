@@ -202,4 +202,17 @@ describe("VizTop", () => {
       "independent",
     );
   });
+
+  it("exposes Song Sync mode in the mode selector and renders its loop toggle", async () => {
+    act(() => {
+      useAppStore.setState({ playMode: "songsync" });
+    });
+    render(<VizTop />);
+    const songsyncOption = Array.from(
+      document.querySelectorAll<HTMLOptionElement>("#play-mode-select option"),
+    ).find((opt) => opt.value === "songsync");
+    expect(songsyncOption).toBeDefined();
+    expect(document.getElementById("songsync-loop")).not.toBeNull();
+    expect(document.getElementById("multi-track-mix-toggle")).toBeNull();
+  });
 });

@@ -41,7 +41,7 @@ export function useVizPopovers({ playMode }: { playMode: PlayMode }) {
   }, [isVolumeOpen, isPanOpen]);
 
   React.useEffect(() => {
-    if (playMode !== "autocanonizer") {
+    if (playMode !== "autocanonizer" && playMode !== "songsync") {
       setIsPanOpen(false);
     }
   }, [playMode]);

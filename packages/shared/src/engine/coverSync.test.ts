@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { alignTrackPairDtw, extractTrackBeatFeatures } from "./coverSync";
+import {
+  alignTrackPairDtw,
+  alignTrackPairMultiSectionDtw,
+  extractTrackBeatFeatures,
+} from "./coverSync";
 import { buildJumpGraph } from "./graph";
 import { DEFAULT_JUKEBOX_CONFIG } from "./JukeboxEngine";
 import { mergeTrackAnalyses } from "./multiTrack";
@@ -306,5 +310,71 @@ describe("coverSync alignment and graph integration", () => {
         (edge) => edge.dest.trackIndex === 1 && edge.dest.localWhich === 0,
       ),
     ).toBe(true);
+  });
+
+  it("aligns shared repeated sections and leaves unique sections unmatched when track lengths differ", () => {
+    const introV1C1 = [...VERSE1, ...CHORUS]; // 16 beats
+    const uniqueV2 = [
+      CHORDS.Bb,
+      CHORDS.Eb,
+      CHORDS.Bb,
+      CHORDS.Eb,
+      CHORDS.Dm,
+      CHORDS.Am,
+      CHORDS.Bb,
+      CHORDS.Eb,
+      CHORDS.Dm,
+      CHORDS.Eb,
+      CHORDS.Bb,
+      CHORDS.Dm,
+    ]; // 12 distinct beats not present in short version
+    const outro = [CHORDS.Am, CHORDS.F, CHORDS.C, CHORDS.G, CHORDS.C, CHORDS.C]; // 6 beats
+    const fullSong = [...introV1C1, ...uniqueV2, ...CHORUS, ...outro]; // 42 beats
+    const shortCover = [...introV1C1, ...outro]; // 22 beats
+
+    const trackFull = makeChromaTrack({
+      title: "JP Full (4 min)",
+      progression: fullSong,
+    });
+    const trackShort = makeChromaTrack({
+      title: "EN Short (2 min)",
+      progression: shortCover,
+    });
+
+    const merged = mergeTrackAnalyses(
+      [{ analysis: trackFull }, { analysis: trackShort }],
+      { tempoSync: true },
+    );
+    const beatsFull = merged.beats.filter((b) => b.trackIndex === 0);
+    const beatsShort = merged.beats.filter((b) => b.trackIndex === 1);
+    const alignment = alignTrackPairMultiSectionDtw(
+      extractTrackBeatFeatures(beatsFull),
+      extractTrackBeatFeatures(beatsShort),
+    );
+
+    const matchedFullIndices = new Set(alignment.pairs.map((p) => p.indexA));
+    // Intro+V1+C1 (0..15) and Chorus 2 (28..35) should align to shortCover.
+    expect(matchedFullIndices.has(2)).toBe(true);
+    expect(matchedFullIndices.has(12)).toBe(true);
+    expect(matchedFullIndices.has(30)).toBe(true);
+    // Unique Verse 2 middle beats should remain unmatched.
+    const uniqueMatchedCount = uniqueV2.filter((_, idx) =>
+      matchedFullIndices.has(introV1C1.length + idx),
+    ).length;
+    expect(uniqueMatchedCount).toBeLessThan(uniqueV2.length / 2);
+
+    // Cross-track Cover Sync graph lets Chorus 1 of short cover connect to both choruses in full song.
+    buildJumpGraph(merged, {
+      ...DEFAULT_JUKEBOX_CONFIG,
+      crossTrackOnly: true,
+      coverSync: true,
+      crossTrackThreshold: 30,
+    });
+    const shortBeatStart = beatsFull.length;
+    const shortChorusBeat = merged.beats[shortBeatStart + VERSE1.length + 2];
+    const destLocalIndices = shortChorusBeat.neighbors.map(
+      (e) => e.dest.localWhich,
+    );
+    expect(destLocalIndices.length).toBeGreaterThanOrEqual(2);
   });
 });

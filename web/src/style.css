@@ -2773,6 +2773,7 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
 }
 
 .canonizer-layer,
+.songsync-layer,
 .wubmachine-layer {
   position: relative;
   flex: 1 1 auto;
@@ -2781,17 +2782,20 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
   display: none;
 }
 
-.canonizer-layer canvas {
+.canonizer-layer canvas,
+.songsync-layer canvas {
   position: absolute;
   inset: 0;
 }
 
 #jukebox-viz.is-canonizer .canonizer-layer,
+#jukebox-viz.is-songsync .songsync-layer,
 #jukebox-viz.is-wubmachine .wubmachine-layer {
   display: block;
 }
 
 #jukebox-viz.is-canonizer .viz-layer,
+#jukebox-viz.is-songsync .viz-layer,
 #jukebox-viz.is-wubmachine .viz-layer {
   display: none;
 }
@@ -2973,16 +2977,19 @@ body.theme-light .viz-bpm.is-bpm-changed {
 }
 
 #jukebox-viz.is-canonizer .viz-controls .viz-select-group,
+#jukebox-viz.is-songsync .viz-controls .viz-select-group,
 #jukebox-viz.is-wubmachine .viz-controls .viz-select-group {
   display: none;
 }
 
 #jukebox-viz:not(.is-canonizer) .canonizer-finish,
+#jukebox-viz:not(.is-songsync) .songsync-loop,
 #jukebox-viz:not(.is-wubmachine) .wubmachine-loop {
   display: none;
 }
 
 .canonizer-finish,
+.songsync-loop,
 .wubmachine-loop {
   display: inline-flex;
   flex-direction: row;
@@ -2991,6 +2998,19 @@ body.theme-light .viz-bpm.is-bpm-changed {
   padding-bottom: 0;
   color: var(--text);
   font-size: 12px;
+}
+
+.songsync-track-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.songsync-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .viz-select-group {

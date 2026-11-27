@@ -3,6 +3,7 @@ import { BufferedAudioPlayer } from "@forever-jukebox/shared/audio/BufferedAudio
 import { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
 import { MetronomeOverlayService } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import { AutocanonizerController } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import { SongSyncController } from "@forever-jukebox/shared/songsync/SongSyncController";
 import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
 import { applyThemeVariables, resolveStoredTheme } from "./theme";
@@ -132,6 +133,7 @@ export function initRuntime(): void {
     engine,
     player,
     autocanonizer: null,
+    songsync: null,
     wubmachine: null,
     jukebox: null,
     cowbellOverlay,
@@ -204,11 +206,16 @@ export function initRuntime(): void {
     }
     vizAttached = true;
     const autocanonizer = new AutocanonizerController(nodes.canonizerLayer);
+    const songsync = nodes.songSyncLayer
+      ? new SongSyncController(nodes.songSyncLayer)
+      : null;
     const jukebox = new JukeboxController(nodes.vizLayer);
     context.autocanonizer = autocanonizer;
+    context.songsync = songsync;
     context.wubmachine = new WubMachineController(nodes.wubMachineLayer);
     context.jukebox = jukebox;
     autocanonizer.setVolume(player.getVolume());
+    songsync?.setVolume(player.getVolume());
     context.wubmachine.setVolume(player.getVolume());
     const {
       autocanonizerMainPan,

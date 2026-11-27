@@ -17,13 +17,17 @@ import type { AppContext } from "./context";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import {
   applyExtrasChanges,
+  buildBpmBarTimeSignatureInputFromStore,
   cancelWubMachineRender,
   disableAutocanonizerMix,
   disableMultiTrackMix,
+  disableSongSyncMix,
+  loadSongSyncMix,
   maybePrepareWubMachine,
   openExtras,
   startAutocanonizerPlayback,
   startJukeboxFromBeat,
+  startSongSyncPlayback,
   startWubMachinePlayback,
   stopPlayback,
   syncDeletedEdgeState,
@@ -34,6 +38,7 @@ import {
   type ExtrasApplyResult,
   type ExtrasFormValues,
 } from "./playback";
+import { isBpmBarDownbeat } from "./bpmBarTimeSignature";
 import {
   pulseVizStats,
   resetLiveBpm,
@@ -276,7 +281,53 @@ export function initializePlayback(): void {
         autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
       });
       pulseVizStats(index, beat);
+      context.metronomeOverlay.handleBeatEnter(
+        index,
+        beat ?? undefined,
+        isBpmBarDownbeat(
+          buildBpmBarTimeSignatureInputFromStore(),
+          index,
+          beat ?? null,
+          null,
+        ),
+      );
       updateLiveBpmForBeat(beat, { beatIndex: index, playbackRate: 1 });
+    });
+
+    context.songsync?.setOnBeat((snapshot) => {
+      const idx = snapshot.masterBeatIndex;
+      useAppStore.setState({
+        beatsPlayedText: `${idx + 1}`,
+        lastBeatIndex: idx,
+        songSyncTrackSeconds: snapshot.trackSeconds,
+      });
+      pulseVizStats(idx, snapshot.masterBeat);
+      context.metronomeOverlay.handleBeatEnter(
+        idx,
+        snapshot.masterBeat ?? undefined,
+        isBpmBarDownbeat(
+          buildBpmBarTimeSignatureInputFromStore(),
+          idx,
+          snapshot.masterBeat ?? null,
+          null,
+        ),
+      );
+      updateLiveBpmForBeat(snapshot.masterBeat, {
+        beatIndex: idx,
+        playbackRate: 1,
+      });
+    });
+    context.songsync?.setOnEnded(() => {
+      if (!useAppStore.getState().isRunning) {
+        return;
+      }
+      stopPlayback(context);
+    });
+    context.songsync?.setOnSelect((masterBeatIndex) => {
+      if (useAppStore.getState().playMode !== "songsync") {
+        return;
+      }
+      startSongSyncPlayback(context, masterBeatIndex, { resetSession: false });
     });
     // A track that plays to its end hands over to the next playlist track.
     const handleLinearTrackEnded = () => {
@@ -369,6 +420,12 @@ export function initializePlayback(): void {
             context.metronomeOverlay.handleBeatEnter(
               engineState.currentBeatIndex,
               beat,
+              isBpmBarDownbeat(
+                buildBpmBarTimeSignatureInputFromStore(),
+                engineState.currentBeatIndex,
+                beat,
+                vizBeats,
+              ),
             );
           }
         }
@@ -802,7 +859,9 @@ export function setActiveVisualization(index: number): void {
 
   function getPlayModeFromUrl(): PlayMode {
     const mode = new URLSearchParams(window.location.search).get("mode");
-    return mode === "autocanonizer" || mode === "wubmachine" ? mode : "jukebox";
+    return mode === "autocanonizer" || mode === "songsync" || mode === "wubmachine"
+      ? mode
+      : "jukebox";
   }
 
 export function applyModeFromUrl(): void {
@@ -837,6 +896,8 @@ export function setPlayMode(mode: PlayMode): void {
       void disableAutocanonizerMix(context);
     } else if (prevMode === "jukebox" && useAppStore.getState().multiTrackEnabled) {
       void disableMultiTrackMix(context);
+    } else if (prevMode === "songsync" && useAppStore.getState().songSyncEnabled) {
+      void disableSongSyncMix(context);
     }
     if (mode !== "jukebox") {
       // The extras tab disappears outside jukebox mode, so force the stored
@@ -845,8 +906,18 @@ export function setPlayMode(mode: PlayMode): void {
       exitCustomAnchorEdit(context);
     }
     autocanonizer.setVisible(mode === "autocanonizer");
+    context.songsync?.setVisible(mode === "songsync");
     wubmachine.setVisible(mode === "wubmachine");
     jukebox.setVisible(mode === "jukebox");
+    if (mode === "songsync") {
+      const playlistCount = useAppStore.getState().playlist.tracks.length;
+      if (playlistCount >= 2) {
+        void loadSongSyncMix(context);
+      } else {
+        useAppStore.setState({ playlistAddSticky: true });
+        showToast(i18n.t("playback.songSyncNeedPlaylist"));
+      }
+    }
     syncPredictedJumps(context);
     maybePrepareWubMachine(context);
     syncExtrasPopup(useAppStore.getState().selectedEdge);

@@ -2,7 +2,14 @@ import type { AppState } from "./context";
 import type { FavoriteTrack } from "./favorites";
 import { trackEvent } from "./analytics";
 import { isLikelyJobId } from "./identity";
-import { loadTrackById, loadTrackByJobId, togglePlayback } from "./playback";
+import {
+  MAX_SONG_SYNC_TRACKS,
+  disableSongSyncMix,
+  loadSongSyncMix,
+  loadTrackById,
+  loadTrackByJobId,
+  togglePlayback,
+} from "./playback";
 import { setPlayMode } from "./playback-ui";
 import {
   activatePlaylistTrack,
@@ -18,7 +25,11 @@ import {
   savePlaylist,
   type PlaylistTrack,
 } from "./playlist";
-import { getAppContext, getPlaybackDeps } from "./runtime";
+import {
+  getAppContext,
+  getAttachedAppContext,
+  getPlaybackDeps,
+} from "./runtime";
 import { useAppStore } from "./store";
 import {
   savedTuningParamsEquivalent,
@@ -276,9 +287,35 @@ export async function loadPlaylistIndex(
     updatePlaylist({ ...playlist, currentIndex });
   }
 
+  function getSongSyncPlaylistSignature(playlist: AppState["playlist"]): string {
+    return playlist.tracks
+      .slice(0, MAX_SONG_SYNC_TRACKS)
+      .map(playlistTrackKey)
+      .join("|");
+  }
+
   function updatePlaylist(nextPlaylist: AppState["playlist"]) {
+    const prevPlaylist = useAppStore.getState().playlist;
+    const prevSig = getSongSyncPlaylistSignature(prevPlaylist);
+    const nextSig = getSongSyncPlaylistSignature(nextPlaylist);
     useAppStore.setState({ playlist: nextPlaylist });
     savePlaylist(nextPlaylist);
+
+    if (
+      !playlistLoadInFlight &&
+      useAppStore.getState().playMode === "songsync" &&
+      prevSig !== nextSig
+    ) {
+      const context = getAttachedAppContext();
+      if (!context) {
+        return;
+      }
+      if (nextPlaylist.tracks.length >= 2) {
+        void loadSongSyncMix(context);
+      } else if (useAppStore.getState().songSyncEnabled) {
+        void disableSongSyncMix(context);
+      }
+    }
   }
 
   function syncActivePlaylistTrackTuning(): AppState["playlist"] {

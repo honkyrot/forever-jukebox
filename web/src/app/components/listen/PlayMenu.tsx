@@ -363,8 +363,10 @@ export function PlayMenu() {
   const titleRef = useRef<HTMLDivElement | null>(null);
 
   const hidden = !(audioLoaded && analysisLoaded) || audioModePreparing || loadingShown;
-  // Tuning and track info describe the jukebox graph.
-  const hideJukeboxTools = playMode !== "jukebox";
+  // Tuning exposes mode-specific controls across Jukebox, Autocanonizer, and Song Sync;
+  // Track Info describes the Jukebox branch graph.
+  const hideTuning = playMode === "wubmachine";
+  const hideTrackInfo = playMode !== "jukebox";
   const adminMode = isAdminMode();
   const displayTitle =
     trackTitle || trackArtist
@@ -513,8 +515,8 @@ export function PlayMenu() {
           <button
             type="button"
             id="tuning"
-            className={hideJukeboxTools ? "tune-toggle is-hidden" : "tune-toggle"}
-            disabled={hideJukeboxTools}
+            className={hideTuning ? "tune-toggle is-hidden" : "tune-toggle"}
+            disabled={hideTuning}
             aria-label={t("playback.tune")}
             title={t("playback.tune")}
             onClick={() => openTuning(getAppContext())}
@@ -529,7 +531,7 @@ export function PlayMenu() {
           <button
             type="button"
             id="track-info"
-            className={hideJukeboxTools ? "info-toggle is-hidden" : "info-toggle"}
+            className={hideTrackInfo ? "info-toggle is-hidden" : "info-toggle"}
             aria-label={t("playback.info")}
             title={t("playback.info")}
             onClick={() => openInfo(getAppContext())}

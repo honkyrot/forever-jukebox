@@ -23,8 +23,10 @@ export function PlayMenu({
   onOpenExport: () => void;
 }) {
   const { t } = useTranslation();
-  // Tuning and track info describe the jukebox graph.
-  const hideJukeboxTools = playMode !== "jukebox";
+  // Tuning is available across Jukebox, Autocanonizer, and Song Sync; Track Info
+  // describes the single/merged Jukebox graph only.
+  const hideTrackInfo = playMode !== "jukebox";
+  const hideTuning = playMode === "wubmachine";
   return (
     <div className="menu-bar">
       <div className="menu-left">
@@ -36,10 +38,10 @@ export function PlayMenu({
       <div className="menu-right">
         <button
           id="tuning"
-          className={`tune-toggle ${hideJukeboxTools ? "is-hidden" : ""}`}
+          className={`tune-toggle ${hideTuning ? "is-hidden" : ""}`}
           type="button"
           onClick={onOpenTuning}
-          disabled={!hasAnalysis || hideJukeboxTools}
+          disabled={!hasAnalysis || hideTuning}
           title={t("listen.tune")}
           aria-label={t("listen.tune")}
         >
@@ -47,10 +49,10 @@ export function PlayMenu({
         </button>
         <button
           id="track-info"
-          className={`info-toggle ${hideJukeboxTools ? "is-hidden" : ""}`}
+          className={`info-toggle ${hideTrackInfo ? "is-hidden" : ""}`}
           type="button"
           onClick={onOpenInfo}
-          disabled={!hasAnalysis || hideJukeboxTools}
+          disabled={!hasAnalysis || hideTrackInfo}
           title={t("listen.info")}
           aria-label={t("listen.info")}
         >
@@ -61,7 +63,7 @@ export function PlayMenu({
           className="copy-toggle"
           type="button"
           onClick={onOpenExport}
-          disabled={!hasAnalysis || isExporting}
+          disabled={!hasAnalysis || isExporting || playMode === "songsync"}
           title={t("listen.exportAudio")}
           aria-label={t("listen.exportAudio")}
         >

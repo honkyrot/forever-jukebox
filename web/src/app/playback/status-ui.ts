@@ -237,6 +237,7 @@ export function setMasterVolume(context: AppContext, volumePct: number) {
   const volume = Math.pow(linear, 1.5);
   context.player.setVolume(volume);
   context.autocanonizer?.setVolume(volume);
+  context.songsync?.setVolume(volume);
   context.wubmachine?.setVolume(volume);
   context.cowbellOverlay.setVolume(volume);
   context.metronomeOverlay.setVolume(volume);

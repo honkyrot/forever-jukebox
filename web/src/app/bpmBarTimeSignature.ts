@@ -9,11 +9,10 @@ import {
   type QuantumBase,
   type TimeSignatureBranchMode,
 } from "@forever-jukebox/shared";
-import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import {
   DEFAULT_METRONOME_BEAT_OFFSET,
   MAX_REASONABLE_BAR_BEATS,
-  clampMetronomeBeatOffset,
+  isMetronomeDownbeat,
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 
 const BPM_BAR_MODE_STORAGE_KEY = "fj-bpm-bar-ts-mode";
@@ -21,6 +20,7 @@ const BPM_BAR_NUM_STORAGE_KEY = "fj-bpm-bar-ts-num";
 const BPM_BAR_DEN_STORAGE_KEY = "fj-bpm-bar-ts-den";
 const BPM_BAR_OFFSET_STORAGE_KEY = "fj-bpm-bar-ts-offset";
 const BPM_BAR_STYLE_STORAGE_KEY = "fj-bpm-bar-style";
+const SIMILARITY_RESTRICT_STORAGE_KEY = "fj-ts-similarity-restrict";
 
 export type BpmBarTimeSignatureMode = "auto" | "off" | "custom";
 export type BpmBarStyle = "pulse" | "smooth" | "smooth-pulse";
@@ -33,6 +33,12 @@ export const MIN_BPM_BAR_SMOOTH_DURATION_MS = 50;
 export const MAX_BPM_BAR_SMOOTH_DURATION_MS = 8000;
 export const MAX_BPM_BAR_SEGMENTS = 16;
 export const MAX_STORED_BPM_BAR_OFFSETS = 500;
+export const MAX_STORED_SIMILARITY_RESTRICT_TRACKS = 500;
+
+export interface StoredTimeSignatureSimilarityRestrict {
+  numerator: number;
+  denominator: number;
+}
 
 export type BpmBarPulseBeat = Pick<
   QuantumBase,
@@ -62,15 +68,18 @@ export interface BpmBarTimeSignatureInput {
   timeSignatureSimilarityRestrictEnabled: boolean;
   timeSignatureSimilarityNumerator: number;
   timeSignatureSimilarityDenominator: number;
-  jukeboxAudioMode: JukeboxAudioMode;
-  metronomeBeatsPerBar: number | null;
-  metronomeBeatOffset: number;
+  metronomeEnabled: boolean;
   metronomeDetectedBeatsPerBar: number;
 }
 
 export interface BpmBarSegmentState {
   segmentCount: number | null;
   activeSegmentIndex: number | null;
+}
+
+export interface EffectiveMetronomeConfig {
+  beatsPerBarOverride: number | null;
+  beatOffset: number;
 }
 
 /**
@@ -304,6 +313,123 @@ export function storeBpmBarBeatOffsetForTrack(
 }
 
 /**
+ * Parses the per-song similarity-restriction map from localStorage, ignoring
+ * malformed JSON or invalid entries.
+ */
+export function readStoredTimeSignatureSimilarityRestrictMap(): Record<
+  string,
+  StoredTimeSignatureSimilarityRestrict
+> {
+  if (typeof localStorage === "undefined") {
+    return {};
+  }
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(SIMILARITY_RESTRICT_STORAGE_KEY);
+  } catch {
+    return {};
+  }
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const result: Record<string, StoredTimeSignatureSimilarityRestrict> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const trimmedKey = key.trim();
+      if (
+        !trimmedKey ||
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value)
+      ) {
+        continue;
+      }
+      const entry = value as Record<string, unknown>;
+      if (
+        typeof entry.numerator !== "number" ||
+        !Number.isFinite(entry.numerator) ||
+        typeof entry.denominator !== "number" ||
+        !Number.isFinite(entry.denominator)
+      ) {
+        continue;
+      }
+      result[trimmedKey] = {
+        numerator: clampTimeSignatureNumerator(entry.numerator),
+        denominator: clampTimeSignatureDenominator(entry.denominator),
+      };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolves the persisted similarity-restriction time signature for a specific
+ * track ID, returning null when disabled or unset.
+ */
+export function resolveStoredTimeSignatureSimilarityRestrictForTrack(
+  trackId?: string | null,
+): StoredTimeSignatureSimilarityRestrict | null {
+  const id = typeof trackId === "string" ? trackId.trim() : "";
+  if (!id) {
+    return null;
+  }
+  const map = readStoredTimeSignatureSimilarityRestrictMap();
+  return map[id] ?? null;
+}
+
+/**
+ * Persists or clears the per-song similarity-restriction setting under
+ * `fj-ts-similarity-restrict` (evicting oldest entries past
+ * `MAX_STORED_SIMILARITY_RESTRICT_TRACKS`).
+ */
+export function storeTimeSignatureSimilarityRestrictForTrack(
+  trackId: string | null | undefined,
+  setting: StoredTimeSignatureSimilarityRestrict | null,
+): void {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  const id = typeof trackId === "string" ? trackId.trim() : "";
+  if (!id) {
+    return;
+  }
+  const map = readStoredTimeSignatureSimilarityRestrictMap();
+  // Delete before re-inserting so updated tracks move to the tail for LRU eviction.
+  delete map[id];
+  if (setting !== null) {
+    map[id] = {
+      numerator: clampTimeSignatureNumerator(setting.numerator),
+      denominator: clampTimeSignatureDenominator(setting.denominator),
+    };
+  }
+  const keys = Object.keys(map);
+  if (keys.length > MAX_STORED_SIMILARITY_RESTRICT_TRACKS) {
+    for (
+      let i = 0;
+      i < keys.length - MAX_STORED_SIMILARITY_RESTRICT_TRACKS;
+      i += 1
+    ) {
+      delete map[keys[i]];
+    }
+  }
+  try {
+    if (Object.keys(map).length === 0) {
+      localStorage.removeItem(SIMILARITY_RESTRICT_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(SIMILARITY_RESTRICT_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage quota or privacy-mode errors.
+  }
+}
+
+/**
  * Resolves the active time signature when auto mode tracks similarity
  * restriction or multi-track time-signature branching.
  */
@@ -348,6 +474,122 @@ function resolveAutoTimeSignature(input: BpmBarTimeSignatureInput): {
 }
 
 /**
+ * Resolves the beat offset for the given beat's track in BPM-bar-driven modes
+ * ("custom" or "auto" metronome), using `bpmBarBeatOffset` for track 0 and
+ * `timeSignatureTrackOffsets` for secondary tracks.
+ */
+function resolveBpmBarBeatTrackOffset(
+  input: BpmBarTimeSignatureInput,
+  beat: BpmBarPulseBeat | null,
+): number {
+  if (beat?.trackIndex !== undefined && beat.trackIndex > 0) {
+    return clampTimeSignatureTrackOffset(
+      input.timeSignatureTrackOffsets[beat.trackIndex] ?? 0,
+    );
+  }
+  return clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+}
+
+/**
+ * Resolves the beat offset for an active branching/restriction time signature,
+ * falling back to the track-0 BPM bar offset when per-track offsets are unset.
+ */
+function resolveBeatTrackOffset(
+  input: BpmBarTimeSignatureInput,
+  beat: BpmBarPulseBeat | null,
+): number {
+  if (beat?.trackIndex !== undefined && beat.trackIndex > 0) {
+    return clampTimeSignatureTrackOffset(
+      input.timeSignatureTrackOffsets[beat.trackIndex] ?? 0,
+    );
+  }
+  return clampTimeSignatureTrackOffset(
+    input.timeSignatureTrackOffsets.length > 0
+      ? (input.timeSignatureTrackOffsets[0] ?? input.bpmBarBeatOffset)
+      : input.bpmBarBeatOffset,
+  );
+}
+
+/**
+ * Resolves the 0-based beat index within an active signature cycle, handling
+ * multi-track Cover Sync alignment when enabled.
+ */
+function resolveActiveSignatureBeatPosition(
+  input: BpmBarTimeSignatureInput,
+  beatIndex: number,
+  localIndex: number,
+  beat: BpmBarPulseBeat | null,
+  activeSig: { numerator: number; denominator: number },
+  vizBeats?: readonly QuantumBase[] | null,
+): number {
+  if (
+    input.multiTrackEnabled &&
+    input.coverSyncEnabled &&
+    beat?.trackIndex !== undefined &&
+    beat.trackIndex > 0 &&
+    vizBeats &&
+    vizBeats.length > 0
+  ) {
+    const trackOffsets =
+      input.timeSignatureTrackOffsets.length > 0
+        ? input.timeSignatureTrackOffsets
+        : [input.bpmBarBeatOffset];
+    return resolveTimeSignatureBeatPosition(
+      vizBeats,
+      {
+        which: beat.which ?? beatIndex,
+        localWhich: beat.localWhich,
+        trackIndex: beat.trackIndex,
+      },
+      {
+        numerator: activeSig.numerator,
+        denominator: activeSig.denominator,
+        trackOffsets,
+        useCoverSync: true,
+      },
+    );
+  }
+  const step = resolveTimeSignatureBranchStepBeats(
+    activeSig.numerator,
+    activeSig.denominator,
+  );
+  return positiveMod(localIndex - resolveBeatTrackOffset(input, beat), step);
+}
+
+/**
+ * Resolves the effective metronome time-signature override and beat offset
+ * driven by the BPM bar configuration.
+ */
+export function resolveEffectiveMetronomeConfig(
+  input: BpmBarTimeSignatureInput,
+): EffectiveMetronomeConfig {
+  const beatOffset = clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+  if (input.bpmBarTimeSignatureMode === "custom") {
+    return {
+      beatsPerBarOverride: resolveTimeSignatureBranchStepBeats(
+        input.bpmBarNumerator,
+        input.bpmBarDenominator,
+      ),
+      beatOffset,
+    };
+  }
+  const activeSig = resolveAutoTimeSignature(input);
+  if (activeSig) {
+    return {
+      beatsPerBarOverride: resolveTimeSignatureBranchStepBeats(
+        activeSig.numerator,
+        activeSig.denominator,
+      ),
+      beatOffset,
+    };
+  }
+  return {
+    beatsPerBarOverride: null,
+    beatOffset,
+  };
+}
+
+/**
  * Resolves how many horizontal bar segments the BPM bar should split into,
  * or null when the BPM bar should flash as a single solid bar.
  */
@@ -372,9 +614,8 @@ export function resolveBpmBarSegmentCount(
     );
     return step >= 2 ? Math.min(MAX_BPM_BAR_SEGMENTS, step) : null;
   }
-  if (input.jukeboxAudioMode === "metronome") {
-    const beatsPerBar =
-      input.metronomeBeatsPerBar ?? input.metronomeDetectedBeatsPerBar;
+  if (input.metronomeEnabled) {
+    const beatsPerBar = input.metronomeDetectedBeatsPerBar;
     if (typeof beatsPerBar === "number" && Number.isFinite(beatsPerBar)) {
       const rounded = Math.round(beatsPerBar);
       return rounded >= 2 ? Math.min(MAX_BPM_BAR_SEGMENTS, rounded) : null;
@@ -407,7 +648,7 @@ export function resolveBpmBarActiveSegment(
       : beatIndex;
 
   if (input.bpmBarTimeSignatureMode === "custom") {
-    const offset = clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
     return {
       segmentCount,
       activeSegmentIndex: positiveMod(localIndex - offset, segmentCount),
@@ -416,51 +657,22 @@ export function resolveBpmBarActiveSegment(
 
   const activeSig = resolveAutoTimeSignature(input);
   if (activeSig) {
-    const beatPosition =
-      input.multiTrackEnabled &&
-      input.coverSyncEnabled &&
-      beat?.trackIndex !== undefined &&
-      beat.trackIndex > 0 &&
-      vizBeats &&
-      vizBeats.length > 0
-        ? resolveTimeSignatureBeatPosition(
-            vizBeats,
-            {
-              which: beat.which ?? beatIndex,
-              localWhich: beat.localWhich,
-              trackIndex: beat.trackIndex,
-            },
-            {
-              numerator: activeSig.numerator,
-              denominator: activeSig.denominator,
-              trackOffsets: input.timeSignatureTrackOffsets,
-              useCoverSync: true,
-            },
-          )
-        : positiveMod(
-            localIndex -
-              clampTimeSignatureTrackOffset(
-                input.timeSignatureTrackOffsets[beat?.trackIndex ?? 0] ?? 0,
-              ),
-            resolveTimeSignatureBranchStepBeats(
-              activeSig.numerator,
-              activeSig.denominator,
-            ),
-          );
+    const beatPosition = resolveActiveSignatureBeatPosition(
+      input,
+      beatIndex,
+      localIndex,
+      beat,
+      activeSig,
+      vizBeats,
+    );
     return {
       segmentCount,
       activeSegmentIndex: beatPosition % segmentCount,
     };
   }
 
-  if (input.jukeboxAudioMode === "metronome") {
-    const offset = clampMetronomeBeatOffset(input.metronomeBeatOffset);
-    if (input.metronomeBeatsPerBar !== null) {
-      return {
-        segmentCount,
-        activeSegmentIndex: positiveMod(localIndex - offset, segmentCount),
-      };
-    }
+  if (input.metronomeEnabled) {
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
     const barBeatCount = beat?.parent?.children?.length;
     const hasValidBarIndex =
       typeof beat?.indexInParent === "number" &&
@@ -483,6 +695,54 @@ export function resolveBpmBarActiveSegment(
   }
 
   return { segmentCount, activeSegmentIndex: null };
+}
+
+/**
+ * Determines whether the given beat is a bar downbeat (accented high tick)
+ * under the active BPM bar time signature, per-track offset, or analyzed bars.
+ */
+export function isBpmBarDownbeat(
+  input: BpmBarTimeSignatureInput,
+  beatIndex: number | null,
+  beat: BpmBarPulseBeat | null,
+  vizBeats?: readonly QuantumBase[] | null,
+): boolean {
+  if (beatIndex === null || !Number.isInteger(beatIndex) || beatIndex < 0) {
+    return false;
+  }
+  const localIndex =
+    typeof beat?.localWhich === "number" && Number.isInteger(beat.localWhich)
+      ? beat.localWhich
+      : beatIndex;
+
+  if (input.bpmBarTimeSignatureMode === "custom") {
+    const step = resolveTimeSignatureBranchStepBeats(
+      input.bpmBarNumerator,
+      input.bpmBarDenominator,
+    );
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
+    return positiveMod(localIndex - offset, step) === 0;
+  }
+
+  const activeSig = resolveAutoTimeSignature(input);
+  if (activeSig) {
+    return (
+      resolveActiveSignatureBeatPosition(
+        input,
+        beatIndex,
+        localIndex,
+        beat,
+        activeSig,
+        vizBeats,
+      ) === 0
+    );
+  }
+
+  return isMetronomeDownbeat(beatIndex, beat ?? undefined, {
+    beatsPerBar: input.metronomeDetectedBeatsPerBar,
+    beatsPerBarOverride: null,
+    beatOffset: resolveBpmBarBeatTrackOffset(input, beat),
+  });
 }
 
 /**

@@ -215,4 +215,38 @@ describe("planMetronomeExportEvents", () => {
       hiGain,
     ]);
   });
+
+  it("supports negative beat offsets in metronome export", () => {
+    vi.stubGlobal("OfflineAudioContext", MockOfflineAudioContext);
+    const analysis = makeAnalysis(6, 4, 4);
+    const segments = [0, 1, 2, 3, 4].map((beatIndex, idx) => ({
+      outputStart: idx * 0.5,
+      sourceStart: beatIndex * 0.5,
+      duration: 0.5,
+      beatIndex,
+      jumped: false,
+      jumpFromIndex: null,
+    }));
+
+    const events = planMetronomeExportEvents({
+      analysis,
+      segments,
+      sampleRate: 48_000,
+      volume: 1,
+      metronomeVolumePct: 100,
+      metronomeBeatsPerBar: 4,
+      metronomeBeatOffset: -1,
+    });
+
+    const hiGain = HI_TICK_GAIN * BASE_METRONOME_GAIN;
+    const loGain = LO_TICK_GAIN * BASE_METRONOME_GAIN;
+    // 4/4 with offset -1 -> beat index 3 is accented.
+    expect(events.map((e) => e.gain)).toEqual([
+      loGain,
+      loGain,
+      loGain,
+      hiGain,
+      loGain,
+    ]);
+  });
 });

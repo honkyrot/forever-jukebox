@@ -12,6 +12,7 @@ import type {
   AutocanonizerMixAlignmentMode,
   AutocanonizerQuadBranchMode,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
+import type { SongSyncController } from "@forever-jukebox/shared/songsync/SongSyncController";
 import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
 import type { JukeboxController } from "@forever-jukebox/shared/viz/JukeboxController";
 import type { CowbellOverlayService } from "@forever-jukebox/shared/audio/CowbellOverlayService";
@@ -19,6 +20,18 @@ import type { MetronomeOverlayService } from "@forever-jukebox/shared/audio/Metr
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 
 export type TabId = "top" | "search" | "play" | "faq";
+
+export type SongSyncTrackUiState = {
+  title: string;
+  duration: number;
+  tempo?: number;
+  gainPct: number;
+  pan: number;
+  muted: boolean;
+  solo: boolean;
+  beatOffset: number;
+  color: string;
+};
 
 export type AppState = {
   activeTabId: TabId;
@@ -78,9 +91,8 @@ export type AppState = {
   branchStatsEnabled: boolean;
   jukeboxAudioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeEnabled: boolean;
   metronomeVolumePct: number;
-  metronomeBeatsPerBar: number | null;
-  metronomeBeatOffset: number;
   metronomeDetectedBeatsPerBar: number;
   audioModePreparing: boolean;
   audioModeRenderToken: number;
@@ -111,6 +123,13 @@ export type AppState = {
   normalizeVolumeEnabled: boolean;
   postMixNormalizeVolumeEnabled: boolean;
   mixTrackGainsPct: number[];
+  songSyncEnabled: boolean;
+  songSyncLoop: boolean;
+  songSyncTempoSyncEnabled: boolean;
+  songSyncNormalizeVolumeEnabled: boolean;
+  songSyncMasterTrackIndex: number;
+  songSyncTracks: SongSyncTrackUiState[];
+  songSyncTrackSeconds: Array<number | null>;
   playlistAddSticky: boolean;
 };
 
@@ -124,6 +143,7 @@ export type AppContext = {
   engine: JukeboxEngine;
   player: BufferedAudioPlayer;
   autocanonizer: AutocanonizerController | null;
+  songsync?: SongSyncController | null;
   wubmachine: WubMachineController | null;
   jukebox: JukeboxController | null;
   cowbellOverlay: CowbellOverlayService;
@@ -133,6 +153,7 @@ export type AppContext = {
 
 export type AttachedAppContext = AppContext & {
   autocanonizer: AutocanonizerController;
+  songsync?: SongSyncController | null;
   wubmachine: WubMachineController;
   jukebox: JukeboxController;
 };

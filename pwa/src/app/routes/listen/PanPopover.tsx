@@ -13,7 +13,7 @@ import {
   MIN_MIX_TRACK_GAIN_PCT,
 } from "./localMix";
 
-function VoiceBalanceControls({
+export function VoiceBalanceControls({
   panId,
   gainId,
   panLabel,

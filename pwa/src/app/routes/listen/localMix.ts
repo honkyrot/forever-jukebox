@@ -7,8 +7,10 @@ import {
 import {
   combineAudioBuffers,
   prepareDualAudioBuffers,
+  prepareMultiAudioBuffers,
   type CombinedAudioResult,
   type DualAudioBufferResult,
+  type MultiAudioBufferResult,
 } from "@forever-jukebox/shared/audio/multiTrackBuffer";
 import {
   AnalyzeAudioUseCase,
@@ -241,5 +243,53 @@ export function buildAutocanonizerMix(
   return {
     prepared,
     otherTempoRatio,
+  };
+}
+
+export type BuiltSongSyncMix = {
+  prepared: MultiAudioBufferResult;
+  tempoRatios: number[];
+  masterTempo?: number;
+};
+
+/**
+ * Resamples and normalizes local audio sources for simultaneous Song Sync playback
+ * aligned to the chosen master track tempo.
+ */
+export function buildSongSyncMix(
+  audioContext: BaseAudioContext,
+  sources: readonly LoadedLocalMixSource[],
+  options: {
+    tempoSyncEnabled: boolean;
+    normalizeVolumeEnabled: boolean;
+    masterTrackIndex?: number;
+  },
+): BuiltSongSyncMix {
+  const safeMasterIdx = Math.max(
+    0,
+    Math.min(sources.length - 1, options.masterTrackIndex ?? 0),
+  );
+  const masterTempo = sources[safeMasterIdx]?.tempo;
+  const tempoRatios = sources.map((source, index) =>
+    index === safeMasterIdx
+      ? 1
+      : computeTempoSyncRatio(
+          masterTempo,
+          source.tempo,
+          options.tempoSyncEnabled,
+        ),
+  );
+  const prepared = prepareMultiAudioBuffers(
+    audioContext,
+    sources.map((source, index) => ({
+      buffer: source.audioBuffer,
+      tempoRatio: tempoRatios[index],
+    })),
+    { normalizeVolume: options.normalizeVolumeEnabled },
+  );
+  return {
+    prepared,
+    tempoRatios,
+    masterTempo,
   };
 }

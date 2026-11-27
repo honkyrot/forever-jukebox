@@ -11,6 +11,7 @@ export type PlaybackCounterValues = {
   autocanonizerOtherSeconds: number;
   autocanonizerPinkSeconds: number;
   autocanonizerGoldSeconds: number;
+  songSyncTrackSeconds: number[];
   wubMachineSeconds: number;
 };
 
@@ -33,6 +34,7 @@ export function createPlaybackCounters(): PlaybackCounters {
     autocanonizerOtherSeconds: 0,
     autocanonizerPinkSeconds: 0,
     autocanonizerGoldSeconds: 0,
+    songSyncTrackSeconds: [],
     wubMachineSeconds: 0,
   };
   const listeners = new Set<(values: PlaybackCounterValues) => void>();

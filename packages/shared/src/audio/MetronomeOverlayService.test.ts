@@ -313,6 +313,20 @@ describe("MetronomeOverlayService", () => {
     service.handleBeatEnter(4, makeBarBeat(0, 4));
     expect(context.createdGains[3]?.gain.value).toBe(LO_TICK_GAIN);
     expect(context.createdGains[4]?.gain.value).toBe(HI_TICK_GAIN);
+
+    // Negative beat offsets shift the accent backward across the cycle.
+    service.setBeatOffset(-1);
+    expect(service.getBeatOffset()).toBe(-1);
+    service.handleBeatEnter(2);
+    service.handleBeatEnter(3);
+    expect(context.createdGains[5]?.gain.value).toBe(HI_TICK_GAIN);
+    expect(context.createdGains[6]?.gain.value).toBe(LO_TICK_GAIN);
+
+    // Explicit downbeatOverride takes precedence over internal downbeat calculation.
+    service.handleBeatEnter(0, undefined, false);
+    service.handleBeatEnter(1, undefined, true);
+    expect(context.createdGains[7]?.gain.value).toBe(LO_TICK_GAIN);
+    expect(context.createdGains[8]?.gain.value).toBe(HI_TICK_GAIN);
   });
 });
 
@@ -329,8 +343,9 @@ describe("metronome control helpers", () => {
     expect(resolveMetronomeTimeSignatureOverride(undefined)).toBeNull();
     expect(resolveMetronomeTimeSignatureOverride(Number.NaN)).toBeNull();
     expect(resolveMetronomeTimeSignatureOverride(0)).toBeNull();
-    expect(resolveMetronomeTimeSignatureOverride(15)).toBeNull();
+    expect(resolveMetronomeTimeSignatureOverride(100)).toBeNull();
     expect(resolveMetronomeTimeSignatureOverride(3)).toBe(3);
+    expect(resolveMetronomeTimeSignatureOverride(16)).toBe(16);
     expect(resolveMetronomeTimeSignatureOverride(6.2)).toBe(6);
   });
 

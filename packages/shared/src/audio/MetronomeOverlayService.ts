@@ -12,6 +12,7 @@ export const LO_TICK_END_HZ = 1000;
 export const LO_TICK_DURATION_SECONDS = 0.03;
 export const DEFAULT_BEATS_PER_BAR = 4;
 export const MAX_REASONABLE_BAR_BEATS = 12;
+export const MAX_METRONOME_OVERRIDE_BEATS = 64;
 export const MIN_METRONOME_VOLUME_PCT = 0;
 export const MAX_METRONOME_VOLUME_PCT = 200;
 export const DEFAULT_METRONOME_VOLUME_PCT = 100;
@@ -82,7 +83,7 @@ export function resolveMetronomeTimeSignatureOverride(
     return null;
   }
   const rounded = Math.round(value);
-  if (rounded < 1 || rounded > MAX_REASONABLE_BAR_BEATS) {
+  if (rounded < 1 || rounded > MAX_METRONOME_OVERRIDE_BEATS) {
     return null;
   }
   return rounded;
@@ -390,12 +391,15 @@ export class MetronomeOverlayService {
   }
 
   /**
-   * Sets the zero-based beat offset that shifts which beat receives the Hi tick.
+   * Sets the signed beat offset that shifts which beat receives the Hi tick.
    */
   setBeatOffset(offset: number): void {
-    this.beatOffset = Number.isFinite(offset)
-      ? Math.max(0, Math.trunc(offset))
-      : DEFAULT_METRONOME_BEAT_OFFSET;
+    if (!Number.isFinite(offset)) {
+      this.beatOffset = DEFAULT_METRONOME_BEAT_OFFSET;
+      return;
+    }
+    const truncated = Math.trunc(offset);
+    this.beatOffset = truncated === 0 ? 0 : truncated;
   }
 
   /**
@@ -407,10 +411,12 @@ export class MetronomeOverlayService {
 
   /**
    * Triggers a high tick on bar downbeats and a lower tick on other beats.
+   * When `downbeatOverride` is provided, it overrides the internal downbeat check.
    */
   handleBeatEnter(
     beatIndex: number,
     beat?: Pick<QuantumBase, "indexInParent" | "parent" | "localWhich">,
+    downbeatOverride?: boolean,
   ): void {
     if (!this.enabled || this.disposed) {
       return;
@@ -420,11 +426,14 @@ export class MetronomeOverlayService {
       return;
     }
 
-    const downbeat = isMetronomeDownbeat(beatIndex, beat, {
-      beatsPerBar: this.beatsPerBar,
-      beatsPerBarOverride: this.beatsPerBarOverride,
-      beatOffset: this.beatOffset,
-    });
+    const downbeat =
+      typeof downbeatOverride === "boolean"
+        ? downbeatOverride
+        : isMetronomeDownbeat(beatIndex, beat, {
+            beatsPerBar: this.beatsPerBar,
+            beatsPerBarOverride: this.beatsPerBarOverride,
+            beatOffset: this.beatOffset,
+          });
     const buffer = downbeat ? buffers.hi : buffers.lo;
     const gainValue = downbeat ? HI_TICK_GAIN : LO_TICK_GAIN;
     this.triggerTick(buffer, gainValue);

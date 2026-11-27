@@ -28,6 +28,7 @@ export {
 export {
   isPlaybackBlockedForAudioMode,
   startAutocanonizerPlayback,
+  startSongSyncPlayback,
   startWubMachinePlayback,
   startJukeboxFromBeat,
   startListenTimer,
@@ -74,10 +75,27 @@ export {
 export { releaseWakeLock, requestWakeLock } from "./wake-lock";
 export { syncPredictedJumps } from "./branch-lookahead";
 export {
+  MAX_SONG_SYNC_TRACKS,
+  clearCachedSongSyncSources,
+  disableSongSyncMix,
+  getCachedSongSyncSources,
+  loadSongSyncMix,
+  setSongSyncLoop,
+  setSongSyncMasterTrack,
+  setSongSyncNormalizeVolume,
+  setSongSyncTempoSync,
+  setSongSyncTrackBeatOffset,
+  setSongSyncTrackGainPct,
+  setSongSyncTrackMuted,
+  setSongSyncTrackPan,
+  setSongSyncTrackSolo,
+} from "./song-sync";
+export {
   DEFAULT_MIX_TRACK_GAIN_PCT,
   MAX_AUTOCANONIZER_MIX_TRACKS,
   MAX_MIX_TRACK_GAIN_PCT,
   MIN_MIX_TRACK_GAIN_PCT,
+  buildBpmBarTimeSignatureInputFromStore,
   clearCachedMultiTrackSources,
   disableAutocanonizerMix,
   disableMultiTrackMix,
@@ -89,6 +107,13 @@ export {
   setAutocanonizerQuadSongGainPct,
   setAutocanonizerQuadStreamPans,
   setAutocanonizerSongGainPct,
+  setBpmBarBeatOffset,
+  setBpmBarDenominator,
+  setBpmBarEnabled,
+  setBpmBarMetronomeEnabled,
+  setBpmBarMetronomeVolumePct,
+  setBpmBarNumerator,
+  setBpmBarTimeSignatureMode,
   swapAutocanonizerMixSongs,
   setCoverSyncEnabled,
   setCrossTrackOnly,
@@ -104,4 +129,5 @@ export {
   setTimeSignatureSimilarityNumerator,
   setTimeSignatureSimilarityRestrictEnabled,
   setTimeSignatureTrackOffset,
+  syncMetronomeOverlayFromStore,
 } from "./multi-track-mix";

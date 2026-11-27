@@ -37,7 +37,6 @@ describe("audio mode URL helpers", () => {
       "lofi",
       "underwater",
       "cathedral",
-      "metronome",
       "cowbell",
       "swing",
     ];

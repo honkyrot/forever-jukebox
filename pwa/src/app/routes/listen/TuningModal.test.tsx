@@ -33,9 +33,6 @@ const baseExtrasForm = {
   customAnchorEnabled: false,
   audioMode: "off" as const,
   audioIntensity: 100,
-  metronomeVolumePct: 100,
-  metronomeBeatsPerBar: null,
-  metronomeBeatOffset: 0,
 };
 
 function createMulti(overrides: Partial<MultiTuningProps> = {}): MultiTuningProps {
@@ -82,6 +79,10 @@ function createVisuals(
     onVisualPreferencesChange: vi.fn(),
     bpmBarEnabled: true,
     onBpmBarEnabledChange: vi.fn(),
+    metronomeEnabled: false,
+    onMetronomeEnabledChange: vi.fn(),
+    metronomeVolumePct: 100,
+    onMetronomeVolumeChange: vi.fn(),
     bpmBarStyle: "pulse",
     onBpmBarStyleChange: vi.fn(),
     bpmBarTimeSignatureMode: "auto",
@@ -207,5 +208,135 @@ describe("TuningModal", () => {
     expect(visuals.onVisualPreferencesChange).toHaveBeenCalledWith({
       visualEffectMode: "4",
     });
+  });
+
+  it("renders Metronome in BPM bar panel and keeps time signature controls visible when BPM bar is off", () => {
+    const visuals = createVisuals({
+      bpmBarEnabled: false,
+      metronomeEnabled: false,
+    });
+    const { container } = render(
+      <TuningModal
+        open={true}
+        playMode="jukebox"
+        tuneForm={baseTuneForm}
+        onTuneFormChange={() => {}}
+        extrasForm={baseExtrasForm}
+        onExtrasFormChange={() => {}}
+        multi={createMulti({ timeSignatureSimilarityRestrictEnabled: true })}
+        visuals={visuals}
+        detectedBeatsPerBar={4}
+        onClose={() => {}}
+        showReset={false}
+        onReset={() => {}}
+      />,
+    );
+
+    expect(container.querySelector("#audio-mode-metronome")).toBeNull();
+    expect(container.querySelector("#bpm-bar-time-sig-controls")).not.toBeNull();
+    expect(container.querySelector("#bpm-bar-style")).toBeNull();
+    expect(container.querySelector("#bpm-bar-metronome-toggle")).toBeNull();
+    expect(container.querySelector("#bpm-bar-numerator")).not.toBeNull();
+    expect(container.querySelector("#bpm-bar-beat-offset")).not.toBeNull();
+  });
+
+  it("shows BPM bar and Metronome controls in autocanonizer mode", () => {
+    const visuals = createVisuals({
+      bpmBarEnabled: true,
+      metronomeEnabled: true,
+    });
+    const { container } = render(
+      <TuningModal
+        open={true}
+        playMode="autocanonizer"
+        tuneForm={baseTuneForm}
+        onTuneFormChange={() => {}}
+        extrasForm={baseExtrasForm}
+        onExtrasFormChange={() => {}}
+        multi={createMulti()}
+        visuals={visuals}
+        detectedBeatsPerBar={4}
+        onClose={() => {}}
+        showReset={false}
+        onReset={() => {}}
+      />,
+    );
+
+    expect(container.querySelector("#tuning-panel-visuals")).not.toBeNull();
+    expect(container.querySelector("#tuning-panel-tuning")).toBeNull();
+    expect(container.querySelector("#bpm-bar-toggle")).not.toBeNull();
+    expect(container.querySelector("#bpm-bar-metronome-toggle")).not.toBeNull();
+    expect(container.querySelector("#instrumental-branching-enabled")).toBeNull();
+  });
+
+  it("shows Song Sync controls and BPM bar when playMode is songsync", () => {
+    const onMasterTrackChange = vi.fn();
+    const onTrackMutedChange = vi.fn();
+    const visuals = createVisuals({ bpmBarEnabled: true });
+    const { container } = render(
+      <TuningModal
+        open={true}
+        playMode="songsync"
+        tuneForm={baseTuneForm}
+        onTuneFormChange={() => {}}
+        extrasForm={baseExtrasForm}
+        onExtrasFormChange={() => {}}
+        multi={createMulti()}
+        visuals={visuals}
+        detectedBeatsPerBar={4}
+        songSync={{
+          tracks: [
+            {
+              title: "JP Version",
+              color: "#4cc9f0",
+              gainPct: 100,
+              pan: 0,
+              muted: false,
+              solo: false,
+              beatOffset: 0,
+            },
+            {
+              title: "EN Version",
+              color: "#51cf66",
+              gainPct: 100,
+              pan: 0,
+              muted: false,
+              solo: false,
+              beatOffset: 0,
+            },
+          ],
+          masterTrackIndex: 0,
+          tempoSyncEnabled: true,
+          normalizeVolumeEnabled: true,
+          onMasterTrackChange,
+          onTempoSyncChange: vi.fn(),
+          onNormalizeVolumeChange: vi.fn(),
+          onTrackGainChange: vi.fn(),
+          onTrackPanChange: vi.fn(),
+          onTrackMutedChange,
+          onTrackSoloChange: vi.fn(),
+          onTrackBeatOffsetChange: vi.fn(),
+        }}
+        onClose={() => {}}
+        showReset={false}
+        onReset={() => {}}
+      />,
+    );
+
+    expect(container.querySelector("#tuning-panel-songsync")).not.toBeNull();
+    expect(container.querySelector("#tuning-panel-tuning")).toBeNull();
+    expect(container.querySelector("#bpm-bar-toggle")).not.toBeNull();
+    const masterSelect = container.querySelector<HTMLSelectElement>(
+      "#songsync-master-track",
+    );
+    expect(masterSelect).not.toBeNull();
+    fireEvent.change(masterSelect!, { target: { value: "1" } });
+    expect(onMasterTrackChange).toHaveBeenCalledWith(1);
+    const muteBox = container.querySelector<HTMLInputElement>(
+      "#songsync-track-mute-1",
+    );
+    expect(muteBox).not.toBeNull();
+    fireEvent.click(muteBox!);
+    expect(onTrackMutedChange).toHaveBeenCalledWith(1, true);
   });
 });

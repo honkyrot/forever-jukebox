@@ -318,19 +318,17 @@ export class AutocanonizerViz {
         topPad,
         bottomPad,
       };
-      const otherSpanDuration = this.quadMode
-        ? this.trackDuration
-        : this.otherDuration;
+      const sharedDuration = Math.max(this.trackDuration, this.otherDuration);
       this.layouts = this.beats.map((beat) => {
-        const beatWidth = (spanWidth * beat.duration) / this.trackDuration;
-        const x = hPad + (spanWidth * beat.start) / this.trackDuration;
+        const beatWidth = (spanWidth * beat.duration) / sharedDuration;
+        const x = hPad + (spanWidth * beat.start) / sharedDuration;
         const height =
           laneHeight * Math.pow(Math.max(0, beat.median_volume), 4) * 0.92;
         const clampedHeight = Math.max(2, height);
         const y = mainSectionY - clampedHeight;
         const otherX =
           hPad +
-          (spanWidth * (beat.other ? beat.other.start : 0)) / otherSpanDuration;
+          (spanWidth * (beat.other ? beat.other.start : 0)) / sharedDuration;
         return {
           x,
           y,
@@ -341,8 +339,8 @@ export class AutocanonizerViz {
         };
       });
       this.otherLayouts = this.otherBeats.map((beat) => {
-        const beatWidth = (spanWidth * beat.duration) / this.otherDuration;
-        const x = hPad + (spanWidth * beat.start) / this.otherDuration;
+        const beatWidth = (spanWidth * beat.duration) / sharedDuration;
+        const x = hPad + (spanWidth * beat.start) / sharedDuration;
         const height =
           laneHeight * Math.pow(Math.max(0, beat.median_volume), 4) * 0.92;
         const clampedHeight = Math.max(2, height);
@@ -442,8 +440,9 @@ export class AutocanonizerViz {
     const maxDelta = this.maxDelta || 1;
     const isDual = this.isDualMode();
     const isQuad = isDual && this.quadMode;
-    const otherDuration =
-      isDual && !isQuad ? this.otherDuration : this.trackDuration;
+    const otherDuration = isDual
+      ? Math.max(this.trackDuration, this.otherDuration)
+      : this.trackDuration;
     const sectionY = topPad + tileHeight - vPad;
     // In 2-voice dual mode, arcs curve upward from Song 2's section bar.
     // In 4-voice quad mode, `connections` represents Song 1's Green branch
@@ -520,6 +519,7 @@ export class AutocanonizerViz {
     }
     const { width, mainSectionY, otherSectionY, hPad } = this.layoutMetrics;
     const spanWidth = Math.max(1, width - hPad * 2);
+    const sharedDuration = Math.max(this.trackDuration, this.otherDuration);
     const maxDelta = this.computeMaxDelta((beat) => beat.gold) || 1;
     const startY = otherSectionY + CURSOR_SIZE / 2;
     const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
@@ -533,8 +533,8 @@ export class AutocanonizerViz {
       if (i === 0 || delta === 1) {
         return null;
       }
-      const fromX = hPad + (spanWidth * beat.gold.start) / this.otherDuration;
-      const toX = hPad + (spanWidth * next.gold.start) / this.otherDuration;
+      const fromX = hPad + (spanWidth * beat.gold.start) / sharedDuration;
+      const toX = hPad + (spanWidth * next.gold.start) / sharedDuration;
       const cx = (toX - fromX) / 2 + fromX;
       const apexRise = Math.max(
         Math.min(18, maxApexRise),
@@ -625,9 +625,10 @@ export class AutocanonizerViz {
     this.baseCtx.restore();
 
     if (isDual) {
+      const sharedDuration = Math.max(this.trackDuration, this.otherDuration);
       this.drawSectionBar(
         this.sections,
-        this.trackDuration,
+        sharedDuration,
         mainSectionY,
         hPad,
         spanWidth,
@@ -644,7 +645,7 @@ export class AutocanonizerViz {
 
       this.drawSectionBar(
         this.otherSections,
-        this.otherDuration,
+        sharedDuration,
         otherSectionY,
         hPad,
         spanWidth,
@@ -761,9 +762,10 @@ export class AutocanonizerViz {
     const isDual = this.isDualMode();
     const isQuad = isDual && this.quadMode;
     const otherIndex = this.forcedOtherIndex ?? beat.other.which;
-    const otherLayout = (
-      isDual && !isQuad ? this.otherLayouts : this.layouts
-    )[otherIndex];
+    const otherActive = this.forcedOtherIndex !== null || beat.otherGain > 0;
+    const otherLayout = otherActive
+      ? (isDual && !isQuad ? this.otherLayouts : this.layouts)[otherIndex]
+      : undefined;
     const cursorWidth = CURSOR_SIZE;
     const cursorHeight = CURSOR_SIZE;
     const sectionY = isDual ? mainSectionY : topPad + tileHeight - vPad;
@@ -830,15 +832,19 @@ export class AutocanonizerViz {
     };
 
     const otherAnimCursor =
-      this.forcedOtherIndex !== null ? null : this.getAnimatedOtherCursor();
-    const otherResolved = resolveAnimatedOrFollowCursor(
-      otherAnimCursor,
-      this.lastOtherCursor,
-      this.otherAnimEndedAt,
-      otherLayout,
-      otherCursorCenterY,
-      this.forcedOtherIndex,
-    );
+      this.forcedOtherIndex !== null || !otherActive
+        ? null
+        : this.getAnimatedOtherCursor();
+    const otherResolved = otherActive
+      ? resolveAnimatedOrFollowCursor(
+          otherAnimCursor,
+          this.lastOtherCursor,
+          this.otherAnimEndedAt,
+          otherLayout,
+          otherCursorCenterY,
+          this.forcedOtherIndex,
+        )
+      : { cursor: null, nextLast: null };
     this.lastOtherCursor = otherResolved.nextLast;
     if (otherResolved.cursor) {
       this.overlayCtx.fillStyle = AUTOCANONIZER_OTHER_COLOR;
@@ -852,8 +858,12 @@ export class AutocanonizerViz {
 
     if (isQuad) {
       // Draw Song 2's Pink (synced) and Gold (branching) highlights & cursors.
-      const pinkLayout = beat.pink ? this.otherLayouts[beat.pink.which] : undefined;
-      const goldLayout = beat.gold ? this.otherLayouts[beat.gold.which] : undefined;
+      const pinkActive = (beat.pinkGain ?? 1) > 0;
+      const goldActive = (beat.goldGain ?? 1) > 0;
+      const pinkLayout =
+        pinkActive && beat.pink ? this.otherLayouts[beat.pink.which] : undefined;
+      const goldLayout =
+        goldActive && beat.gold ? this.otherLayouts[beat.gold.which] : undefined;
       if (pinkLayout) {
         this.overlayCtx.fillStyle = "rgba(255, 79, 163, 0.6)";
         this.overlayCtx.fillRect(
@@ -890,15 +900,17 @@ export class AutocanonizerViz {
         this.overlayCtx.stroke();
       }
       const goldCursorCenterY = otherSectionY + CURSOR_SIZE / 2;
-      const goldAnimCursor = this.getAnimatedGoldCursor();
-      const goldResolved = resolveAnimatedOrFollowCursor(
-        goldAnimCursor,
-        this.lastGoldCursor,
-        this.goldAnimEndedAt,
-        goldLayout,
-        goldCursorCenterY,
-        null,
-      );
+      const goldAnimCursor = goldActive ? this.getAnimatedGoldCursor() : null;
+      const goldResolved = goldActive
+        ? resolveAnimatedOrFollowCursor(
+            goldAnimCursor,
+            this.lastGoldCursor,
+            this.goldAnimEndedAt,
+            goldLayout,
+            goldCursorCenterY,
+            null,
+          )
+        : { cursor: null, nextLast: null };
       this.lastGoldCursor = goldResolved.nextLast;
       if (goldResolved.cursor) {
         this.overlayCtx.fillStyle = AUTOCANONIZER_GOLD_COLOR;

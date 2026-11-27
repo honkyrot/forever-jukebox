@@ -70,6 +70,7 @@ export function stopPlayback(context: AppContext) {
     jukebox,
     metronomeOverlay,
     player,
+    songsync,
     wubmachine,
   } = context;
   cowbellOverlay.cancelScheduledHits();
@@ -78,6 +79,10 @@ export function stopPlayback(context: AppContext) {
     autocanonizer?.stop();
     player.stop();
     autocanonizer?.resetVisualization();
+  } else if (useAppStore.getState().playMode === "songsync") {
+    songsync?.stop();
+    player.stop();
+    songsync?.resetVisualization();
   }
   wubmachine?.stop();
   engine.stopJukebox();
@@ -94,6 +99,7 @@ export function stopPlayback(context: AppContext) {
     autocanonizerOtherSeconds: 0,
     autocanonizerPinkSeconds: 0,
     autocanonizerGoldSeconds: 0,
+    songSyncTrackSeconds: [],
     wubMachineSeconds: 0,
   });
   jukebox?.reset();
@@ -119,6 +125,7 @@ export function pausePlayback(context: AppContext) {
     engine,
     metronomeOverlay,
     player,
+    songsync,
     wubmachine,
   } = context;
   if (!useAppStore.getState().isRunning) {
@@ -128,6 +135,9 @@ export function pausePlayback(context: AppContext) {
   metronomeOverlay.cancelScheduledHits();
   if (useAppStore.getState().playMode === "autocanonizer") {
     autocanonizer?.stop();
+    player.stop();
+  } else if (useAppStore.getState().playMode === "songsync") {
+    songsync?.stop();
     player.stop();
   } else if (useAppStore.getState().playMode === "wubmachine") {
     wubmachine?.pause();
@@ -212,6 +222,15 @@ export function togglePlayback(context: AppContext) {
     if (useAppStore.getState().playMode === "autocanonizer") {
       const startIndex = useAppStore.getState().isPaused ? (useAppStore.getState().lastBeatIndex ?? 0) : 0;
       startAutocanonizerPlayback(context, startIndex, {
+        resetSession: !useAppStore.getState().isPaused,
+      });
+      return;
+    }
+    if (useAppStore.getState().playMode === "songsync") {
+      const startIndex = useAppStore.getState().isPaused
+        ? (useAppStore.getState().lastBeatIndex ?? 0)
+        : 0;
+      startSongSyncPlayback(context, startIndex, {
         resetSession: !useAppStore.getState().isPaused,
       });
       return;
@@ -355,6 +374,52 @@ export function startWubMachinePlayback(
   }
   useAppStore.setState({ isRunning: true });
   useAppStore.setState({ isPaused: false });
+  startListenTimer();
+  updatePlayButton();
+  if (document.fullscreenElement) {
+    requestWakeLock();
+  }
+  return true;
+}
+
+/**
+ * Starts or resumes synchronized multi-track Song Sync playback at `index`.
+ */
+export function startSongSyncPlayback(
+  context: AppContext,
+  index: number,
+  options?: { resetSession?: boolean },
+): boolean {
+  const { cowbellOverlay, engine, metronomeOverlay, player, songsync } =
+    context;
+  if (!songsync || !songsync.isReady()) {
+    console.warn("Song Sync not ready");
+    return false;
+  }
+  const resetSession = options?.resetSession ?? true;
+  player.stop();
+  cowbellOverlay.cancelScheduledHits();
+  metronomeOverlay.cancelScheduledHits();
+  engine.stopJukebox();
+  if (resetSession) {
+    useAppStore.setState({
+      playTimerMs: 0,
+      lastPlayStamp: null,
+      beatsPlayedText: "0",
+      lastBeatIndex: null,
+      songSyncTrackSeconds: [],
+    });
+    updateListenTimeDisplay();
+    resetLiveBpm();
+    pulseVizStats();
+    songsync.resetVisualization();
+  }
+  songsync.startAtIndex(index);
+  trackPlay("songsync", getCurrentTrackId(), useAppStore.getState().trackTitle);
+  if (resetSession || !useAppStore.getState().isRunning) {
+    useAppStore.setState({ lastPlayStamp: performance.now() });
+  }
+  useAppStore.setState({ isRunning: true, isPaused: false });
   startListenTimer();
   updatePlayButton();
   if (document.fullscreenElement) {

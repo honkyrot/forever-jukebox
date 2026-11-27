@@ -56,6 +56,7 @@ export type AttachVizNodes = {
   vizPanel: HTMLElement;
   vizLayer: HTMLDivElement;
   canonizerLayer: HTMLDivElement;
+  songSyncLayer?: HTMLDivElement;
   wubMachineLayer: HTMLDivElement;
 };
 

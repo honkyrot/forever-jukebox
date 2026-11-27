@@ -9,11 +9,10 @@ import {
   type QuantumBase,
   type TimeSignatureBranchMode,
 } from "@forever-jukebox/shared";
-import type { JukeboxAudioMode } from "@forever-jukebox/shared/audio/BufferedAudioPlayer";
 import {
   DEFAULT_METRONOME_BEAT_OFFSET,
   MAX_REASONABLE_BAR_BEATS,
-  clampMetronomeBeatOffset,
+  isMetronomeDownbeat,
 } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 
 const BPM_BAR_MODE_STORAGE_KEY = "fj-bpm-bar-ts-mode";
@@ -62,15 +61,18 @@ export interface BpmBarTimeSignatureInput {
   timeSignatureSimilarityRestrictEnabled: boolean;
   timeSignatureSimilarityNumerator: number;
   timeSignatureSimilarityDenominator: number;
-  jukeboxAudioMode: JukeboxAudioMode;
-  metronomeBeatsPerBar: number | null;
-  metronomeBeatOffset: number;
+  metronomeEnabled: boolean;
   metronomeDetectedBeatsPerBar: number;
 }
 
 export interface BpmBarSegmentState {
   segmentCount: number | null;
   activeSegmentIndex: number | null;
+}
+
+export interface EffectiveMetronomeConfig {
+  beatsPerBarOverride: number | null;
+  beatOffset: number;
 }
 
 /**
@@ -348,6 +350,122 @@ function resolveAutoTimeSignature(input: BpmBarTimeSignatureInput): {
 }
 
 /**
+ * Resolves the beat offset for the given beat's track in BPM-bar-driven modes
+ * ("custom" or "auto" metronome), using `bpmBarBeatOffset` for track 0 and
+ * `timeSignatureTrackOffsets` for secondary tracks.
+ */
+function resolveBpmBarBeatTrackOffset(
+  input: BpmBarTimeSignatureInput,
+  beat: BpmBarPulseBeat | null,
+): number {
+  if (beat?.trackIndex !== undefined && beat.trackIndex > 0) {
+    return clampTimeSignatureTrackOffset(
+      input.timeSignatureTrackOffsets[beat.trackIndex] ?? 0,
+    );
+  }
+  return clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+}
+
+/**
+ * Resolves the beat offset for an active branching/restriction time signature,
+ * falling back to the track-0 BPM bar offset when per-track offsets are unset.
+ */
+function resolveBeatTrackOffset(
+  input: BpmBarTimeSignatureInput,
+  beat: BpmBarPulseBeat | null,
+): number {
+  if (beat?.trackIndex !== undefined && beat.trackIndex > 0) {
+    return clampTimeSignatureTrackOffset(
+      input.timeSignatureTrackOffsets[beat.trackIndex] ?? 0,
+    );
+  }
+  return clampTimeSignatureTrackOffset(
+    input.timeSignatureTrackOffsets.length > 0
+      ? (input.timeSignatureTrackOffsets[0] ?? input.bpmBarBeatOffset)
+      : input.bpmBarBeatOffset,
+  );
+}
+
+/**
+ * Resolves the 0-based beat index within an active signature cycle, handling
+ * multi-track Cover Sync alignment when enabled.
+ */
+function resolveActiveSignatureBeatPosition(
+  input: BpmBarTimeSignatureInput,
+  beatIndex: number,
+  localIndex: number,
+  beat: BpmBarPulseBeat | null,
+  activeSig: { numerator: number; denominator: number },
+  vizBeats?: readonly QuantumBase[] | null,
+): number {
+  if (
+    input.multiTrackEnabled &&
+    input.coverSyncEnabled &&
+    beat?.trackIndex !== undefined &&
+    beat.trackIndex > 0 &&
+    vizBeats &&
+    vizBeats.length > 0
+  ) {
+    const trackOffsets =
+      input.timeSignatureTrackOffsets.length > 0
+        ? input.timeSignatureTrackOffsets
+        : [input.bpmBarBeatOffset];
+    return resolveTimeSignatureBeatPosition(
+      vizBeats,
+      {
+        which: beat.which ?? beatIndex,
+        localWhich: beat.localWhich,
+        trackIndex: beat.trackIndex,
+      },
+      {
+        numerator: activeSig.numerator,
+        denominator: activeSig.denominator,
+        trackOffsets,
+        useCoverSync: true,
+      },
+    );
+  }
+  const step = resolveTimeSignatureBranchStepBeats(
+    activeSig.numerator,
+    activeSig.denominator,
+  );
+  return positiveMod(localIndex - resolveBeatTrackOffset(input, beat), step);
+}
+
+/**
+ * Resolves the effective metronome time-signature override and beat offset
+ * driven by the BPM bar configuration.
+ */
+export function resolveEffectiveMetronomeConfig(
+  input: BpmBarTimeSignatureInput,
+): EffectiveMetronomeConfig {
+  const beatOffset = clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+  if (input.bpmBarTimeSignatureMode === "custom") {
+    return {
+      beatsPerBarOverride: resolveTimeSignatureBranchStepBeats(
+        input.bpmBarNumerator,
+        input.bpmBarDenominator,
+      ),
+      beatOffset,
+    };
+  }
+  const activeSig = resolveAutoTimeSignature(input);
+  if (activeSig) {
+    return {
+      beatsPerBarOverride: resolveTimeSignatureBranchStepBeats(
+        activeSig.numerator,
+        activeSig.denominator,
+      ),
+      beatOffset,
+    };
+  }
+  return {
+    beatsPerBarOverride: null,
+    beatOffset,
+  };
+}
+
+/**
  * Resolves how many horizontal bar segments the BPM bar should split into,
  * or null when the BPM bar should flash as a single solid bar.
  */
@@ -372,9 +490,8 @@ export function resolveBpmBarSegmentCount(
     );
     return step >= 2 ? Math.min(MAX_BPM_BAR_SEGMENTS, step) : null;
   }
-  if (input.jukeboxAudioMode === "metronome") {
-    const beatsPerBar =
-      input.metronomeBeatsPerBar ?? input.metronomeDetectedBeatsPerBar;
+  if (input.metronomeEnabled) {
+    const beatsPerBar = input.metronomeDetectedBeatsPerBar;
     if (typeof beatsPerBar === "number" && Number.isFinite(beatsPerBar)) {
       const rounded = Math.round(beatsPerBar);
       return rounded >= 2 ? Math.min(MAX_BPM_BAR_SEGMENTS, rounded) : null;
@@ -407,7 +524,7 @@ export function resolveBpmBarActiveSegment(
       : beatIndex;
 
   if (input.bpmBarTimeSignatureMode === "custom") {
-    const offset = clampTimeSignatureTrackOffset(input.bpmBarBeatOffset);
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
     return {
       segmentCount,
       activeSegmentIndex: positiveMod(localIndex - offset, segmentCount),
@@ -416,51 +533,22 @@ export function resolveBpmBarActiveSegment(
 
   const activeSig = resolveAutoTimeSignature(input);
   if (activeSig) {
-    const beatPosition =
-      input.multiTrackEnabled &&
-      input.coverSyncEnabled &&
-      beat?.trackIndex !== undefined &&
-      beat.trackIndex > 0 &&
-      vizBeats &&
-      vizBeats.length > 0
-        ? resolveTimeSignatureBeatPosition(
-            vizBeats,
-            {
-              which: beat.which ?? beatIndex,
-              localWhich: beat.localWhich,
-              trackIndex: beat.trackIndex,
-            },
-            {
-              numerator: activeSig.numerator,
-              denominator: activeSig.denominator,
-              trackOffsets: input.timeSignatureTrackOffsets,
-              useCoverSync: true,
-            },
-          )
-        : positiveMod(
-            localIndex -
-              clampTimeSignatureTrackOffset(
-                input.timeSignatureTrackOffsets[beat?.trackIndex ?? 0] ?? 0,
-              ),
-            resolveTimeSignatureBranchStepBeats(
-              activeSig.numerator,
-              activeSig.denominator,
-            ),
-          );
+    const beatPosition = resolveActiveSignatureBeatPosition(
+      input,
+      beatIndex,
+      localIndex,
+      beat,
+      activeSig,
+      vizBeats,
+    );
     return {
       segmentCount,
       activeSegmentIndex: beatPosition % segmentCount,
     };
   }
 
-  if (input.jukeboxAudioMode === "metronome") {
-    const offset = clampMetronomeBeatOffset(input.metronomeBeatOffset);
-    if (input.metronomeBeatsPerBar !== null) {
-      return {
-        segmentCount,
-        activeSegmentIndex: positiveMod(localIndex - offset, segmentCount),
-      };
-    }
+  if (input.metronomeEnabled) {
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
     const barBeatCount = beat?.parent?.children?.length;
     const hasValidBarIndex =
       typeof beat?.indexInParent === "number" &&
@@ -483,6 +571,54 @@ export function resolveBpmBarActiveSegment(
   }
 
   return { segmentCount, activeSegmentIndex: null };
+}
+
+/**
+ * Determines whether the given beat is a bar downbeat (accented high tick)
+ * under the active BPM bar time signature, per-track offset, or analyzed bars.
+ */
+export function isBpmBarDownbeat(
+  input: BpmBarTimeSignatureInput,
+  beatIndex: number | null,
+  beat: BpmBarPulseBeat | null,
+  vizBeats?: readonly QuantumBase[] | null,
+): boolean {
+  if (beatIndex === null || !Number.isInteger(beatIndex) || beatIndex < 0) {
+    return false;
+  }
+  const localIndex =
+    typeof beat?.localWhich === "number" && Number.isInteger(beat.localWhich)
+      ? beat.localWhich
+      : beatIndex;
+
+  if (input.bpmBarTimeSignatureMode === "custom") {
+    const step = resolveTimeSignatureBranchStepBeats(
+      input.bpmBarNumerator,
+      input.bpmBarDenominator,
+    );
+    const offset = resolveBpmBarBeatTrackOffset(input, beat);
+    return positiveMod(localIndex - offset, step) === 0;
+  }
+
+  const activeSig = resolveAutoTimeSignature(input);
+  if (activeSig) {
+    return (
+      resolveActiveSignatureBeatPosition(
+        input,
+        beatIndex,
+        localIndex,
+        beat,
+        activeSig,
+        vizBeats,
+      ) === 0
+    );
+  }
+
+  return isMetronomeDownbeat(beatIndex, beat ?? undefined, {
+    beatsPerBar: input.metronomeDetectedBeatsPerBar,
+    beatsPerBarOverride: null,
+    beatOffset: resolveBpmBarBeatTrackOffset(input, beat),
+  });
 }
 
 /**

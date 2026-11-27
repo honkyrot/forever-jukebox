@@ -18,6 +18,13 @@ import {
   openExtras,
   pollAnalysis,
   resetForNewTrack,
+  setBpmBarBeatOffset,
+  setBpmBarDenominator,
+  setBpmBarEnabled,
+  setBpmBarMetronomeEnabled,
+  setBpmBarMetronomeVolumePct,
+  setBpmBarNumerator,
+  setBpmBarTimeSignatureMode,
   setMixTrackGainPct,
   setPostMixNormalizeVolumeEnabled,
   setSleepTimer,
@@ -959,6 +966,111 @@ describe("playback tuning", () => {
     expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([]);
   });
 
+  it("persists and restores per-song similarity restriction across track switches", () => {
+    setLocalStorage();
+    const context = createContext();
+    useAppStore.setState({ multiTrackEnabled: false, lastTrackId: "song-a" });
+
+    // Changing BPM bar time signature while disabled does not create a saved restriction entry.
+    setBpmBarNumerator(context, 7);
+    setBpmBarDenominator(context, 8);
+    expect(localStorage.getItem("fj-ts-similarity-restrict")).toBeNull();
+
+    // Enabling and adjusting via similarity controls saves per-song under song-a.
+    setTimeSignatureSimilarityRestrictEnabled(context, true);
+    setTimeSignatureSimilarityNumerator(context, 3);
+    setTimeSignatureSimilarityDenominator(context, 4);
+    expect(localStorage.getItem("fj-ts-similarity-restrict")).toBe(
+      JSON.stringify({ "song-a": { numerator: 3, denominator: 4 } }),
+    );
+
+    // Updating via BPM bar controls while enabled also updates the per-song entry.
+    setBpmBarNumerator(context, 5);
+    setBpmBarDenominator(context, 8);
+    expect(localStorage.getItem("fj-ts-similarity-restrict")).toBe(
+      JSON.stringify({ "song-a": { numerator: 5, denominator: 8 } }),
+    );
+
+    // Save a different signature on song-b.
+    useAppStore.setState({ lastTrackId: "song-b" });
+    setTimeSignatureSimilarityNumerator(context, 6);
+    setTimeSignatureSimilarityDenominator(context, 8);
+    expect(JSON.parse(localStorage.getItem("fj-ts-similarity-restrict")!)).toEqual({
+      "song-a": { numerator: 5, denominator: 8 },
+      "song-b": { numerator: 6, denominator: 8 },
+    });
+
+    // Multi-track edits do not overwrite single-track saved entries.
+    useAppStore.setState({ multiTrackEnabled: true });
+    setTimeSignatureSimilarityRestrictEnabled(context, false);
+    setTimeSignatureSimilarityNumerator(context, 9);
+    expect(JSON.parse(localStorage.getItem("fj-ts-similarity-restrict")!)).toEqual({
+      "song-a": { numerator: 5, denominator: 8 },
+      "song-b": { numerator: 6, denominator: 8 },
+    });
+    useAppStore.setState({ multiTrackEnabled: false });
+
+    // Loading song-a restores 5/8 into store and engine config.
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-a",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(5);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(8);
+    expect(useAppStore.getState().bpmBarNumerator).toBe(5);
+    expect(useAppStore.getState().bpmBarDenominator).toBe(8);
+    expect(context.engine.updateConfig).toHaveBeenCalledWith({
+      timeSignatureSimilarityRestrict: true,
+      timeSignatureSimilarityNumerator: 5,
+      timeSignatureSimilarityDenominator: 8,
+    });
+
+    // Loading song-b restores 6/8.
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-b",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(6);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(8);
+
+    // Loading unsaved song-c resets restriction to false / 4/4 in store and engine config.
+    expect(
+      applyAnalysisResult(context, {
+        status: "complete",
+        id: "song-c",
+        result: { beats: [], track: {} },
+      }),
+    ).toBe(true);
+    expect(useAppStore.getState().timeSignatureSimilarityRestrictEnabled).toBe(false);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(4);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(4);
+    expect(context.engine.updateConfig).toHaveBeenCalledWith({
+      timeSignatureSimilarityRestrict: false,
+      timeSignatureSimilarityNumerator: 4,
+      timeSignatureSimilarityDenominator: 4,
+    });
+
+    // Disabling on song-a removes only song-a's saved entry.
+    useAppStore.setState({ lastTrackId: "song-a" });
+    setTimeSignatureSimilarityRestrictEnabled(context, false);
+    expect(JSON.parse(localStorage.getItem("fj-ts-similarity-restrict")!)).toEqual({
+      "song-b": { numerator: 6, denominator: 8 },
+    });
+
+    // Resetting tuning in single-track mode clears the active song's saved entry.
+    useAppStore.setState({ lastTrackId: "song-b", timeSignatureSimilarityRestrictEnabled: true });
+    resetTuningDefaults(context);
+    expect(localStorage.getItem("fj-ts-similarity-restrict")).toBeNull();
+  });
+
   it("applies branch stats toggle and audio mode from extras controls", () => {
     const context = createContext();
     useAppStore.setState({ isRunning: true });
@@ -1178,55 +1290,72 @@ describe("playback tuning", () => {
     expect(window.location.search).toContain("am=cathedral");
   });
 
-  it("applies metronome as an audio mode from extras controls", () => {
-    const context = createContext();
-    useAppStore.setState({ playMode: "jukebox" });
-
-    const result = applyExtrasChanges(context, {
-      ...getExtrasFormValues(),
-      audioMode: "metronome",
-    });
-
-    expect(result).toEqual({ branchStatsChanged: false, audioModeChanged: true });
-    expect(useAppStore.getState().jukeboxAudioMode).toBe("metronome");
-    expect(context.metronomeOverlay.enable).toHaveBeenCalledTimes(1);
-    expect(context.player.setJukeboxAudioMode).toHaveBeenCalledWith(
-      "metronome",
-      100,
-    );
-    expect(window.location.search).toContain("am=metronome");
-  });
-
-  it("updates and resets metronome volume, time signature, and beat offset", () => {
+  it("toggles metronome inside the BPM bar, syncs volume/time-signature/offset, and disables when BPM bar turns off", () => {
     const context = createContext();
     useAppStore.setState({
       playMode: "jukebox",
+      bpmBarEnabled: true,
+      bpmBarTimeSignatureMode: "off",
+      bpmBarNumerator: 4,
+      bpmBarDenominator: 4,
+      bpmBarBeatOffset: 0,
+      metronomeEnabled: false,
+      metronomeVolumePct: 100,
       metronomeDetectedBeatsPerBar: 4,
     });
 
-    applyExtrasChanges(context, {
-      ...getExtrasFormValues(),
-      audioMode: "metronome",
-      metronomeVolumePct: 160,
-      metronomeBeatsPerBar: 3,
-      metronomeBeatOffset: 5,
-    });
+    setBpmBarMetronomeEnabled(context, true);
+    expect(useAppStore.getState().metronomeEnabled).toBe(true);
+    expect(useAppStore.getState().bpmBarTimeSignatureMode).toBe("auto");
+    expect(context.metronomeOverlay.enable).toHaveBeenCalledTimes(1);
+
+    setBpmBarMetronomeVolumePct(context, 160);
+    setBpmBarTimeSignatureMode(context, "custom");
+    setBpmBarNumerator(context, 3);
+    setBpmBarDenominator(context, 4);
+    setBpmBarBeatOffset(context, -1);
 
     expect(useAppStore.getState().metronomeVolumePct).toBe(160);
-    expect(useAppStore.getState().metronomeBeatsPerBar).toBe(3);
-    // Offset clamps to [0, beatsPerBar - 1] = 2 for 3/4.
-    expect(useAppStore.getState().metronomeBeatOffset).toBe(2);
-    expect(context.metronomeOverlay.setMetronomeVolumePct).toHaveBeenCalledWith(160);
-    expect(context.metronomeOverlay.setBeatsPerBarOverride).toHaveBeenCalledWith(3);
-    expect(context.metronomeOverlay.setBeatOffset).toHaveBeenCalledWith(2);
+    expect(useAppStore.getState().bpmBarBeatOffset).toBe(-1);
+    expect(context.metronomeOverlay.setMetronomeVolumePct).toHaveBeenLastCalledWith(160);
+    expect(context.metronomeOverlay.setBeatsPerBarOverride).toHaveBeenLastCalledWith(3);
+    expect(context.metronomeOverlay.setBeatOffset).toHaveBeenLastCalledWith(-1);
 
-    resetExtrasDefaults(context);
-    expect(useAppStore.getState().metronomeVolumePct).toBe(100);
-    expect(useAppStore.getState().metronomeBeatsPerBar).toBeNull();
-    expect(useAppStore.getState().metronomeBeatOffset).toBe(0);
-    expect(context.metronomeOverlay.setMetronomeVolumePct).toHaveBeenLastCalledWith(100);
-    expect(context.metronomeOverlay.setBeatsPerBarOverride).toHaveBeenLastCalledWith(null);
-    expect(context.metronomeOverlay.setBeatOffset).toHaveBeenLastCalledWith(0);
+    // Turning off BPM bar disables metronome overlay and state.
+    setBpmBarEnabled(context, false);
+    expect(useAppStore.getState().bpmBarEnabled).toBe(false);
+    expect(useAppStore.getState().metronomeEnabled).toBe(false);
+    expect(context.metronomeOverlay.disable).toHaveBeenCalled();
+
+    // Cannot enable metronome while BPM bar is off.
+    setBpmBarMetronomeEnabled(context, true);
+    expect(useAppStore.getState().metronomeEnabled).toBe(false);
+  });
+
+  it("syncs BPM bar custom time signature and beat offset when checking similarity restrict", () => {
+    const context = createContext();
+    useAppStore.setState({
+      multiTrackEnabled: false,
+      bpmBarTimeSignatureMode: "custom",
+      bpmBarNumerator: 3,
+      bpmBarDenominator: 4,
+      bpmBarBeatOffset: 2,
+      timeSignatureTrackOffsets: [],
+      timeSignatureSimilarityRestrictEnabled: false,
+    });
+
+    setTimeSignatureSimilarityRestrictEnabled(context, true);
+    expect(useAppStore.getState().timeSignatureSimilarityNumerator).toBe(3);
+    expect(useAppStore.getState().timeSignatureSimilarityDenominator).toBe(4);
+    expect(useAppStore.getState().timeSignatureTrackOffsets).toEqual([2]);
+    expect(context.engine.updateConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        timeSignatureSimilarityRestrict: true,
+        timeSignatureSimilarityNumerator: 3,
+        timeSignatureSimilarityDenominator: 4,
+        timeSignatureTrackOffsets: [2],
+      }),
+    );
   });
 
   it("resumes jukebox playback after preparing swing while already running", async () => {
@@ -1364,7 +1493,6 @@ describe("playback tuning", () => {
     expect(context.engine.setBringItHomeMode).toHaveBeenCalledWith(false);
     expect(useAppStore.getState().jukeboxAudioMode).toBe("off");
     expect(context.cowbellOverlay.disable).toHaveBeenCalledTimes(1);
-    expect(context.metronomeOverlay.disable).toHaveBeenCalledTimes(1);
   });
 
   it("reports non-default tuning against the context defaults", () => {
@@ -3642,9 +3770,6 @@ describe("live BPM tracking", () => {
       customAnchorEnabled: false,
       audioMode: "nightcore",
       audioIntensity: 100,
-      metronomeVolumePct: 100,
-      metronomeBeatsPerBar: null,
-      metronomeBeatOffset: 0,
     });
     expect(useAppStore.getState().bpmText).toBe("120");
     expect(useAppStore.getState().bpmTrend).toBe("up");

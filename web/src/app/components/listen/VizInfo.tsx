@@ -56,6 +56,7 @@ export function VizInfo() {
   );
   const isQuadMix = autocanonizerMixEnabled && autocanonizerQuadMode;
   const wubMachineDurationSec = useAppStore((s) => s.wubMachineDurationSec);
+  const songSyncTracks = useAppStore((s) => s.songSyncTracks);
   const titleRef = useRef<HTMLDivElement | null>(null);
   const listenTimeRef = useRef<HTMLSpanElement | null>(null);
   const beatsPlayedRef = useRef<HTMLSpanElement | null>(null);
@@ -69,9 +70,11 @@ export function VizInfo() {
   const pinkCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const goldCursorTimeRef = useRef<HTMLSpanElement | null>(null);
   const wubCursorTimeRef = useRef<HTMLSpanElement | null>(null);
+  const songSyncTimeRefs = useRef<Array<HTMLSpanElement | null>>([]);
 
   const isJukebox = playMode === "jukebox";
   const isCanonizer = playMode === "autocanonizer";
+  const isSongSync = playMode === "songsync";
   const isWubMachine = playMode === "wubmachine";
   const hideBeats = playMode !== "jukebox";
   const hideBpm = playMode === "wubmachine";
@@ -132,6 +135,14 @@ export function VizInfo() {
         seed.wubMachineSeconds,
       );
     }
+    seed.songSyncTracks.forEach((_, idx) => {
+      const el = songSyncTimeRefs.current[idx];
+      if (el) {
+        const sec = seed.songSyncTrackSeconds[idx];
+        el.textContent =
+          sec !== null && sec !== undefined ? formatCursorTime(sec) : "—";
+      }
+    });
     return useAppStore.subscribe((state, prev) => {
       if (
         state.listenTimeText !== prev.listenTimeText &&
@@ -211,8 +222,18 @@ export function VizInfo() {
           state.wubMachineSeconds,
         );
       }
+      if (state.songSyncTrackSeconds !== prev.songSyncTrackSeconds) {
+        state.songSyncTracks.forEach((_, idx) => {
+          const el = songSyncTimeRefs.current[idx];
+          if (el) {
+            const sec = state.songSyncTrackSeconds[idx];
+            el.textContent =
+              sec !== null && sec !== undefined ? formatCursorTime(sec) : "—";
+          }
+        });
+      }
     });
-  }, [isQuadMix, hideBpm]);
+  }, [isQuadMix, hideBpm, songSyncTracks.length]);
 
   const displayTitle =
     trackTitle || trackArtist
@@ -307,6 +328,33 @@ export function VizInfo() {
           <span id="wubmachine-total-time">
             {formatCursorTime(wubMachineDurationSec)}
           </span>
+        </span>
+        <span
+          id="songsync-times"
+          className={
+            isSongSync ? "autocanonizer-times" : "autocanonizer-times is-hidden"
+          }
+        >
+          {songSyncTracks.map((track, idx) => (
+            <span key={idx} className="songsync-track-time">
+              {idx > 0 ? (
+                <span className="viz-divider" aria-hidden="true">
+                  ·
+                </span>
+              ) : null}
+              <span
+                id={`songsync-track-time-${idx}`}
+                ref={(el) => {
+                  songSyncTimeRefs.current[idx] = el;
+                }}
+                style={{ color: track.color }}
+              >
+                —
+              </span>
+              <span aria-hidden="true">/</span>
+              <span>{formatCursorTime(track.duration)}</span>
+            </span>
+          ))}
         </span>
         <span className="viz-meta-stats">
           <span>{t("playback.listenTime")}</span>

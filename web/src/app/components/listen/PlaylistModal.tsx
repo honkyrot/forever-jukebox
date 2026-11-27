@@ -12,6 +12,7 @@ import {
   disableMultiTrackMix,
   loadAutocanonizerMix,
   loadMultiTrackMix,
+  loadSongSyncMix,
 } from "../../playback";
 import { getAppContext } from "../../runtime";
 import {
@@ -69,6 +70,7 @@ export function PlaylistModal() {
     (s) => s.autocanonizerMixEnabled,
   );
   const isCanonizer = playMode === "autocanonizer";
+  const isSongSync = playMode === "songsync";
   const isMixActive = isCanonizer ? autocanonizerMixEnabled : multiTrackEnabled;
   const close = () => useAppStore.setState({ playlistModalOpen: false });
   const isEmpty = playlist.tracks.length === 0;
@@ -379,6 +381,18 @@ export function PlaylistModal() {
               : isCanonizer
                 ? "Mix 2 Songs"
                 : "Mix Songs"}
+          </button>
+        ) : null}
+        {isSongSync && playlist.tracks.length >= 2 ? (
+          <button
+            id="playlist-songsync-reload"
+            type="button"
+            onClick={() => {
+              close();
+              void loadSongSyncMix(getAppContext());
+            }}
+          >
+            {t("playback.syncPlaylist")}
           </button>
         ) : null}
         <button

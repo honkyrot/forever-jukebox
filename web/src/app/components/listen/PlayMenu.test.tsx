@@ -131,16 +131,33 @@ describe("PlayMenu", () => {
     expect(label?.classList.contains("is-hidden")).toBe(false);
   });
 
-  it("hides tune and info buttons in autocanonizer mode", () => {
+  it("keeps tuning visible in autocanonizer and songsync while hiding info button", () => {
     act(() => {
       useAppStore.setState({ playMode: "autocanonizer" });
     });
     render(<PlayMenu />);
     expect(
       document.getElementById("tuning")?.classList.contains("is-hidden"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       document.getElementById("track-info")?.classList.contains("is-hidden"),
+    ).toBe(true);
+
+    act(() => {
+      useAppStore.setState({ playMode: "songsync" });
+    });
+    expect(
+      document.getElementById("tuning")?.classList.contains("is-hidden"),
+    ).toBe(false);
+    expect(
+      document.getElementById("track-info")?.classList.contains("is-hidden"),
+    ).toBe(true);
+
+    act(() => {
+      useAppStore.setState({ playMode: "wubmachine" });
+    });
+    expect(
+      document.getElementById("tuning")?.classList.contains("is-hidden"),
     ).toBe(true);
   });
 

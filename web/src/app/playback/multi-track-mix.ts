@@ -15,6 +15,9 @@ import {
 	combineAudioBuffers,
 	prepareDualAudioBuffers,
 } from "@forever-jukebox/shared/audio/multiTrackBuffer";
+import {
+	clampMetronomeVolumePct,
+} from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import type {
 	AutocanonizerMixAlignmentMode,
 	AutocanonizerQuadBranchMode,
@@ -42,8 +45,16 @@ import { isLikelyJobId } from "../identity";
 import { TRACK_STEP } from "../job-progress";
 import type { PlaylistTrack } from "../playlist";
 import {
+	normalizeBpmBarTimeSignatureMode,
+	resolveEffectiveMetronomeConfig,
 	resolveStoredBpmBarBeatOffsetForTrack,
 	storeBpmBarBeatOffsetForTrack,
+	storeBpmBarDenominator,
+	storeBpmBarNumerator,
+	storeBpmBarTimeSignatureMode,
+	storeTimeSignatureSimilarityRestrictForTrack,
+	type BpmBarTimeSignatureInput,
+	type BpmBarTimeSignatureMode,
 } from "../bpmBarTimeSignature";
 import { resolveTrackBaseTempoBpm } from "../liveBpm";
 import { getPlaybackDeps } from "../runtime";
@@ -89,7 +100,7 @@ function clampMixTrackGainPct(gainPct: number): number {
 	);
 }
 
-type LoadedMixTrackSource = {
+export type LoadedMixTrackSource = {
 	jobId: string;
 	track: PlaylistTrack;
 	analysisResult: AnalysisComplete["result"];
@@ -107,7 +118,17 @@ export function clearCachedMultiTrackSources(): void {
 	cachedAutocanonizerMixSources = null;
 }
 
-async function resolveTrackAnalysis(
+export function getCachedMixSources(): LoadedMixTrackSource[] | null {
+	return cachedMixSources;
+}
+
+export function getCachedAutocanonizerMixSources():
+	| [LoadedMixTrackSource, LoadedMixTrackSource]
+	| null {
+	return cachedAutocanonizerMixSources;
+}
+
+export async function resolveTrackAnalysis(
 	track: PlaylistTrack,
 	generation: number,
 ): Promise<AnalysisComplete> {
@@ -156,7 +177,7 @@ async function resolveTrackAnalysis(
 	return response;
 }
 
-async function resolveTrackAudioBuffer(
+export async function resolveTrackAudioBuffer(
 	context: AppContext,
 	track: PlaylistTrack,
 	jobId: string,
@@ -299,6 +320,7 @@ function applyLoadedMixSources(
 	resetLiveBpm(baseTempo);
 	context.jukebox?.setSelectedEdge(null);
 	syncPredictedJumps(context);
+	syncMetronomeOverlayFromStore(context);
 	updateVizVisibility();
 	updateTrackInfo(context);
 }
@@ -521,6 +543,7 @@ export function setTimeSignatureBranchingEnabled(
 		timeSignatureTrackOffsets,
 	} = useAppStore.getState();
 	if (!multiTrackEnabled) {
+		syncMetronomeOverlayFromStore(context);
 		return;
 	}
 	context.engine?.updateConfig({
@@ -531,11 +554,12 @@ export function setTimeSignatureBranchingEnabled(
 		timeSignatureTrackOffsets,
 	});
 	rebuildMixGraphAndSyncViz(context);
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
- * Updates whether similarity branches in multi-track mixes are strictly
- * restricted to time-signature bar boundaries, rebuilding live when active.
+ * Updates whether similarity branches are restricted to time-signature bar
+ * boundaries, synchronizing beat offsets and single-track signature with the BPM bar.
  */
 export function setTimeSignatureSimilarityRestrictEnabled(
 	context: AppContext,
@@ -548,30 +572,64 @@ export function setTimeSignatureSimilarityRestrictEnabled(
 		state.timeSignatureBranchMode === "overwrite"
 			? "combine"
 			: state.timeSignatureBranchMode;
+	const clampedBpmOffset = clampTimeSignatureTrackOffset(state.bpmBarBeatOffset);
+	let nextOffsets = state.timeSignatureTrackOffsets;
+	let nextNum = state.timeSignatureSimilarityNumerator;
+	let nextDen = state.timeSignatureSimilarityDenominator;
+
+	if (enabled) {
+		// Sync track 0 offset from the BPM bar per-song offset instead of leaving it at 0.
+		if (!state.multiTrackEnabled) {
+			nextOffsets = clampedBpmOffset !== 0 ? [clampedBpmOffset] : [];
+			if (state.bpmBarTimeSignatureMode === "custom") {
+				nextNum = clampTimeSignatureNumerator(state.bpmBarNumerator);
+				nextDen = clampTimeSignatureDenominator(state.bpmBarDenominator);
+			} else {
+				storeBpmBarNumerator(nextNum);
+				storeBpmBarDenominator(nextDen);
+			}
+		} else if (
+			state.timeSignatureTrackOffsets.length === 0 &&
+			clampedBpmOffset !== 0
+		) {
+			nextOffsets = [clampedBpmOffset];
+		}
+	}
+
 	useAppStore.setState({
 		timeSignatureSimilarityRestrictEnabled: enabled,
 		timeSignatureBranchMode: nextMode,
-	});
-	const {
-		multiTrackEnabled,
-		timeSignatureBranchingEnabled,
-		timeSignatureSimilarityNumerator,
-		timeSignatureSimilarityDenominator,
-		timeSignatureTrackOffsets,
-	} = useAppStore.getState();
-	if (!context.engine) {
-		return;
-	}
-	context.engine.updateConfig({
-		timeSignatureSimilarityRestrict: enabled,
-		timeSignatureSimilarityNumerator,
-		timeSignatureSimilarityDenominator,
-		timeSignatureTrackOffsets,
-		...(multiTrackEnabled && timeSignatureBranchingEnabled
-			? { timeSignatureBranchMode: nextMode }
+		timeSignatureTrackOffsets: nextOffsets,
+		timeSignatureSimilarityNumerator: nextNum,
+		timeSignatureSimilarityDenominator: nextDen,
+		...(!state.multiTrackEnabled && enabled
+			? {
+					bpmBarNumerator: nextNum,
+					bpmBarDenominator: nextDen,
+				}
 			: {}),
 	});
-	rebuildMixGraphAndSyncViz(context);
+
+	if (!state.multiTrackEnabled) {
+		storeTimeSignatureSimilarityRestrictForTrack(
+			getCurrentTrackId(),
+			enabled ? { numerator: nextNum, denominator: nextDen } : null,
+		);
+	}
+
+	if (context.engine) {
+		context.engine.updateConfig({
+			timeSignatureSimilarityRestrict: enabled,
+			timeSignatureSimilarityNumerator: nextNum,
+			timeSignatureSimilarityDenominator: nextDen,
+			timeSignatureTrackOffsets: nextOffsets,
+			...(state.multiTrackEnabled && state.timeSignatureBranchingEnabled
+				? { timeSignatureBranchMode: nextMode }
+				: {}),
+		});
+		rebuildMixGraphAndSyncViz(context);
+	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
@@ -583,24 +641,37 @@ export function setTimeSignatureSimilarityNumerator(
 	numerator: number,
 ): void {
 	const clamped = clampTimeSignatureNumerator(numerator);
-	useAppStore.setState({ timeSignatureSimilarityNumerator: clamped });
+	const state = useAppStore.getState();
+	if (!state.multiTrackEnabled) {
+		storeBpmBarNumerator(clamped);
+		if (state.timeSignatureSimilarityRestrictEnabled) {
+			storeTimeSignatureSimilarityRestrictForTrack(getCurrentTrackId(), {
+				numerator: clamped,
+				denominator: state.timeSignatureSimilarityDenominator,
+			});
+		}
+	}
+	useAppStore.setState({
+		timeSignatureSimilarityNumerator: clamped,
+		...(!state.multiTrackEnabled ? { bpmBarNumerator: clamped } : {}),
+	});
 	const {
 		multiTrackEnabled,
 		timeSignatureSimilarityRestrictEnabled,
 		timeSignatureBranchingEnabled,
 		timeSignatureBranchMode,
 	} = useAppStore.getState();
-	if (!context.engine) {
-		return;
+	if (context.engine) {
+		context.engine.updateConfig({ timeSignatureSimilarityNumerator: clamped });
+		const isOverwrite =
+			multiTrackEnabled &&
+			timeSignatureBranchingEnabled &&
+			timeSignatureBranchMode === "overwrite";
+		if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+			rebuildMixGraphAndSyncViz(context);
+		}
 	}
-	context.engine.updateConfig({ timeSignatureSimilarityNumerator: clamped });
-	const isOverwrite =
-		multiTrackEnabled &&
-		timeSignatureBranchingEnabled &&
-		timeSignatureBranchMode === "overwrite";
-	if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
-		rebuildMixGraphAndSyncViz(context);
-	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
@@ -612,24 +683,37 @@ export function setTimeSignatureSimilarityDenominator(
 	denominator: number,
 ): void {
 	const clamped = clampTimeSignatureDenominator(denominator);
-	useAppStore.setState({ timeSignatureSimilarityDenominator: clamped });
+	const state = useAppStore.getState();
+	if (!state.multiTrackEnabled) {
+		storeBpmBarDenominator(clamped);
+		if (state.timeSignatureSimilarityRestrictEnabled) {
+			storeTimeSignatureSimilarityRestrictForTrack(getCurrentTrackId(), {
+				numerator: state.timeSignatureSimilarityNumerator,
+				denominator: clamped,
+			});
+		}
+	}
+	useAppStore.setState({
+		timeSignatureSimilarityDenominator: clamped,
+		...(!state.multiTrackEnabled ? { bpmBarDenominator: clamped } : {}),
+	});
 	const {
 		multiTrackEnabled,
 		timeSignatureSimilarityRestrictEnabled,
 		timeSignatureBranchingEnabled,
 		timeSignatureBranchMode,
 	} = useAppStore.getState();
-	if (!context.engine) {
-		return;
+	if (context.engine) {
+		context.engine.updateConfig({ timeSignatureSimilarityDenominator: clamped });
+		const isOverwrite =
+			multiTrackEnabled &&
+			timeSignatureBranchingEnabled &&
+			timeSignatureBranchMode === "overwrite";
+		if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
+			rebuildMixGraphAndSyncViz(context);
+		}
 	}
-	context.engine.updateConfig({ timeSignatureSimilarityDenominator: clamped });
-	const isOverwrite =
-		multiTrackEnabled &&
-		timeSignatureBranchingEnabled &&
-		timeSignatureBranchMode === "overwrite";
-	if (timeSignatureSimilarityRestrictEnabled && !isOverwrite) {
-		rebuildMixGraphAndSyncViz(context);
-	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
@@ -645,12 +729,14 @@ export function setTimeSignatureBranchMode(
 	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
 		useAppStore.getState();
 	if (!multiTrackEnabled) {
+		syncMetronomeOverlayFromStore(context);
 		return;
 	}
 	context.engine?.updateConfig({ timeSignatureBranchMode: normalized });
 	if (timeSignatureBranchingEnabled) {
 		rebuildMixGraphAndSyncViz(context);
 	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
@@ -666,12 +752,14 @@ export function setTimeSignatureNumerator(
 	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
 		useAppStore.getState();
 	if (!multiTrackEnabled) {
+		syncMetronomeOverlayFromStore(context);
 		return;
 	}
 	context.engine?.updateConfig({ timeSignatureNumerator: clamped });
 	if (timeSignatureBranchingEnabled) {
 		rebuildMixGraphAndSyncViz(context);
 	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
@@ -687,17 +775,19 @@ export function setTimeSignatureDenominator(
 	const { multiTrackEnabled, timeSignatureBranchingEnabled } =
 		useAppStore.getState();
 	if (!multiTrackEnabled) {
+		syncMetronomeOverlayFromStore(context);
 		return;
 	}
 	context.engine?.updateConfig({ timeSignatureDenominator: clamped });
 	if (timeSignatureBranchingEnabled) {
 		rebuildMixGraphAndSyncViz(context);
 	}
+	syncMetronomeOverlayFromStore(context);
 }
 
 /**
- * Updates a single track's integer beat offset for multi-track time-signature
- * branching and rebuilds the jump graph live when active.
+ * Updates a single track's integer beat offset for time-signature branching,
+ * similarity restriction, and the BPM bar / metronome, rebuilding live when active.
  */
 export function setTimeSignatureTrackOffset(
 	context: AppContext,
@@ -740,16 +830,213 @@ export function setTimeSignatureTrackOffset(
 			...(trackIndex === 0 ? { bpmBarBeatOffset: clamped } : {}),
 		});
 	}
-	if (!context.engine) {
+	if (context.engine) {
+		context.engine.updateConfig({ timeSignatureTrackOffsets: next });
+		if (
+			state.timeSignatureSimilarityRestrictEnabled ||
+			(state.multiTrackEnabled && state.timeSignatureBranchingEnabled)
+		) {
+			rebuildMixGraphAndSyncViz(context);
+		}
+	}
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Builds the unified BPM bar / metronome time-signature input from store state.
+ */
+export function buildBpmBarTimeSignatureInputFromStore(): BpmBarTimeSignatureInput {
+	const state = useAppStore.getState();
+	return {
+		bpmBarTimeSignatureMode: state.bpmBarTimeSignatureMode,
+		bpmBarNumerator: state.bpmBarNumerator,
+		bpmBarDenominator: state.bpmBarDenominator,
+		bpmBarBeatOffset: state.bpmBarBeatOffset,
+		multiTrackEnabled: state.multiTrackEnabled,
+		coverSyncEnabled: state.coverSyncEnabled,
+		timeSignatureBranchingEnabled: state.timeSignatureBranchingEnabled,
+		timeSignatureBranchMode: state.timeSignatureBranchMode,
+		timeSignatureNumerator: state.timeSignatureNumerator,
+		timeSignatureDenominator: state.timeSignatureDenominator,
+		timeSignatureTrackOffsets: state.timeSignatureTrackOffsets,
+		timeSignatureSimilarityRestrictEnabled:
+			state.timeSignatureSimilarityRestrictEnabled,
+		timeSignatureSimilarityNumerator: state.timeSignatureSimilarityNumerator,
+		timeSignatureSimilarityDenominator:
+			state.timeSignatureSimilarityDenominator,
+		metronomeEnabled: state.metronomeEnabled,
+		metronomeDetectedBeatsPerBar: state.metronomeDetectedBeatsPerBar,
+	};
+}
+
+/**
+ * Synchronizes the live metronome overlay service with the BPM bar's
+ * enablement, volume, time signature, and per-song beat offset.
+ */
+export function syncMetronomeOverlayFromStore(context: AppContext): void {
+	const overlay = context?.metronomeOverlay;
+	if (!overlay) {
 		return;
 	}
-	context.engine.updateConfig({ timeSignatureTrackOffsets: next });
-	if (
-		state.timeSignatureSimilarityRestrictEnabled ||
-		(state.multiTrackEnabled && state.timeSignatureBranchingEnabled)
-	) {
-		rebuildMixGraphAndSyncViz(context);
+	const { bpmBarEnabled, metronomeEnabled, metronomeVolumePct } =
+		useAppStore.getState();
+	const effective = resolveEffectiveMetronomeConfig(
+		buildBpmBarTimeSignatureInputFromStore(),
+	);
+	overlay.setMetronomeVolumePct?.(metronomeVolumePct);
+	overlay.setBeatsPerBarOverride?.(effective.beatsPerBarOverride);
+	overlay.setBeatOffset?.(effective.beatOffset);
+	if (bpmBarEnabled && metronomeEnabled) {
+		overlay.enable?.();
+	} else {
+		overlay.disable?.();
 	}
+}
+
+/**
+ * Toggles the BPM bar and automatically disables the metronome when the BPM
+ * bar is turned off.
+ */
+export function setBpmBarEnabled(context: AppContext, enabled: boolean): void {
+	if (typeof localStorage !== "undefined") {
+		localStorage.setItem("bpmBarEnabled", String(enabled));
+	}
+	useAppStore.setState({
+		bpmBarEnabled: enabled,
+		...(!enabled ? { metronomeEnabled: false } : {}),
+	});
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Toggles the metronome inside the BPM bar panel; only enabled when the BPM
+ * bar itself is active, switching "off" bar time signature mode to "auto".
+ */
+export function setBpmBarMetronomeEnabled(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	const state = useAppStore.getState();
+	const nextEnabled = state.bpmBarEnabled && enabled;
+	if (nextEnabled && state.bpmBarTimeSignatureMode === "off") {
+		storeBpmBarTimeSignatureMode("auto");
+		useAppStore.setState({
+			metronomeEnabled: true,
+			bpmBarTimeSignatureMode: "auto",
+		});
+	} else {
+		useAppStore.setState({ metronomeEnabled: nextEnabled });
+	}
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Updates the metronome volume percentage (0% to 200%) and syncs the overlay.
+ */
+export function setBpmBarMetronomeVolumePct(
+	context: AppContext,
+	volumePct: number,
+): void {
+	const clamped = clampMetronomeVolumePct(volumePct);
+	useAppStore.setState({ metronomeVolumePct: clamped });
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Updates the BPM bar time signature mode ("auto", "off", or "custom") and
+ * keeps the metronome overlay synchronized.
+ */
+export function setBpmBarTimeSignatureMode(
+	context: AppContext,
+	mode: BpmBarTimeSignatureMode,
+): void {
+	const normalized = normalizeBpmBarTimeSignatureMode(mode);
+	storeBpmBarTimeSignatureMode(normalized);
+	useAppStore.setState({ bpmBarTimeSignatureMode: normalized });
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Updates the BPM bar numerator and keeps single-track similarity restriction
+ * and the metronome overlay synchronized.
+ */
+export function setBpmBarNumerator(
+	context: AppContext,
+	numerator: number,
+): void {
+	const clamped = clampTimeSignatureNumerator(numerator);
+	storeBpmBarNumerator(clamped);
+	const state = useAppStore.getState();
+	if (!state.multiTrackEnabled) {
+		if (state.timeSignatureSimilarityRestrictEnabled) {
+			storeTimeSignatureSimilarityRestrictForTrack(getCurrentTrackId(), {
+				numerator: clamped,
+				denominator: state.timeSignatureSimilarityDenominator,
+			});
+		}
+		useAppStore.setState({
+			bpmBarNumerator: clamped,
+			timeSignatureSimilarityNumerator: clamped,
+		});
+		if (context.engine) {
+			context.engine.updateConfig({
+				timeSignatureSimilarityNumerator: clamped,
+			});
+			if (state.timeSignatureSimilarityRestrictEnabled) {
+				rebuildMixGraphAndSyncViz(context);
+			}
+		}
+	} else {
+		useAppStore.setState({ bpmBarNumerator: clamped });
+	}
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Updates the BPM bar denominator and keeps single-track similarity restriction
+ * and the metronome overlay synchronized.
+ */
+export function setBpmBarDenominator(
+	context: AppContext,
+	denominator: number,
+): void {
+	const clamped = clampTimeSignatureDenominator(denominator);
+	storeBpmBarDenominator(clamped);
+	const state = useAppStore.getState();
+	if (!state.multiTrackEnabled) {
+		if (state.timeSignatureSimilarityRestrictEnabled) {
+			storeTimeSignatureSimilarityRestrictForTrack(getCurrentTrackId(), {
+				numerator: state.timeSignatureSimilarityNumerator,
+				denominator: clamped,
+			});
+		}
+		useAppStore.setState({
+			bpmBarDenominator: clamped,
+			timeSignatureSimilarityDenominator: clamped,
+		});
+		if (context.engine) {
+			context.engine.updateConfig({
+				timeSignatureSimilarityDenominator: clamped,
+			});
+			if (state.timeSignatureSimilarityRestrictEnabled) {
+				rebuildMixGraphAndSyncViz(context);
+			}
+		}
+	} else {
+		useAppStore.setState({ bpmBarDenominator: clamped });
+	}
+	syncMetronomeOverlayFromStore(context);
+}
+
+/**
+ * Updates the per-song beat offset from the BPM bar controls and propagates it
+ * to track 0's time-signature offset, graph, and metronome overlay.
+ */
+export function setBpmBarBeatOffset(
+	context: AppContext,
+	offset: number,
+): void {
+	setTimeSignatureTrackOffset(context, 0, offset);
 }
 
 function reapplyMixFromCacheOrReload(context: AppContext): void {

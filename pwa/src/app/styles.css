@@ -828,6 +828,7 @@ button,
 }
 
 .canonizer-layer,
+.songsync-layer,
 .wubmachine-layer {
   position: relative;
   flex: 1 1 auto;
@@ -836,17 +837,20 @@ button,
   display: none;
 }
 
-.canonizer-layer canvas {
+.canonizer-layer canvas,
+.songsync-layer canvas {
   position: absolute;
   inset: 0;
 }
 
 #jukebox-viz.is-canonizer .canonizer-layer,
+#jukebox-viz.is-songsync .songsync-layer,
 #jukebox-viz.is-wubmachine .wubmachine-layer {
   display: block;
 }
 
 #jukebox-viz.is-canonizer .viz-layer,
+#jukebox-viz.is-songsync .viz-layer,
 #jukebox-viz.is-wubmachine .viz-layer {
   display: none;
 }
@@ -879,16 +883,19 @@ button,
 }
 
 #jukebox-viz.is-canonizer .viz-controls .viz-select-group,
+#jukebox-viz.is-songsync .viz-controls .viz-select-group,
 #jukebox-viz.is-wubmachine .viz-controls .viz-select-group {
   display: none;
 }
 
 #jukebox-viz:not(.is-canonizer) .canonizer-finish,
+#jukebox-viz:not(.is-songsync) .songsync-loop,
 #jukebox-viz:not(.is-wubmachine) .wubmachine-loop {
   display: none;
 }
 
 .canonizer-finish,
+.songsync-loop,
 .wubmachine-loop {
   display: inline-flex;
   flex-direction: row;
@@ -2394,4 +2401,91 @@ body.theme-light .viz-bpm.is-bpm-changed {
 
 .playlist-remove-icon {
   font-size: 16px;
+}
+
+/* Song Sync mode controls & mixer panel */
+.songsync-track-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.songsync-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.songsync-tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.songsync-track-row {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-panel);
+}
+
+.songsync-track-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.songsync-track-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.songsync-track-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.songsync-track-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.songsync-pill {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.songsync-pill.is-active {
+  border-color: var(--beat-highlight);
+  color: var(--beat-highlight);
+  font-weight: 600;
+}
+
+.tuning-checkbox-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.tuning-subsection {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }

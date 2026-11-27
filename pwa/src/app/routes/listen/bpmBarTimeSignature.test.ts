@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_TIME_SIGNATURE_BRANCH_MODE } from "@forever-jukebox/shared";
 import {
+  isBpmBarDownbeat,
   resolveBpmBarActiveSegment,
   resolveBpmBarSegmentCount,
   resolveBpmBarSmoothAnimation,
+  resolveEffectiveMetronomeConfig,
   resolveStoredBpmBarBeatOffsetForTrack,
   storeBpmBarBeatOffsetForTrack,
   type BpmBarTimeSignatureInput,
@@ -27,9 +29,7 @@ function createInput(
     timeSignatureSimilarityRestrictEnabled: false,
     timeSignatureSimilarityNumerator: 4,
     timeSignatureSimilarityDenominator: 4,
-    jukeboxAudioMode: "off",
-    metronomeBeatsPerBar: null,
-    metronomeBeatOffset: 0,
+    metronomeEnabled: false,
     metronomeDetectedBeatsPerBar: 4,
     ...overrides,
   };
@@ -76,11 +76,33 @@ describe("bpmBarTimeSignature", () => {
       resolveBpmBarSegmentCount(
         createInput({
           bpmBarTimeSignatureMode: "auto",
-          jukeboxAudioMode: "metronome",
-          metronomeBeatsPerBar: 5,
+          metronomeEnabled: true,
+          metronomeDetectedBeatsPerBar: 5,
         }),
       ),
     ).toBe(5);
+    expect(
+      resolveEffectiveMetronomeConfig(
+        createInput({
+          bpmBarTimeSignatureMode: "custom",
+          bpmBarNumerator: 3,
+          bpmBarDenominator: 4,
+          bpmBarBeatOffset: -1,
+        }),
+      ),
+    ).toEqual({ beatsPerBarOverride: 3, beatOffset: -1 });
+    expect(
+      isBpmBarDownbeat(
+        createInput({
+          bpmBarTimeSignatureMode: "custom",
+          bpmBarNumerator: 3,
+          bpmBarDenominator: 4,
+          bpmBarBeatOffset: -1,
+        }),
+        2,
+        null,
+      ),
+    ).toBe(true);
   });
 
   it("resolves active segment index respecting track offsets in custom mode", () => {

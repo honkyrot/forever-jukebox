@@ -242,6 +242,11 @@
     "visualizationNumber": "Visualización {{number}}",
     "autocanonizer": "Autocanonizador",
     "jukebox": "Jukebox",
+    "songSync": "Song Sync",
+    "songSynced": "sincronización",
+    "syncPlaylist": "Sincronizar playlist",
+    "addSongsToSync": "Añadir canciones para sincronizar",
+    "songSyncNeedPlaylist": "Añade al menos 2 canciones a tu playlist para sincronizarlas",
     "tune": "Ajustar",
     "info": "Info",
     "copyUrl": "Copiar URL",
@@ -369,7 +374,15 @@
     "bpmBarSegments_other": "{{count}} segmentos",
     "bpmBarBeats_one": "{{count}} pulso",
     "bpmBarBeats_other": "{{count}} pulsos",
-    "bpmBarBeatOffset": "Desfase de pulso:"
+    "bpmBarBeatOffset": "Desfase de pulso:",
+    "songSyncTitle": "Song Sync",
+    "masterTrack": "Pista maestra:",
+    "mute": "Silenciar",
+    "solo": "Solo",
+    "pan": "Paneo",
+    "beatOffset": "Desfase de pulso",
+    "tempoSync": "Sincronizar tempo (BPM)",
+    "normalizeVolume": "Normalización de volumen"
   },
   "settings": {
     "title": "Configuración",

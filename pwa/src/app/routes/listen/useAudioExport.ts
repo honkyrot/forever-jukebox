@@ -59,6 +59,7 @@ export function useAudioExport({
   playMode,
   jukeboxAudioMode,
   audioIntensity,
+  metronomeEnabled = false,
   metronomeVolumePct,
   metronomeBeatsPerBar,
   metronomeBeatOffset,
@@ -83,6 +84,7 @@ export function useAudioExport({
   playMode: PlayMode;
   jukeboxAudioMode: JukeboxAudioMode;
   audioIntensity: number;
+  metronomeEnabled?: boolean;
   metronomeVolumePct?: number;
   metronomeBeatsPerBar?: number | null;
   metronomeBeatOffset?: number;
@@ -362,6 +364,7 @@ export function useAudioExport({
         gain: player.getVolume(),
         audioMode: jukeboxAudioMode,
         audioIntensityPct: audioIntensity,
+        metronomeEnabled,
         metronomeVolumePct,
         metronomeBeatsPerBar,
         metronomeBeatOffset,

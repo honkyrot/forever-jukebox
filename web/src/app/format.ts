@@ -36,7 +36,6 @@ function formatAudioModeLabel(audioMode: JukeboxAudioMode) {
     eight_bit: i18n.t("audioModes.eightBit"),
     underwater: i18n.t("audioModes.underwater"),
     cathedral: i18n.t("audioModes.cathedral"),
-    metronome: i18n.t("audioModes.metronome"),
     cowbell: i18n.t("audioModes.cowbell"),
     swing: i18n.t("audioModes.swing"),
     instrumental: i18n.t("audioModes.instrumental"),
@@ -51,6 +50,9 @@ export function formatPlaybackTitle(
 ) {
   if (playMode === "autocanonizer") {
     return `${baseTitle} (${i18n.t("playback.autocanonized")})`;
+  }
+  if (playMode === "songsync") {
+    return `${baseTitle} (${i18n.t("playback.songSynced")})`;
   }
   if (playMode === "wubmachine") {
     return `${baseTitle} (${i18n.t("playback.wubMachineRemix")})`;

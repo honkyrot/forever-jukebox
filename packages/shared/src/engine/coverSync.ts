@@ -21,6 +21,87 @@ export interface AlignedBeatPair {
   distance: number;
 }
 
+export interface AlignedSectionSpan {
+  startA: number;
+  endA: number;
+  startB: number;
+  endB: number;
+  pairs: AlignedBeatPair[];
+}
+
+export interface MultiSectionAlignment {
+  pairs: AlignedBeatPair[];
+  spans: AlignedSectionSpan[];
+}
+
+interface ContextDistanceMatrix {
+  ctxD: Float32Array;
+  baseline: number;
+}
+
+/**
+ * Computes the pairwise beat distance matrix smoothed along a 5-beat diagonal
+ * context window (when beat grids are ~1:1) along with an adaptive similarity
+ * baseline for DTW alignment.
+ */
+function computeContextDistanceMatrix(
+  featuresA: readonly BeatFeature[],
+  featuresB: readonly BeatFeature[],
+): ContextDistanceMatrix {
+  const n = featuresA.length;
+  const m = featuresB.length;
+  const rawD = new Float32Array(n * m);
+  for (let i = 0; i < n; i += 1) {
+    const featA = featuresA[i];
+    const rowOffset = i * m;
+    for (let j = 0; j < m; j += 1) {
+      rawD[rowOffset + j] = computeCoverBeatDistance(featA, featuresB[j]);
+    }
+  }
+
+  const medA = medianPositiveDuration(featuresA);
+  const medB = medianPositiveDuration(featuresB);
+  const durationRatio = medA > 0 && medB > 0 ? medA / medB : 1;
+  const isNearOneToOne = durationRatio >= 0.75 && durationRatio <= 1.33;
+
+  let ctxD: Float32Array;
+  if (isNearOneToOne) {
+    ctxD = new Float32Array(n * m);
+    for (let i = 0; i < n; i += 1) {
+      const rowOffset = i * m;
+      for (let j = 0; j < m; j += 1) {
+        let weightedSum = 0;
+        let weightSum = 0;
+        for (let idx = 0; idx < DIAGONAL_OFFSETS.length; idx += 1) {
+          const k = DIAGONAL_OFFSETS[idx];
+          const ii = i + k;
+          const jj = j + k;
+          if (ii >= 0 && ii < n && jj >= 0 && jj < m) {
+            const w = DIAGONAL_WEIGHTS[idx];
+            weightedSum += rawD[ii * m + jj] * w;
+            weightSum += w;
+          }
+        }
+        ctxD[rowOffset + j] =
+          weightSum > 0 ? weightedSum / weightSum : rawD[rowOffset + j];
+      }
+    }
+  } else {
+    ctxD = rawD;
+  }
+
+  const totalCells = n * m;
+  const stride = Math.max(1, Math.floor(totalCells / 2048));
+  const samples: number[] = [];
+  for (let idx = 0; idx < totalCells; idx += stride) {
+    samples.push(ctxD[idx]);
+  }
+  samples.sort((a, b) => a - b);
+  const medianDist = samples[Math.floor(samples.length / 2)] ?? 0;
+  const baseline = Math.max(15, Math.min(55, medianDist * 0.85));
+  return { ctxD, baseline };
+}
+
 function euclideanDistance(a: readonly number[], b: readonly number[]): number {
   let sum = 0;
   for (let i = 0; i < a.length; i += 1) {
@@ -199,54 +280,8 @@ export function alignTrackPairDtw(
     return [];
   }
 
-  const rawD = new Float32Array(n * m);
-  for (let i = 0; i < n; i += 1) {
-    const featA = featuresA[i];
-    const rowOffset = i * m;
-    for (let j = 0; j < m; j += 1) {
-      rawD[rowOffset + j] = computeCoverBeatDistance(featA, featuresB[j]);
-    }
-  }
-
-  const medA = medianPositiveDuration(featuresA);
-  const medB = medianPositiveDuration(featuresB);
-  const durationRatio = medA > 0 && medB > 0 ? medA / medB : 1;
-  const isNearOneToOne = durationRatio >= 0.75 && durationRatio <= 1.33;
-
-  let ctxD: Float32Array;
-  if (isNearOneToOne) {
-    ctxD = new Float32Array(n * m);
-    for (let i = 0; i < n; i += 1) {
-      const rowOffset = i * m;
-      for (let j = 0; j < m; j += 1) {
-        let weightedSum = 0;
-        let weightSum = 0;
-        for (let idx = 0; idx < DIAGONAL_OFFSETS.length; idx += 1) {
-          const k = DIAGONAL_OFFSETS[idx];
-          const ii = i + k;
-          const jj = j + k;
-          if (ii >= 0 && ii < n && jj >= 0 && jj < m) {
-            const w = DIAGONAL_WEIGHTS[idx];
-            weightedSum += rawD[ii * m + jj] * w;
-            weightSum += w;
-          }
-        }
-        ctxD[rowOffset + j] = weightSum > 0 ? weightedSum / weightSum : rawD[rowOffset + j];
-      }
-    }
-  } else {
-    ctxD = rawD;
-  }
-
+  const { ctxD, baseline } = computeContextDistanceMatrix(featuresA, featuresB);
   const totalCells = n * m;
-  const stride = Math.max(1, Math.floor(totalCells / 2048));
-  const samples: number[] = [];
-  for (let idx = 0; idx < totalCells; idx += stride) {
-    samples.push(ctxD[idx]);
-  }
-  samples.sort((a, b) => a - b);
-  const medianDist = samples[Math.floor(samples.length / 2)] ?? 0;
-  const baseline = Math.max(15, Math.min(55, medianDist * 0.85));
 
   const dp = new Float32Array(totalCells);
   // 0 = path start, 1 = (1,1) diagonal, 2 = (1,2) horizontal warp, 3 = (2,1) vertical warp
@@ -353,9 +388,236 @@ export function alignTrackPairDtw(
   return path;
 }
 
+const MAX_MULTI_SECTION_SPANS = 12;
+
 /**
- * Builds aligned cross-track candidate edges across merged tracks via DTW,
- * retaining the closest aligned destination beat per target track for each beat.
+ * Computes multi-section local DTW alignment between two tracks of potentially
+ * very different lengths (e.g. a 4-minute full version vs a 2-minute short cover).
+ * Each beat on the longer track belongs to at most one matched span while the
+ * shorter track may be matched multiple times across repeated sections; unique
+ * sections on the longer track remain unmatched.
+ */
+export function alignTrackPairMultiSectionDtw(
+  featuresA: readonly BeatFeature[],
+  featuresB: readonly BeatFeature[],
+): MultiSectionAlignment {
+  const n = featuresA.length;
+  const m = featuresB.length;
+  if (n === 0 || m === 0) {
+    return { pairs: [], spans: [] };
+  }
+
+  const swapped = m > n;
+  const longFeatures = swapped ? featuresB : featuresA;
+  const shortFeatures = swapped ? featuresA : featuresB;
+  const nLong = longFeatures.length;
+  const nShort = shortFeatures.length;
+
+  // When both tracks have comparable length, check single-path semi-global DTW
+  // first so standard same-length covers preserve identical alignment behavior.
+  if (nLong / Math.max(1, nShort) <= 1.25 || nLong < 16) {
+    const singlePath = alignTrackPairDtw(featuresA, featuresB);
+    const coveredCount = new Set(
+      singlePath.map((pair) => (swapped ? pair.indexB : pair.indexA)),
+    ).size;
+    if (nLong < 16 || coveredCount >= nLong * 0.5) {
+      if (singlePath.length === 0) {
+        return { pairs: [], spans: [] };
+      }
+      return {
+        pairs: singlePath,
+        spans: [
+          {
+            startA: singlePath[0].indexA,
+            endA: singlePath[singlePath.length - 1].indexA,
+            startB: singlePath[0].indexB,
+            endB: singlePath[singlePath.length - 1].indexB,
+            pairs: singlePath,
+          },
+        ],
+      };
+    }
+  }
+
+  const { ctxD, baseline } = computeContextDistanceMatrix(
+    longFeatures,
+    shortFeatures,
+  );
+  // Local Smith-Waterman matching uses a tighter zero-crossing threshold than
+  // global DTW so spans terminate promptly when entering unrelated unique sections.
+  const localBaseline = Math.max(12, Math.min(35, baseline * 0.72));
+  const totalCells = nLong * nShort;
+  const coveredLong = new Uint8Array(nLong);
+  const dp = new Float32Array(totalCells);
+  // 0 = local start, 1 = (1,1) diagonal, 2 = (1,2) horizontal warp, 3 = (2,1) vertical warp
+  const back = new Uint8Array(totalCells);
+
+  const minSpanBeats = Math.min(8, Math.max(3, Math.floor(nShort * 0.25)));
+  const minScore = minSpanBeats * Math.max(6, localBaseline * 0.35);
+  const spans: AlignedSectionSpan[] = [];
+
+  for (let iter = 0; iter < MAX_MULTI_SECTION_SPANS; iter += 1) {
+    dp.fill(0);
+    back.fill(0);
+
+    let bestGlobalScore = 0;
+    let bestGlobalI = -1;
+    let bestGlobalJ = -1;
+
+    for (let i = 0; i < nLong; i += 1) {
+      if (coveredLong[i] === 1) {
+        continue;
+      }
+      const rowOffset = i * nShort;
+      const prevRowOffset = (i - 1) * nShort;
+      const prev2RowOffset = (i - 2) * nShort;
+      const canDiagFromPrev = i >= 1 && coveredLong[i - 1] === 0;
+      const canVertFromPrev2 =
+        i >= 2 && coveredLong[i - 1] === 0 && coveredLong[i - 2] === 0;
+
+      for (let j = 0; j < nShort; j += 1) {
+        const sCur = localBaseline - ctxD[rowOffset + j];
+        let bestScore = Math.max(0, 2 * sCur);
+        let bestBack = 0;
+
+        if (canDiagFromPrev && j >= 1) {
+          const diagScore = dp[prevRowOffset + (j - 1)] + 2 * sCur;
+          if (diagScore > bestScore) {
+            bestScore = diagScore;
+            bestBack = 1;
+          }
+        }
+        if (canDiagFromPrev && j >= 2) {
+          const sMid = localBaseline - ctxD[rowOffset + (j - 1)];
+          const horizScore =
+            dp[prevRowOffset + (j - 2)] + sMid + sCur - DTW_WARP_PENALTY;
+          if (horizScore > bestScore) {
+            bestScore = horizScore;
+            bestBack = 2;
+          }
+        }
+        if (canVertFromPrev2 && j >= 1) {
+          const sMid = localBaseline - ctxD[prevRowOffset + j];
+          const vertScore =
+            dp[prev2RowOffset + (j - 1)] + sMid + sCur - DTW_WARP_PENALTY;
+          if (vertScore > bestScore) {
+            bestScore = vertScore;
+            bestBack = 3;
+          }
+        }
+
+        dp[rowOffset + j] = bestScore;
+        back[rowOffset + j] = bestBack;
+
+        if (bestScore > bestGlobalScore) {
+          bestGlobalScore = bestScore;
+          bestGlobalI = i;
+          bestGlobalJ = j;
+        }
+      }
+    }
+
+    if (bestGlobalI < 0 || bestGlobalScore < minScore) {
+      break;
+    }
+
+    const rawSpan: Array<{ iLong: number; jShort: number; distance: number }> =
+      [];
+    let i = bestGlobalI;
+    let j = bestGlobalJ;
+    while (i >= 0 && j >= 0 && coveredLong[i] === 0) {
+      const idx = i * nShort + j;
+      if (dp[idx] <= 0) {
+        break;
+      }
+      const step = back[idx];
+      rawSpan.push({ iLong: i, jShort: j, distance: ctxD[idx] });
+      if (step === 0) {
+        break;
+      }
+      if (step === 1) {
+        i -= 1;
+        j -= 1;
+      } else if (step === 2) {
+        rawSpan.push({
+          iLong: i,
+          jShort: j - 1,
+          distance: ctxD[i * nShort + (j - 1)],
+        });
+        i -= 1;
+        j -= 2;
+      } else {
+        rawSpan.push({
+          iLong: i - 1,
+          jShort: j,
+          distance: ctxD[(i - 1) * nShort + j],
+        });
+        i -= 2;
+        j -= 1;
+      }
+    }
+
+    rawSpan.reverse();
+
+    // Trim weak boundary beats whose distance exceeds the local match ceiling.
+    const boundaryCeiling = localBaseline;
+    let trimStart = 0;
+    while (
+      trimStart < rawSpan.length &&
+      rawSpan[trimStart].distance > boundaryCeiling
+    ) {
+      trimStart += 1;
+    }
+    let trimEnd = rawSpan.length - 1;
+    while (
+      trimEnd >= trimStart &&
+      rawSpan[trimEnd].distance > boundaryCeiling
+    ) {
+      trimEnd -= 1;
+    }
+    const trimmed = rawSpan.slice(trimStart, trimEnd + 1);
+    const uniqueLongBeats = new Set(trimmed.map((p) => p.iLong));
+    const meanDist =
+      trimmed.length > 0
+        ? trimmed.reduce((sum, p) => sum + p.distance, 0) / trimmed.length
+        : Number.POSITIVE_INFINITY;
+
+    if (uniqueLongBeats.size < minSpanBeats || meanDist > localBaseline * 0.9) {
+      // Mask the peak row so subsequent iterations explore remaining sections.
+      coveredLong[bestGlobalI] = 1;
+      continue;
+    }
+
+    for (const row of uniqueLongBeats) {
+      coveredLong[row] = 1;
+    }
+
+    const spanPairs: AlignedBeatPair[] = trimmed.map((p) => ({
+      indexA: swapped ? p.jShort : p.iLong,
+      indexB: swapped ? p.iLong : p.jShort,
+      distance: p.distance,
+    }));
+
+    spans.push({
+      startA: spanPairs[0].indexA,
+      endA: spanPairs[spanPairs.length - 1].indexA,
+      startB: spanPairs[0].indexB,
+      endB: spanPairs[spanPairs.length - 1].indexB,
+      pairs: spanPairs,
+    });
+  }
+
+  spans.sort((a, b) => a.startA - b.startA || a.startB - b.startB);
+  const pairs = spans
+    .flatMap((span) => span.pairs)
+    .sort((a, b) => a.indexA - b.indexA || a.indexB - b.indexB);
+  return { pairs, spans };
+}
+
+/**
+ * Builds aligned cross-track candidate edges across merged tracks via multi-section
+ * DTW, retaining the closest aligned destination beat per target track and matched
+ * section span for each beat.
  */
 export function buildCoverSyncCrossEdges(
   quanta: readonly QuantumBase[],
@@ -382,9 +644,18 @@ export function buildCoverSyncCrossEdges(
   }
 
   const featuresByTrack = groups.map((beats) => extractTrackBeatFeatures(beats));
-  const bestBySrcAndTrack = new Map<number, Map<number, Edge>>();
+  // Keyed by src.which -> dest.trackIndex -> spanKey -> best Edge in that span.
+  const bestBySrcTrackSpan = new Map<
+    number,
+    Map<number, Map<number, Edge>>
+  >();
 
-  const recordBest = (src: QuantumBase, dest: QuantumBase, distance: number) => {
+  const recordBest = (
+    src: QuantumBase,
+    dest: QuantumBase,
+    distance: number,
+    spanKey: number,
+  ) => {
     if (
       !Number.isFinite(distance) ||
       distance >= maxThreshold ||
@@ -392,14 +663,19 @@ export function buildCoverSyncCrossEdges(
     ) {
       return;
     }
-    let perTargetTrack = bestBySrcAndTrack.get(src.which);
+    let perTargetTrack = bestBySrcTrackSpan.get(src.which);
     if (!perTargetTrack) {
-      perTargetTrack = new Map<number, Edge>();
-      bestBySrcAndTrack.set(src.which, perTargetTrack);
+      perTargetTrack = new Map<number, Map<number, Edge>>();
+      bestBySrcTrackSpan.set(src.which, perTargetTrack);
     }
-    const existing = perTargetTrack.get(dest.trackIndex);
+    let perSpan = perTargetTrack.get(dest.trackIndex);
+    if (!perSpan) {
+      perSpan = new Map<number, Edge>();
+      perTargetTrack.set(dest.trackIndex, perSpan);
+    }
+    const existing = perSpan.get(spanKey);
     if (!existing || distance < existing.distance) {
-      perTargetTrack.set(dest.trackIndex, {
+      perSpan.set(spanKey, {
         id: -1,
         src,
         dest,
@@ -416,10 +692,13 @@ export function buildCoverSyncCrossEdges(
       for (let b = a + 1; b < groups.length; b += 1) {
         const beatsB = groups[b];
         const featuresB = featuresByTrack[b];
-        const aligned = alignTrackPairDtw(featuresA, featuresB);
-        for (const pair of aligned) {
-          recordBest(beatsA[pair.indexA], beatsB[pair.indexB], pair.distance);
-          recordBest(beatsB[pair.indexB], beatsA[pair.indexA], pair.distance);
+        const alignment = alignTrackPairMultiSectionDtw(featuresA, featuresB);
+        for (let spanIdx = 0; spanIdx < alignment.spans.length; spanIdx += 1) {
+          const span = alignment.spans[spanIdx];
+          for (const pair of span.pairs) {
+            recordBest(beatsA[pair.indexA], beatsB[pair.indexB], pair.distance, spanIdx);
+            recordBest(beatsB[pair.indexB], beatsA[pair.indexA], pair.distance, spanIdx);
+          }
         }
       }
     }
@@ -436,17 +715,20 @@ export function buildCoverSyncCrossEdges(
     for (let t = 1; t < groups.length; t += 1) {
       const beatsT = groups[t];
       const featuresT = featuresByTrack[t];
-      const aligned = alignTrackPairDtw(features0, featuresT);
+      const alignment = alignTrackPairMultiSectionDtw(features0, featuresT);
       const mapT = track0ToSecondary[t];
-      for (const pair of aligned) {
-        recordBest(beats0[pair.indexA], beatsT[pair.indexB], pair.distance);
-        recordBest(beatsT[pair.indexB], beats0[pair.indexA], pair.distance);
-        const prev = mapT.get(pair.indexA);
-        if (!prev || pair.distance < prev.distance) {
-          mapT.set(pair.indexA, {
-            indexT: pair.indexB,
-            distance: pair.distance,
-          });
+      for (let spanIdx = 0; spanIdx < alignment.spans.length; spanIdx += 1) {
+        const span = alignment.spans[spanIdx];
+        for (const pair of span.pairs) {
+          recordBest(beats0[pair.indexA], beatsT[pair.indexB], pair.distance, spanIdx);
+          recordBest(beatsT[pair.indexB], beats0[pair.indexA], pair.distance, spanIdx);
+          const prev = mapT.get(pair.indexA);
+          if (!prev || pair.distance < prev.distance) {
+            mapT.set(pair.indexA, {
+              indexT: pair.indexB,
+              distance: pair.distance,
+            });
+          }
         }
       }
     }
@@ -468,16 +750,27 @@ export function buildCoverSyncCrossEdges(
             features1[entry1.indexT],
             features2[entry2.indexT],
           );
-          recordBest(beats1[entry1.indexT], beats2[entry2.indexT], distance);
-          recordBest(beats2[entry2.indexT], beats1[entry1.indexT], distance);
+          recordBest(beats1[entry1.indexT], beats2[entry2.indexT], distance, 0);
+          recordBest(beats2[entry2.indexT], beats1[entry1.indexT], distance, 0);
         }
       }
     }
   }
 
   const result = new Map<number, Edge[]>();
-  for (const [srcWhich, byTrack] of bestBySrcAndTrack.entries()) {
-    const edges = [...byTrack.values()].sort((a, b) => a.distance - b.distance);
+  for (const [srcWhich, byTrack] of bestBySrcTrackSpan.entries()) {
+    const dedupedByDest = new Map<number, Edge>();
+    for (const perSpan of byTrack.values()) {
+      for (const edge of perSpan.values()) {
+        const existing = dedupedByDest.get(edge.dest.which);
+        if (!existing || edge.distance < existing.distance) {
+          dedupedByDest.set(edge.dest.which, edge);
+        }
+      }
+    }
+    const edges = [...dedupedByDest.values()].sort(
+      (a, b) => a.distance - b.distance,
+    );
     result.set(srcWhich, edges);
   }
   return result;

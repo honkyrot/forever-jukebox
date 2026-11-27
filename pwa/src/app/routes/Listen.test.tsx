@@ -622,6 +622,55 @@ vi.mock("@forever-jukebox/shared/autocanonizer/AutocanonizerController", () => (
   },
 }));
 
+vi.mock("@forever-jukebox/shared/songsync/SongSyncController", () => ({
+  SongSyncController: class SongSyncController {
+    private meta: Array<Record<string, unknown>> = [];
+    private masterTrackIndex = 0;
+    setVisible = vi.fn();
+    resizeNow = vi.fn();
+    setLoop = vi.fn();
+    setVolume = vi.fn();
+    setOnBeat = vi.fn();
+    setOnEnded = vi.fn();
+    setOnSelect = vi.fn();
+    setTracks = vi.fn(
+      (
+        inputs: Array<{ title: string; durationSec: number }>,
+        _context: unknown,
+        options?: { masterTrackIndex?: number },
+      ) => {
+        this.masterTrackIndex = options?.masterTrackIndex ?? 0;
+        this.meta = inputs.map((input, idx) => ({
+          trackIndex: idx,
+          title: input.title,
+          duration: input.durationSec,
+          color: idx === 0 ? "#4cc9f0" : "#51cf66",
+          beatCount: 8,
+          gain: 1,
+          pan: 0,
+          muted: false,
+          solo: false,
+          beatOffset: 0,
+          isMaster: idx === this.masterTrackIndex,
+        }));
+      },
+    );
+    setTrackConfig = vi.fn();
+    getTrackMeta = vi.fn(() => this.meta);
+    getMasterTrackIndex = vi.fn(() => this.masterTrackIndex);
+    getCurrentIndex = vi.fn(() => 0);
+    isReady = vi.fn(() => this.meta.length >= 2);
+    start = vi.fn();
+    startAtIndex = vi.fn();
+    stop = vi.fn();
+    resetVisualization = vi.fn();
+    reset = vi.fn(() => {
+      this.meta = [];
+    });
+    destroy = vi.fn();
+  },
+}));
+
 // The pacing of the loading steps is not under test here; finish as soon as the work does.
 vi.mock("@forever-jukebox/shared/ui/LoadingProgress", async (importOriginal) => {
   const { useEffect } = await import("react");
@@ -954,7 +1003,7 @@ describe("Listen route behavior", () => {
 
     await changeSelect(modeSelect, "autocanonizer");
 
-    expect(tuningButton.classList.contains("is-hidden")).toBe(true);
+    expect(tuningButton.classList.contains("is-hidden")).toBe(false);
     expect(infoButton.classList.contains("is-hidden")).toBe(true);
     expect(playTitle?.textContent).toContain("(autocanonized)");
     const beatsLabelHidden = Array.from(
@@ -2980,42 +3029,71 @@ describe("Listen route behavior", () => {
     rendered.unmount();
   });
 
-  it("arms metronome mode under Playback Styles when selected", async () => {
+  it("toggles metronome inside the BPM bar panel, syncs signature/offset, and disables when BPM bar turns off", async () => {
     metronomeOverlayInstances.length = 0;
     const rendered = renderListen();
     await settleEffects();
 
     await openTuningModal(rendered.container);
-    const metronomeInput = getRequired<HTMLInputElement>(
+    expect(
+      rendered.container.querySelector("#audio-mode-metronome"),
+    ).toBeNull();
+
+    const metronomeToggle = getRequired<HTMLInputElement>(
       rendered.container,
-      "#audio-mode-metronome"
+      "#bpm-bar-metronome-toggle",
     );
-    expect(metronomeInput.closest(".audio-mode-section")?.textContent).toContain(
-      "Playback Styles"
-    );
-    await click(metronomeInput);
+    await click(metronomeToggle);
+
     const volSlider = getRequired<HTMLInputElement>(
       rendered.container,
-      "#metronome-volume"
+      "#metronome-volume",
     );
-    const tsSlider = getRequired<HTMLInputElement>(
+    const tsModeSelect = getRequired<HTMLSelectElement>(
       rendered.container,
-      "#metronome-time-signature"
-    );
-    const offsetSlider = getRequired<HTMLInputElement>(
-      rendered.container,
-      "#metronome-beat-offset"
+      "#bpm-bar-time-sig-mode",
     );
     await changeRange(volSlider, "160");
-    await changeRange(tsSlider, "2");
-    await changeRange(offsetSlider, "2");
+    await act(async () => {
+      tsModeSelect.value = "custom";
+      tsModeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const numInput = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#bpm-bar-numerator",
+    );
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(numInput, "3");
+      numInput.dispatchEvent(new Event("input", { bubbles: true }));
+      numInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const incBtn = getRequired<HTMLButtonElement>(
+      rendered.container,
+      "#bpm-bar-beat-offset-inc",
+    );
+    await click(incBtn);
 
-    const playTitle = getRequired<HTMLDivElement>(rendered.container, ".play-title");
-    expect(playTitle.textContent).toContain("(metronome)");
     expect(metronomeOverlayInstances[0]?.enable).toHaveBeenCalled();
-    expect(metronomeOverlayInstances[0]?.setMetronomeVolumePct).toHaveBeenCalledWith(160);
-    expect(metronomeOverlayInstances[0]?.setBeatsPerBarOverride).toHaveBeenCalledWith(3);
-    expect(metronomeOverlayInstances[0]?.setBeatOffset).toHaveBeenCalledWith(2);
+    expect(
+      metronomeOverlayInstances[0]?.setMetronomeVolumePct,
+    ).toHaveBeenLastCalledWith(160);
+    expect(
+      metronomeOverlayInstances[0]?.setBeatsPerBarOverride,
+    ).toHaveBeenLastCalledWith(3);
+    expect(
+      metronomeOverlayInstances[0]?.setBeatOffset,
+    ).toHaveBeenLastCalledWith(1);
+
+    const bpmBarToggle = getRequired<HTMLInputElement>(
+      rendered.container,
+      "#bpm-bar-toggle",
+    );
+    await click(bpmBarToggle);
+    expect(metronomeOverlayInstances[0]?.disable).toHaveBeenCalled();
     rendered.unmount();
   });
 
@@ -3338,6 +3416,117 @@ describe("Listen route behavior", () => {
     } finally {
       resolveSpy.mockRestore();
       canonizerMixSpy.mockRestore();
+    }
+  });
+
+  it("reloads Song Sync when queued tracks are added or removed and resets below two tracks", async () => {
+    const songTwo = new File([new Uint8Array([4, 5, 6])], "track-two.wav", {
+      lastModified: 5678,
+    });
+    const songThree = new File([new Uint8Array([7, 8, 9])], "track-three.wav", {
+      lastModified: 9012,
+    });
+    const bufA = { duration: 4, tag: "a" } as unknown as AudioBuffer;
+    const bufB = { duration: 3, tag: "b" } as unknown as AudioBuffer;
+    const bufC = { duration: 2, tag: "c" } as unknown as AudioBuffer;
+
+    mockAppState.mixQueue = [
+      {
+        id: "q-1",
+        file: mockAppState.file,
+        fileHandle: null,
+        title: "Song A",
+        fingerprint: "fp-a",
+      },
+      {
+        id: "q-2",
+        file: songTwo,
+        fileHandle: null,
+        title: "Song B",
+        fingerprint: "fp-b",
+      },
+    ];
+
+    const resolveSpy = vi
+      .spyOn(localMix, "resolveLocalMixSources")
+      .mockImplementation(async (tracks) =>
+        tracks.map((track) => ({
+          id: track.id,
+          fingerprint: track.fingerprint ?? track.id,
+          title: track.title,
+          analysis: mockAnalysis as never,
+          audioBuffer:
+            track.id === "q-1" ? bufA : track.id === "q-2" ? bufB : bufC,
+          tempo: 120,
+          file: track.file ?? mockAppState.file!,
+          fileHandle: null,
+        })),
+      );
+    const buildSyncSpy = vi
+      .spyOn(localMix, "buildSongSyncMix")
+      .mockImplementation((_ctx, sources) => ({
+        prepared: {
+          buffers: sources.map((s) => s.audioBuffer),
+          durationsSec: sources.map((s) => s.audioBuffer.duration),
+          appliedGains: sources.map(() => 1),
+        },
+        tempoRatios: sources.map(() => 1),
+        masterTempo: 120,
+      }));
+
+    const rendered = renderListen();
+    try {
+      await settleEffects();
+
+      await changeSelect(
+        getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+        "songsync",
+      );
+      await settleEffects();
+
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      expect(resolveSpy.mock.calls[0]?.[0].map((t) => t.id)).toEqual([
+        "q-1",
+        "q-2",
+      ]);
+      expect(buildSyncSpy).toHaveBeenCalledTimes(1);
+
+      // Adding a 3rd queued song reuses q-1 and q-2 and only resolves q-3.
+      mockAppState.mixQueue = [
+        ...mockAppState.mixQueue,
+        {
+          id: "q-3",
+          file: songThree,
+          fileHandle: null,
+          title: "Song C",
+          fingerprint: "fp-c",
+        },
+      ];
+      rendered.rerender();
+      await settleEffects();
+
+      expect(resolveSpy).toHaveBeenCalledTimes(2);
+      expect(resolveSpy.mock.calls[1]?.[0].map((t) => t.id)).toEqual(["q-3"]);
+      expect(buildSyncSpy).toHaveBeenCalledTimes(2);
+
+      // Removing q-3 reuses cached sources without re-resolving and updates the mix.
+      mockAppState.mixQueue = mockAppState.mixQueue.slice(0, 2);
+      rendered.rerender();
+      await settleEffects();
+
+      expect(resolveSpy).toHaveBeenCalledTimes(2);
+      expect(buildSyncSpy).toHaveBeenCalledTimes(3);
+
+      // Dropping below 2 tracks exits the active Song Sync mix cleanly.
+      mockAppState.mixQueue = mockAppState.mixQueue.slice(0, 1);
+      rendered.rerender();
+      await settleEffects();
+
+      expect(rendered.container.querySelector("#songsync-mixer-button")).toBeNull();
+    } finally {
+      resolveSpy.mockRestore();
+      buildSyncSpy.mockRestore();
+      rendered.unmount();
     }
   });
 });

@@ -27,6 +27,12 @@ export interface DualAudioBufferResult {
   appliedOtherGain: number;
 }
 
+export interface MultiAudioBufferResult {
+  buffers: AudioBuffer[];
+  durationsSec: number[];
+  appliedGains: number[];
+}
+
 interface PreparedSlice {
   buffer: AudioBuffer;
   step: number;
@@ -312,5 +318,70 @@ export function prepareDualAudioBuffers(
     mainDurationSec: mainSlice.durationSec,
     otherDurationSec: otherSlice.durationSec,
     appliedOtherGain: otherSlice.effectiveGain,
+  };
+}
+
+/**
+ * Prepares N separate resampled and optionally RMS-normalized AudioBuffers for
+ * simultaneous multi-track playback modes such as Song Sync.
+ */
+export function prepareMultiAudioBuffers(
+  context: BaseAudioContext,
+  entries: MultiTrackAudioEntry[],
+  options?: CombineAudioOptions,
+): MultiAudioBufferResult {
+  const targetSampleRate = context.sampleRate;
+  if (entries.length === 0) {
+    return {
+      buffers: [],
+      durationsSec: [],
+      appliedGains: [],
+    };
+  }
+
+  const normalizeVolume = Boolean(options?.normalizeVolume) && entries.length >= 2;
+  const stats = entries.map((entry) => measureBufferRmsAndPeak(entry.buffer));
+  const masterRms = stats[0]?.rms ?? 0;
+
+  const buffers: AudioBuffer[] = [];
+  const durationsSec: number[] = [];
+  const appliedGains: number[] = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const normGain =
+      normalizeVolume && index > 0
+        ? computeAutoNormGain(stats[index], masterRms)
+        : 1;
+    const slice = prepareSlice(
+      entry.buffer,
+      targetSampleRate,
+      entry.tempoRatio,
+      normGain,
+      entry.gain,
+    );
+    const canReuse =
+      slice.step === 1 &&
+      slice.scaledFrames === entry.buffer.length &&
+      slice.effectiveGain === 1;
+    if (canReuse) {
+      buffers.push(entry.buffer);
+    } else {
+      const out = context.createBuffer(
+        Math.max(1, entry.buffer.numberOfChannels),
+        slice.scaledFrames,
+        targetSampleRate,
+      );
+      writeSliceToBuffer(slice, out, 0);
+      buffers.push(out);
+    }
+    durationsSec.push(slice.durationSec);
+    appliedGains.push(slice.effectiveGain);
+  }
+
+  return {
+    buffers,
+    durationsSec,
+    appliedGains,
   };
 }
