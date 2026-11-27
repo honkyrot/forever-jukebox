@@ -215,4 +215,61 @@ describe("VizTop", () => {
     expect(document.getElementById("songsync-loop")).not.toBeNull();
     expect(document.getElementById("multi-track-mix-toggle")).toBeNull();
   });
+
+  it("shows Karaoke and Lyrics toggles in single-track jukebox mode when allow_lyrics is enabled", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "jukebox",
+        multiTrackEnabled: false,
+        audioLoaded: true,
+        analysisLoaded: true,
+        appConfig: {
+          allow_user_upload: false,
+          allow_user_url: false,
+          allow_lyrics: true,
+        },
+        lyricsKaraokeEnabled: false,
+        lyricsPanelOpen: false,
+      });
+    });
+
+    render(<VizTop />);
+    const karaokeBtn = document.getElementById("lyrics-karaoke-toggle")!;
+    const panelBtn = document.getElementById("lyrics-panel-toggle")!;
+    expect(karaokeBtn).not.toBeNull();
+    expect(panelBtn).not.toBeNull();
+    expect(karaokeBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(panelBtn.getAttribute("aria-pressed")).toBe("false");
+
+    await userEvent.click(karaokeBtn);
+    await userEvent.click(panelBtn);
+    expect(useAppStore.getState().lyricsKaraokeEnabled).toBe(true);
+    expect(useAppStore.getState().lyricsPanelOpen).toBe(true);
+  });
+
+  it("shows Karaoke and Lyrics toggles in single-song autocanonizer mode but hides them in 2-song mix", () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        audioLoaded: true,
+        analysisLoaded: true,
+        appConfig: {
+          allow_user_upload: false,
+          allow_user_url: false,
+          allow_lyrics: true,
+        },
+      });
+    });
+
+    render(<VizTop />);
+    expect(document.getElementById("lyrics-karaoke-toggle")).not.toBeNull();
+    expect(document.getElementById("lyrics-panel-toggle")).not.toBeNull();
+
+    act(() => {
+      useAppStore.setState({ autocanonizerMixEnabled: true });
+    });
+    expect(document.getElementById("lyrics-karaoke-toggle")).toBeNull();
+    expect(document.getElementById("lyrics-panel-toggle")).toBeNull();
+  });
 });

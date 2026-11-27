@@ -14,9 +14,15 @@ class ApiSettings:
     search_limit: int
     youtube_search_limit: int
     http_timeout_s: float
+    spicy_lyrics_api_key: str | None = None
 
 
 def load_settings() -> ApiSettings:
+    spicy_key = (
+        os.environ.get("SPICY_LYRICS_CLIENT_KEY")
+        or os.environ.get("SPICY_LYRICS_API_KEY")
+        or ""
+    ).strip() or None
     return ApiSettings(
         spotify_client_id=os.environ.get("SPOTIFY_CLIENT_ID"),
         spotify_client_secret=os.environ.get("SPOTIFY_CLIENT_SECRET"),
@@ -24,6 +30,7 @@ def load_settings() -> ApiSettings:
         search_limit=_env_int("SEARCH_LIMIT", 10),
         youtube_search_limit=_env_int("YOUTUBE_SEARCH_LIMIT", 10),
         http_timeout_s=_env_float("HTTP_TIMEOUT_S", 10.0),
+        spicy_lyrics_api_key=spicy_key,
     )
 
 

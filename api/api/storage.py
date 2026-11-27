@@ -30,6 +30,7 @@ from .utils import (
     analysis_path_for,
     audio_path_for,
     get_logger,
+    lyrics_path_for,
     read_analysis_json,
     resolve_analysis_path,
 )
@@ -108,6 +109,23 @@ class LocalStore:
     def delete_analysis(self, job_id: str) -> None:
         _remove_files(self.root / "analysis", job_id)
 
+    def read_lyrics(self, job_id: str) -> dict[str, Any] | None:
+        path = lyrics_path_for(self.root, job_id)
+        if not path.exists():
+            return None
+        return read_analysis_json(path)
+
+    def save_lyrics(self, job_id: str, payload: dict[str, Any]) -> None:
+        path = lyrics_path_for(self.root, job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".gz.tmp")
+        with gzip.open(tmp_path, "wt", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        tmp_path.replace(path)
+
+    def delete_lyrics(self, job_id: str) -> None:
+        _remove_files(self.root / "lyrics", job_id)
+
     def artifact_bytes(self, job_ids: Iterable[str]) -> dict[str, int]:
         sizes: dict[str, int] = {}
         for job_id in job_ids:
@@ -129,6 +147,10 @@ def audio_key(job_id: str) -> str:
 
 def analysis_key(job_id: str) -> str:
     return f"analysis/{job_id}.json.gz"
+
+
+def lyrics_key(job_id: str) -> str:
+    return f"lyrics/{job_id}.json.gz"
 
 
 def backup_key(name: str) -> str:
@@ -267,6 +289,28 @@ class S3Store:
         _remove_files(self.scratch / "analysis", job_id)
         self.client.delete_object(Bucket=self.bucket, Key=analysis_key(job_id))
 
+    def read_lyrics(self, job_id: str) -> dict[str, Any] | None:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=lyrics_key(job_id))
+        except Exception as exc:
+            if _is_missing(exc):
+                return None
+            raise
+        return json.loads(gzip.decompress(response["Body"].read()))
+
+    def save_lyrics(self, job_id: str, payload: dict[str, Any]) -> None:
+        raw = gzip.compress(json.dumps(payload).encode("utf-8"))
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=lyrics_key(job_id),
+            Body=raw,
+            ContentType="application/gzip",
+        )
+
+    def delete_lyrics(self, job_id: str) -> None:
+        _remove_files(self.scratch / "lyrics", job_id)
+        self.client.delete_object(Bucket=self.bucket, Key=lyrics_key(job_id))
+
     def backup_mtime(self, name: str) -> datetime | None:
         head = self._head(backup_key(name))
         return head["LastModified"] if head else None
@@ -293,7 +337,11 @@ Store = LocalStore | S3Store
 
 def discard_job_files(store: Store, job_id: str, *, analysis: bool = True) -> None:
     """Delete a job's files on a failure path; bucket errors are logged, local errors raise."""
-    deletes = [store.delete_audio, store.delete_analysis] if analysis else [store.delete_audio]
+    deletes = (
+        [store.delete_audio, store.delete_analysis, store.delete_lyrics]
+        if analysis
+        else [store.delete_audio]
+    )
     for delete in deletes:
         try:
             delete(job_id)

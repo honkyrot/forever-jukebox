@@ -10,6 +10,8 @@ import { useAppStore } from "../../store";
 import { ModifierBadges } from "../ModifierBadges";
 import { BranchStatsPopup } from "./BranchStatsPopup";
 import { CustomAnchorInfo } from "./CustomAnchorEditor";
+import { LyricsKaraokeBar } from "./LyricsKaraokeBar";
+import { isLyricsSupportedMode } from "../../lyrics";
 import { PlayControls } from "./PlayControls";
 import { VizBottomRight } from "./VizBottomRight";
 import { VizInfo } from "./VizInfo";
@@ -45,6 +47,7 @@ export function VizContainer() {
   const bpmBarDenominator = useAppStore((s) => s.bpmBarDenominator);
   const bpmBarBeatOffset = useAppStore((s) => s.bpmBarBeatOffset);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const autocanonizerMixEnabled = useAppStore((s) => s.autocanonizerMixEnabled);
   const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
   const timeSignatureBranchingEnabled = useAppStore(
     (s) => s.timeSignatureBranchingEnabled,
@@ -70,6 +73,8 @@ export function VizContainer() {
   const metronomeDetectedBeatsPerBar = useAppStore(
     (s) => s.metronomeDetectedBeatsPerBar,
   );
+  const appConfig = useAppStore((s) => s.appConfig);
+  const lyricsKaraokeEnabled = useAppStore((s) => s.lyricsKaraokeEnabled);
   const vizBeats = useAppStore((s) => s.vizData?.beats);
   const vizStatsRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Array<HTMLSpanElement | null>>([]);
@@ -108,6 +113,15 @@ export function VizContainer() {
   const showSegmentOverlay =
     bpmBarStyle === "smooth-pulse" && segmentCount !== null;
   const visible = audioLoaded && analysisLoaded && !audioModePreparing && !loadingShown;
+  const showKaraokeLyrics = Boolean(
+    isLyricsSupportedMode({
+      playMode,
+      multiTrackEnabled,
+      autocanonizerMixEnabled,
+    }) &&
+      appConfig?.allow_lyrics &&
+      lyricsKaraokeEnabled,
+  );
 
   // Child refs attach before this parent ref, so the layer nodes are ready.
   const handlePanelRef = useCallback(
@@ -314,7 +328,11 @@ export function VizContainer() {
     >
       <div
         id="jukebox-viz"
-        className={VIZ_CLASS_NAMES[playMode]}
+        className={
+          showKaraokeLyrics
+            ? `${VIZ_CLASS_NAMES[playMode]} has-karaoke-lyrics`
+            : VIZ_CLASS_NAMES[playMode]
+        }
       >
         <BranchStatsPopup />
         <CustomAnchorInfo />
@@ -338,6 +356,7 @@ export function VizContainer() {
           className="wubmachine-layer"
           ref={wubMachineLayerRef}
         ></div>
+        <LyricsKaraokeBar />
         <div
           className="viz-bottom"
           id="viz-stats"

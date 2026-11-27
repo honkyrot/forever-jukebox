@@ -90,12 +90,22 @@ export type AppConfig = {
   allow_user_url: boolean;
   allow_favorites_sync?: boolean;
   allow_track_reports?: boolean;
+  allow_lyrics?: boolean;
   max_upload_size?: number | null;
   allowed_upload_exts?: string[] | null;
   max_track_length?: number | null;
   max_favorites?: number | null;
   hosted_by_name?: string | null;
   hosted_by_url?: string | null;
+};
+
+export type LyricsApiResponse = {
+  status: "found" | "not_found";
+  track_id?: string | null;
+  matched_title?: string | null;
+  matched_artist?: string | null;
+  matched_duration?: number | null;
+  lyrics?: unknown;
 };
 
 export type FavoritesSyncResponse = {
@@ -469,6 +479,30 @@ export async function updateFavoritesSync(code: string, favorites: FavoriteTrack
     }
   );
   return data as FavoritesSyncResponse;
+}
+
+export async function fetchJobLyrics(
+  jobId: string,
+  options?: {
+    signal?: AbortSignal;
+    refresh?: boolean;
+    duration?: number | null;
+  },
+): Promise<LyricsApiResponse> {
+  const params = new URLSearchParams();
+  if (options?.refresh) {
+    params.set("refresh", "true");
+  }
+  if (
+    typeof options?.duration === "number" &&
+    Number.isFinite(options.duration) &&
+    options.duration > 0
+  ) {
+    params.set("duration", String(options.duration));
+  }
+  const query = params.toString();
+  const url = `/api/lyrics/${encodeURIComponent(jobId)}${query ? `?${query}` : ""}`;
+  return (await fetchJson(url, { signal: options?.signal })) as LyricsApiResponse;
 }
 
 export async function fetchFavoritesSync(code: string) {

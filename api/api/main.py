@@ -31,6 +31,7 @@ from .routes.config import router as config_router
 from .routes.admin import router as admin_router
 from .routes.favorites import router as favorites_router
 from .routes.jobs import router as jobs_router
+from .routes.lyrics import router as lyrics_router
 from .routes.media import router as media_router
 from .routes.search import router as search_router
 
@@ -40,6 +41,7 @@ app.include_router(admin_router)
 app.include_router(config_router)
 app.include_router(favorites_router)
 app.include_router(jobs_router)
+app.include_router(lyrics_router)
 app.include_router(media_router)
 app.include_router(search_router)
 
@@ -243,6 +245,7 @@ def _startup() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     (STORAGE_ROOT / "audio").mkdir(parents=True, exist_ok=True)
     (STORAGE_ROOT / "analysis").mkdir(parents=True, exist_ok=True)
+    (STORAGE_ROOT / "lyrics").mkdir(parents=True, exist_ok=True)
     (STORAGE_ROOT / "logs").mkdir(parents=True, exist_ok=True)
 
 

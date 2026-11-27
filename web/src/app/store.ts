@@ -25,7 +25,9 @@ import type { SpotifySearchItem, YoutubeSearchItem } from "./api";
 import type { AppState, SleepTimerState, TabId } from "./context";
 import type { FavoritesDisplaySort } from "./favorites";
 import type { ThemeName } from "./themeConfig";
+import type { NormalizedLyrics } from "@forever-jukebox/shared/lyrics";
 import type { MaterialSymbolIconName } from "./material-icons";
+import type { LyricsStatus } from "./lyrics";
 import { DEFAULT_VISUALIZATION_INDEX } from "./constants";
 import { emptyPlaylist } from "./playlist";
 import { buildSearchParams, pathForTab, pathForTrack } from "./tabs";
@@ -191,6 +193,13 @@ type ShellSlice = {
   branchStats: BranchStatsState | null;
   // Non-null while the custom anchor editor is open on the viz.
   customAnchorEdit: AnchorEditState | null;
+  lyricsKaraokeEnabled: boolean;
+  lyricsPanelOpen: boolean;
+  lyricsRomanizationEnabled: boolean;
+  lyricsStatus: LyricsStatus;
+  lyricsData: NormalizedLyrics | null;
+  lyricsJobId: string | null;
+  lyricsOffsetSec: number;
 };
 
 type Actions = {
@@ -301,6 +310,13 @@ const createUiSlice: Slice<
     | "playlistLoadBusy"
     | "branchStats"
     | "customAnchorEdit"
+    | "lyricsKaraokeEnabled"
+    | "lyricsPanelOpen"
+    | "lyricsRomanizationEnabled"
+    | "lyricsStatus"
+    | "lyricsData"
+    | "lyricsJobId"
+    | "lyricsOffsetSec"
   > &
     Actions
 > = (set, get) => {
@@ -382,6 +398,13 @@ const createUiSlice: Slice<
     playlistLoadBusy: false,
     branchStats: null,
     customAnchorEdit: null,
+    lyricsKaraokeEnabled: false,
+    lyricsPanelOpen: false,
+    lyricsRomanizationEnabled: false,
+    lyricsStatus: "idle",
+    lyricsData: null,
+    lyricsJobId: null,
+    lyricsOffsetSec: 0,
     setActiveTab: (activeTabId) =>
       set((state) => ({
         activeTabId,

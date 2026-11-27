@@ -13,6 +13,7 @@
     "./viz/*": "./src/viz/*.ts",
     "./background": "./src/background/backgroundTimer.ts",
     "./constants/visualization": "./src/constants/visualization.ts",
+    "./lyrics": "./src/lyrics/index.ts",
     "./ui/toastQueue": "./src/ui/toastQueue.ts",
     "./ui/CustomAnchorEditor": "./src/ui/CustomAnchorEditor.tsx",
     "./ui/SocialLinks": "./src/ui/SocialLinks.tsx",

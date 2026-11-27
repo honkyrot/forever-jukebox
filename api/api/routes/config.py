@@ -25,6 +25,9 @@ def get_app_config() -> JSONResponse:
         allow_user_url=allow_user_url,
         allow_favorites_sync=env_flag("ALLOW_FAVORITES_SYNC"),
         allow_track_reports=admin_key_configured(),
+        allow_lyrics=bool(
+            env_string("SPICY_LYRICS_CLIENT_KEY") or env_string("SPICY_LYRICS_API_KEY")
+        ),
         max_upload_size=max_upload_size,
         allowed_upload_exts=allowed_upload_exts,
         max_track_length=env_positive_float("MAX_TRACK_LENGTH"),

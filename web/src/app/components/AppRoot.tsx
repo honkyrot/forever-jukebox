@@ -22,6 +22,7 @@ import { SettingsModal } from "./SettingsModal";
 import { Toast } from "./Toast";
 import { TopTracksPanel } from "./TopTracksPanel";
 import { InfoModal } from "./listen/InfoModal";
+import { LyricsPanel } from "./listen/LyricsPanel";
 import { PlayMenu } from "./listen/PlayMenu";
 import { PlaylistModal } from "./listen/PlaylistModal";
 import { StatusPanel } from "./listen/StatusPanel";
@@ -168,6 +169,7 @@ export function AppRoot() {
       <FeedbackModal />
       <InfoModal />
       <PlaylistModal />
+      <LyricsPanel />
     </>
   );
 }

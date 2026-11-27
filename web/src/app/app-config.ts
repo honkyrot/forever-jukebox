@@ -4,6 +4,7 @@ import {
   updateFavorites,
 } from "./favorites-actions";
 import { configureMaxFavorites, maxFavorites } from "./favorites";
+import { loadLyricsForCurrentTrack } from "./lyrics";
 import { useAppStore } from "./store";
 
 type ApplyAppConfigOptions = {
@@ -33,6 +34,9 @@ export function applyAppConfig(
     }
     if (options.hydrateFavorites !== false && config.allow_favorites_sync) {
       void hydrateFavoritesFromSync();
+    }
+    if (config.allow_lyrics) {
+      void loadLyricsForCurrentTrack();
     }
   }
 

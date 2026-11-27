@@ -88,6 +88,11 @@ import {
 import { stopPlayback } from "./transport";
 import { discardCustomAnchorEdit } from "./custom-anchor";
 import {
+  clearTrackLyrics,
+  loadLyricsForCurrentTrack,
+  resolveStoredLyricsOffsetForTrack,
+} from "../lyrics";
+import {
   clearCachedMultiTrackSources,
   syncMetronomeOverlayFromStore,
 } from "./multi-track-mix";
@@ -152,6 +157,7 @@ export function resetForNewTrack(
   bumpLoadGeneration();
   clearCachedMultiTrackSources();
   clearCachedSongSyncSources();
+  clearTrackLyrics();
   discardCustomAnchorEdit(context);
   const {
     autocanonizer,
@@ -472,6 +478,14 @@ export function applyAnalysisResult(
         : null,
   });
   updateTrackInfo(context);
+  const lyricsTrackKey =
+    useAppStore.getState().lastTrackId ??
+    useAppStore.getState().lastJobId ??
+    response.id;
+  useAppStore.setState({
+    lyricsOffsetSec: resolveStoredLyricsOffsetForTrack(lyricsTrackKey),
+  });
+  void loadLyricsForCurrentTrack();
   syncActivePlaylistTrackFromLoaded();
   savePlaylist(useAppStore.getState().playlist);
   onAnalysisLoaded?.(response);

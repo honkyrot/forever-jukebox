@@ -17,6 +17,7 @@ UNPROCESSABLE_CONTENT = {
 }
 SERVER_ERROR = {500: {"description": "Internal server error"}}
 BAD_GATEWAY = {502: {"description": "Bad gateway"}}
+SERVICE_UNAVAILABLE = {503: {"description": "Service unavailable"}}
 
 
 def error_responses(*statuses: int) -> dict[int, dict[str, str]]:
@@ -30,5 +31,6 @@ def error_responses(*statuses: int) -> dict[int, dict[str, str]]:
         **UNPROCESSABLE_CONTENT,
         **SERVER_ERROR,
         **BAD_GATEWAY,
+        **SERVICE_UNAVAILABLE,
     }
     return {status: definitions[status] for status in statuses}

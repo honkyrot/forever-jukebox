@@ -48,6 +48,11 @@ def analysis_path_for(storage_root: Path, job_id: str) -> Path:
     return storage_root / "analysis" / f"{job_id}.json"
 
 
+def lyrics_path_for(storage_root: Path, job_id: str) -> Path:
+    """Deterministic cached lyrics path: lyrics/<id>.json.gz."""
+    return storage_root / "lyrics" / f"{job_id}.json.gz"
+
+
 def resolve_analysis_path(storage_root: Path, job_id: str) -> Path:
     """On-disk analysis file for a job: .json.gz preferred, legacy .json fallback."""
     plain = analysis_path_for(storage_root, job_id)

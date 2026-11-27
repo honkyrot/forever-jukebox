@@ -23,6 +23,8 @@ services:
       ALLOW_FAVORITES_SYNC: "${ALLOW_FAVORITES_SYNC:-}"
       HOSTED_BY_NAME: "${HOSTED_BY_NAME:-}"
       HOSTED_BY_URL: "${HOSTED_BY_URL:-}"
+      SPICY_LYRICS_CLIENT_KEY: "${SPICY_LYRICS_CLIENT_KEY:-}"
+      SPICY_LYRICS_API_KEY: "${SPICY_LYRICS_API_KEY:-}"
     restart: unless-stopped
 
 volumes:

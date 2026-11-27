@@ -652,4 +652,46 @@ describe("AutocanonizerController", () => {
     expect(gains[1].gain.value).toBe(0);
     controller.stop();
   });
+
+  it("exposes live Blue/Green cursor times while running and binary-searches beats by time", () => {
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context } = createAudioContext();
+    controller.setAudio({ duration: 30 } as AudioBuffer, context);
+
+    const b0 = createBeat(0, 0);
+    const b1 = createBeat(1, 2);
+    const b2 = createBeat(2, 4);
+    b0.next = b1;
+    b1.prev = b0;
+    b1.next = b2;
+    b2.prev = b1;
+    b0.other = b2;
+    b1.other = b1;
+    b2.other = b0;
+    (controller as unknown as { beats: CanonizerBeat[] }).beats = [b0, b1, b2];
+
+    expect(controller.getLiveCursorTimes()).toBeNull();
+    expect(controller.findBeatIndexByTime(-1)).toBe(0);
+    expect(controller.findBeatIndexByTime(2.5)).toBe(1);
+    expect(controller.findBeatIndexByTime(99)).toBe(2);
+
+    controller.startAtIndex(0);
+    (context as unknown as { currentTime: number }).currentTime = 0.4;
+    expect(controller.getLiveCursorTimes()).toEqual({
+      mainSeconds: 0.4,
+      otherSeconds: 4.4,
+      inUnison: false,
+    });
+
+    controller.startAtIndex(1);
+    (context as unknown as { currentTime: number }).currentTime = 0.6;
+    expect(controller.getLiveCursorTimes()).toEqual({
+      mainSeconds: 2.2,
+      otherSeconds: 2.2,
+      inUnison: true,
+    });
+
+    controller.stop();
+    expect(controller.getLiveCursorTimes()).toBeNull();
+  });
 });

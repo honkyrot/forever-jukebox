@@ -40,6 +40,8 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--edge-selected": "#B48CFF",
     "--beat-fill": "#FFD46A",
     "--beat-highlight": "#FFD46A",
+    "--lyrics-canon-main": "#4F8FFF",
+    "--lyrics-canon-other": "#10DF00",
   },
   light: {
     // Core
@@ -80,5 +82,7 @@ export const themeConfig: Record<ThemeName, Record<string, string>> = {
     "--edge-selected": "#7F39FB",
     "--beat-fill": "#B144FF",
     "--beat-highlight": "#B144FF",
+    "--lyrics-canon-main": "#1D63DC",
+    "--lyrics-canon-other": "#0D8A00",
   },
 };

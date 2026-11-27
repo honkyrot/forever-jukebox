@@ -177,12 +177,22 @@ class AppConfigResponse(BaseModel):
     allow_user_url: bool
     allow_favorites_sync: bool = False
     allow_track_reports: bool = False
+    allow_lyrics: bool = False
     max_upload_size: int | None = None
     allowed_upload_exts: list[str] | None = None
     max_track_length: float | None = None
     max_favorites: int
     hosted_by_name: str | None = None
     hosted_by_url: str | None = None
+
+
+class LyricsResponse(BaseModel):
+    status: Literal["found", "not_found"]
+    track_id: str | None = None
+    matched_title: str | None = None
+    matched_artist: str | None = None
+    matched_duration: float | None = None
+    lyrics: dict[str, object] | None = None
 
 
 class FavoriteTrack(BaseModel):

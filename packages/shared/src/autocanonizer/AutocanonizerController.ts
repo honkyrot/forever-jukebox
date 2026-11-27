@@ -57,6 +57,12 @@ export type AutocanonizerCursorTimes = {
   goldSeconds?: number;
 };
 
+export type AutocanonizerLiveCursorTimes = {
+  mainSeconds: number | null;
+  otherSeconds: number | null;
+  inUnison: boolean;
+};
+
 class AutocanonizerPlayer {
   private readonly context: AudioContext;
   private buffer: AudioBuffer;
@@ -249,6 +255,32 @@ class AutocanonizerPlayer {
     this.pinkSource = null;
     this.stopSource(this.goldSource);
     this.goldSource = null;
+  }
+
+  /**
+   * Computes continuous AudioContext-anchored playback times (seconds) for the
+   * Blue (main) and Green (canon/other) voices.
+   */
+  getLiveCursorTimes(secondaryOnly: boolean): AutocanonizerLiveCursorTimes {
+    if (!this.currentBeat) {
+      return { mainSeconds: null, otherSeconds: null, inUnison: false };
+    }
+    const now = this.context.currentTime;
+    const clampTime = (val: number, maxDur: number) =>
+      Math.max(0, Number.isFinite(maxDur) && maxDur > 0 ? Math.min(maxDur, val) : val);
+    const otherBuf = this.quadMode
+      ? this.buffer
+      : (this.otherBuffer ?? this.buffer);
+    const mainSeconds =
+      !secondaryOnly && this.mainSource
+        ? clampTime(now - this.deltaTime, this.buffer.duration)
+        : null;
+    const otherSeconds =
+      this.otherSource && this.otherBeatGain > 0
+        ? clampTime(now - this.otherDeltaTime, otherBuf.duration)
+        : null;
+    const inUnison = !secondaryOnly && this.currentBeat.other === this.currentBeat;
+    return { mainSeconds, otherSeconds, inUnison };
   }
 
   playBeat(beat: CanonizerBeat) {
@@ -850,6 +882,42 @@ export class AutocanonizerController {
 
   isReady() {
     return Boolean(this.player && this.beats.length);
+  }
+
+  /**
+   * Returns continuous live playback times for Blue (main) and Green (other)
+   * while Autocanonizer playback is running, or null when stopped.
+   */
+  getLiveCursorTimes(): AutocanonizerLiveCursorTimes | null {
+    if (!this.running || !this.player) {
+      return null;
+    }
+    return this.player.getLiveCursorTimes(this.secondaryOnly);
+  }
+
+  /**
+   * Binary-searches prepared Autocanonizer beats for the beat containing `timeSec`.
+   */
+  findBeatIndexByTime(timeSec: number): number {
+    if (this.beats.length === 0) {
+      return -1;
+    }
+    if (!Number.isFinite(timeSec) || timeSec <= this.beats[0].start) {
+      return 0;
+    }
+    let low = 0;
+    let high = this.beats.length - 1;
+    let best = 0;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.beats[mid].start <= timeSec) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return Math.max(0, Math.min(this.beats.length - 1, best));
   }
 
   // The canon as a timed plan for offline rendering, with the current

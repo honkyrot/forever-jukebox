@@ -17,6 +17,11 @@ import {
   resolveStoredCustomAnchorEnabled,
 } from "./extrasMode";
 import {
+  resolveStoredLyricsKaraokeEnabled,
+  resolveStoredLyricsPanelOpen,
+  resolveStoredLyricsRomanizationEnabled,
+} from "./lyrics";
+import {
   handleAnchorEditChange,
   handleAnchorEditCommit,
 } from "./playback/custom-anchor";
@@ -119,6 +124,9 @@ export function initRuntime(): void {
     branchLookaheadEnabled,
     branchLookaheadCount,
     customAnchorEnabled: resolveStoredCustomAnchorEnabled(),
+    lyricsKaraokeEnabled: resolveStoredLyricsKaraokeEnabled(),
+    lyricsPanelOpen: resolveStoredLyricsPanelOpen(),
+    lyricsRomanizationEnabled: resolveStoredLyricsRomanizationEnabled(),
     volumePct,
     autocanonizerMainPan,
     autocanonizerOtherPan,

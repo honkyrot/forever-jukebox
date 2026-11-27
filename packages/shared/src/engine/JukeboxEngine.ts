@@ -386,9 +386,9 @@ export class JukeboxEngine {
     if (
       this.lookaheadCache &&
       this.lookaheadCache.version === this.lookaheadVersion &&
-      this.lookaheadCache.count === limit
+      this.lookaheadCache.count >= limit
     ) {
-      return this.lookaheadCache.jumps.slice();
+      return this.lookaheadCache.jumps.slice(0, limit);
     }
 
     const predicted: PredictedJump[] = [];
@@ -891,6 +891,10 @@ export class JukeboxEngine {
 
   private edgeKey(src: number, dest: number) {
     return `${src}-${dest}`;
+  }
+
+  getCurrentBeatIndex(): number {
+    return this.currentBeatIndex;
   }
 
   getBeatAtTime(time: number): QuantumBase | null {

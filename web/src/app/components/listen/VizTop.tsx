@@ -30,6 +30,11 @@ import {
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { CustomAnchorButton, CustomAnchorToolbar } from "./CustomAnchorEditor";
+import {
+	isLyricsSupportedMode,
+	setLyricsKaraokeEnabled,
+	setLyricsPanelOpen,
+} from "../../lyrics";
 
 function getVisualizationLabel(index: number, t: TFunction) {
 	return (
@@ -72,6 +77,9 @@ export function VizTop() {
   const isSongSync = playMode === "songsync";
   const songSyncLoop = useAppStore((s) => s.songSyncLoop);
   const songSyncEnabled = useAppStore((s) => s.songSyncEnabled);
+  const appConfig = useAppStore((s) => s.appConfig);
+  const lyricsKaraokeEnabled = useAppStore((s) => s.lyricsKaraokeEnabled);
+  const lyricsPanelOpen = useAppStore((s) => s.lyricsPanelOpen);
   const activeMixEnabled = isCanonizer
     ? autocanonizerMixEnabled
     : multiTrackEnabled;
@@ -174,6 +182,43 @@ export function VizTop() {
 								? "Mix 2 Songs"
 								: "Mix Songs"}
 					</button>
+				) : null}
+				{isLyricsSupportedMode({
+					playMode,
+					multiTrackEnabled,
+					autocanonizerMixEnabled,
+				}) &&
+				audioLoaded &&
+				analysisLoaded &&
+				appConfig?.allow_lyrics ? (
+					<>
+						<button
+							type="button"
+							id="lyrics-karaoke-toggle"
+							className={
+								lyricsKaraokeEnabled
+									? "custom-anchor-button is-active"
+									: "custom-anchor-button"
+							}
+							aria-pressed={lyricsKaraokeEnabled}
+							onClick={() => setLyricsKaraokeEnabled(!lyricsKaraokeEnabled)}
+						>
+							{t("lyrics.karaoke")}
+						</button>
+						<button
+							type="button"
+							id="lyrics-panel-toggle"
+							className={
+								lyricsPanelOpen
+									? "custom-anchor-button is-active"
+									: "custom-anchor-button"
+							}
+							aria-pressed={lyricsPanelOpen}
+							onClick={() => setLyricsPanelOpen(!lyricsPanelOpen)}
+						>
+							{t("lyrics.panel")}
+						</button>
+					</>
 				) : null}
 				{isSongSync ? (
 					<button
