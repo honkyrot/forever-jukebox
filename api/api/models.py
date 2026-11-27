@@ -11,6 +11,8 @@ class JobBase(BaseModel):
     source_id: str | None = None
     source_provider: str | None = None
     created_at: str | None = None
+    bpm_multiplier: float = 1.0
+    bpm_locked: bool = False
 
 
 class JobProgress(JobBase):
@@ -107,6 +109,11 @@ class TrackMetadataResponse(BaseModel):
     artist: str
 
 
+class JobReanalyzeRequest(BaseModel):
+    bpm_multiplier: float | None = None
+    bpm_locked: bool | None = None
+
+
 # Vetted windows only: a free-form value here would be one typo from a near-total sweep.
 CleanupWindowDays = Literal[180, 365, 730]
 
@@ -178,6 +185,7 @@ class AppConfigResponse(BaseModel):
     allow_favorites_sync: bool = False
     allow_track_reports: bool = False
     allow_lyrics: bool = False
+    reanalyze_admin_only: bool = False
     max_upload_size: int | None = None
     allowed_upload_exts: list[str] | None = None
     max_track_length: float | None = None

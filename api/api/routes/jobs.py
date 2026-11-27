@@ -34,7 +34,9 @@ from ..db import (
     increment_job_plays,
     rename_job_track,
     report_track,
+    requeue_job_for_reanalysis,
     restart_failed_job,
+    set_job_bpm_lock,
     set_job_play_count,
     set_job_progress,
     set_job_status,
@@ -47,6 +49,7 @@ from ..models import (
     JobComplete,
     JobError,
     JobProgress,
+    JobReanalyzeRequest,
     PlayCountResponse,
     PlayCountUpdate,
     RecentSongsResponse,
@@ -94,10 +97,15 @@ DELETE_WITHOUT_ADMIN_SECONDS = 1800
 SUPPORTED_USER_SOURCE_PROVIDERS = {"youtube", "soundcloud", "bandcamp"}
 SUPPORTED_SOURCE_PROVIDERS = {"youtube", "soundcloud", "bandcamp", "upload"}
 JOB_NOT_FOUND_DETAIL = "Job not found"
+VALID_BPM_MULTIPLIERS = {0.5, 1.0, 2.0}
 
 
 def _allow_user_url() -> bool:
     return env_flag("ALLOW_USER_URL")
+
+
+def _reanalyze_admin_only() -> bool:
+    return env_flag("REANALYZE_ADMIN_ONLY")
 
 
 def _recycle_stalled_job(job, background_tasks: BackgroundTasks):
@@ -443,6 +451,8 @@ def _job_response(job, analysis: Any | None = None) -> JSONResponse:
         "source_id": job.source_id,
         "source_provider": job.source_provider,
         "created_at": job.created_at,
+        "bpm_multiplier": job.bpm_multiplier,
+        "bpm_locked": job.bpm_locked,
     }
     if job.status in {"queued", "processing", "downloading"}:
         progress = job.progress if job.status == "processing" else None
@@ -478,12 +488,18 @@ def _job_response(job, analysis: Any | None = None) -> JSONResponse:
         )
         return JSONResponse(payload.model_dump(), status_code=200)
 
-    if isinstance(data, dict) and (job.track_title is not None or job.track_artist is not None):
+    if isinstance(data, dict) and (
+        job.track_title is not None
+        or job.track_artist is not None
+        or job.bpm_multiplier != 1.0
+    ):
         track = data.get("track")
         if not isinstance(track, dict):
             track = {}
             data["track"] = track
-        # Prefer database metadata so admin renames override stale analysis JSON values.
+        # Prefer database metadata so admin renames and non-default BPM multiplier state stay authoritative.
+        if job.bpm_multiplier != 1.0 or "bpm_multiplier" in track:
+            track["bpm_multiplier"] = job.bpm_multiplier
         if job.track_title:
             track["title"] = job.track_title
         if job.track_artist is not None:
@@ -867,6 +883,110 @@ def rename_job_by_id(
         artist=updated.track_artist or "",
     )
     return JSONResponse(response.model_dump(), status_code=200)
+
+
+@router.post("/api/jobs/{job_id}/reanalyze", responses=error_responses(400, 403, 404, 409))
+def reanalyze_job_by_id(
+    job_id: str,
+    payload: JobReanalyzeRequest,
+    background_tasks: BackgroundTasks,
+    admin_key: str | None = Header(None, alias=ADMIN_KEY_HEADER),
+) -> JSONResponse:
+    """Reanalyze an existing track at 0.5x/1x/2x BPM or update its admin BPM lock."""
+    job = get_job(DB_PATH, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+
+    if payload.bpm_multiplier is None and payload.bpm_locked is None:
+        raise HTTPException(status_code=400, detail="bpm_multiplier or bpm_locked is required")
+
+    multiplier: float | None = None
+    if payload.bpm_multiplier is not None:
+        try:
+            candidate = float(payload.bpm_multiplier)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="bpm_multiplier must be 0.5, 1, or 2") from exc
+        if candidate not in VALID_BPM_MULTIPLIERS:
+            raise HTTPException(status_code=400, detail="bpm_multiplier must be 0.5, 1, or 2")
+        multiplier = candidate
+
+    is_admin = admin_key_matches(admin_key)
+    if payload.bpm_locked is not None and not is_admin:
+        require_admin_key(admin_key)
+
+    if multiplier is not None:
+        if _reanalyze_admin_only() and not is_admin:
+            require_admin_key(admin_key)
+        if job.bpm_locked and not is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="BPM reanalysis is locked by an admin for this track",
+            )
+
+    # Lock-only update: update the flag in SQLite without touching audio/analysis or queue state.
+    if multiplier is None and payload.bpm_locked is not None:
+        updated = set_job_bpm_lock(DB_PATH, job_id, payload.bpm_locked)
+        if not updated:
+            raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+        log_event(
+            "job_bpm_lock_updated",
+            job_id=job_id,
+            bpm_locked=updated.bpm_locked,
+        )
+        return _job_response(updated)
+
+    assert multiplier is not None
+    if job.status in {"downloading", "queued", "processing"}:
+        raise HTTPException(status_code=409, detail="Job is already in progress")
+
+    store = get_store(STORAGE_ROOT)
+    if store.has_audio(job.id):
+        owner = requeue_job_for_reanalysis(
+            DB_PATH,
+            job.id,
+            job.updated_at,
+            bpm_multiplier=multiplier,
+            status="queued",
+            progress=25,
+            bpm_locked=payload.bpm_locked,
+        )
+        if owner is None:
+            raise HTTPException(status_code=409, detail="Job is already in progress")
+    else:
+        source_url = _source_url_for_job(job)
+        if not source_url:
+            raise HTTPException(
+                status_code=409,
+                detail="Audio file is missing and cannot be re-downloaded",
+            )
+        owner = requeue_job_for_reanalysis(
+            DB_PATH,
+            job.id,
+            job.updated_at,
+            bpm_multiplier=multiplier,
+            status="downloading",
+            progress=0,
+            bpm_locked=payload.bpm_locked,
+        )
+        if owner is None:
+            raise HTTPException(status_code=409, detail="Job is already in progress")
+        background_tasks.add_task(
+            download_source_audio,
+            job.id,
+            source_url,
+            job.source_provider,
+            owner,
+        )
+
+    refreshed = get_job(DB_PATH, job.id) or job
+    log_event(
+        "job_reanalyze_started",
+        job_id=job.id,
+        source=refreshed.source_provider or "unknown",
+        bpm_multiplier=multiplier,
+        bpm_locked=refreshed.bpm_locked,
+    )
+    return _job_response(refreshed)
 
 
 @router.delete("/api/jobs/{job_id}", responses=error_responses(403, 404))

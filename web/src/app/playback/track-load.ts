@@ -296,6 +296,11 @@ export function resetForNewTrack(
   useAppStore.setState({ trackDurationSec: null });
   useAppStore.setState({ trackTitle: null });
   useAppStore.setState({ trackArtist: null });
+  useAppStore.setState({
+    trackBpmMultiplier: 1,
+    trackBpmLocked: false,
+    reanalyzeModalOpen: false,
+  });
   useAppStore.setState({ deleteEligible: false });
   useAppStore.setState({ deleteEligibilityJobId: null });
   useAppStore.setState({ vizData: null });
@@ -476,6 +481,13 @@ export function applyAnalysisResult(
       typeof track?.duration === "number" && Number.isFinite(track.duration)
         ? track.duration
         : null,
+    trackBpmMultiplier:
+      response.bpm_multiplier ??
+      (typeof resultTrack?.bpm_multiplier === "number" &&
+      Number.isFinite(resultTrack.bpm_multiplier)
+        ? resultTrack.bpm_multiplier
+        : 1),
+    trackBpmLocked: Boolean(response.bpm_locked),
   });
   updateTrackInfo(context);
   const lyricsTrackKey =
@@ -677,6 +689,12 @@ function normalizeTrackIdentityFromResponse(
   });
   if (typeof response.source_provider === "string") {
     useAppStore.setState({ lastSourceProvider: response.source_provider });
+  }
+  if (typeof response.bpm_multiplier === "number" && Number.isFinite(response.bpm_multiplier)) {
+    useAppStore.setState({ trackBpmMultiplier: response.bpm_multiplier });
+  }
+  if (typeof response.bpm_locked === "boolean") {
+    useAppStore.setState({ trackBpmLocked: response.bpm_locked });
   }
   if (previousTrackId !== response.id) {
     deps.onTrackChange?.(response.id);

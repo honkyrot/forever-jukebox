@@ -1136,6 +1136,66 @@ button.is-loading::after {
   gap: 6px;
 }
 
+.reanalyze-bpm-panel {
+  width: min(440px, 90vw);
+}
+
+.reanalyze-bpm-panel .modal-footer {
+  gap: 8px;
+}
+
+.reanalyze-bpm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reanalyze-bpm-description {
+  margin: 0;
+}
+
+.reanalyze-bpm-current {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.reanalyze-locked-notice {
+  margin: 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.reanalyze-bpm-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reanalyze-bpm-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 0;
+  cursor: pointer;
+}
+
+.reanalyze-bpm-estimate {
+  margin-left: auto;
+}
+
+.reanalyze-bpm-lock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
 .report-reasons {
   display: flex;
   flex-direction: column;
@@ -1768,8 +1828,37 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
 
 .delete-toggle.hidden,
 .rename-toggle.hidden,
+.reanalyze-toggle.hidden,
 .report-toggle.hidden {
   display: none;
+}
+
+.reanalyze-toggle {
+  background: transparent;
+  border: none;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reanalyze-toggle .reanalyze-icon {
+  font-variation-settings:
+    "FILL" 0,
+    "wght" 300,
+    "GRAD" 0,
+    "opsz" 30;
+  color: var(--text);
+  font-size: 30px;
+  line-height: 1;
+}
+
+.reanalyze-toggle.is-scaled .reanalyze-icon {
+  color: var(--accent);
+}
+
+.reanalyze-toggle.is-locked .reanalyze-icon {
+  opacity: 0.72;
 }
 
 .rename-toggle {
@@ -1885,6 +1974,7 @@ body.playlist-add-enabled.playlist-add-sticky .playlist-add-button {
 .favorites-sync-button,
 .delete-toggle,
 .rename-toggle,
+.reanalyze-toggle,
 .report-toggle,
 .volume-button,
 .fullscreen-toggle,

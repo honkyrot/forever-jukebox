@@ -18,6 +18,14 @@ import {
   performRename,
   type PendingRename,
 } from "../../rename-job";
+import {
+  BPM_MULTIPLIER_OPTIONS,
+  estimateReanalyzedBpm,
+  getPendingReanalyze,
+  performReanalyze,
+  type BpmMultiplier,
+  type PendingReanalyze,
+} from "../../reanalyze-job";
 import { toggleFavorite } from "../../favorites-actions";
 import { copyShortUrl } from "../../playback-ui";
 import { showToast } from "../../ui";
@@ -328,6 +336,182 @@ function ReportTrackModal({
   );
 }
 
+/**
+ * Modal for server-side 0.5x / 1x / 2x BPM reanalysis and optional admin locking.
+ */
+function ReanalyzeBpmModal({
+  pending,
+  adminMode,
+  onClosed,
+}: {
+  pending: PendingReanalyze | null;
+  adminMode: boolean;
+  onClosed: () => void;
+}) {
+  const { t } = useTranslation();
+  const open = useAppStore((s) => s.reanalyzeModalOpen);
+  const [multiplier, setMultiplier] = useState<BpmMultiplier>(1);
+  const [locked, setLocked] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMultiplier(pending?.currentMultiplier ?? 1);
+      setLocked(pending?.bpmLocked ?? false);
+    }
+  }, [open, pending]);
+
+  const close = () => {
+    if (busy) {
+      return;
+    }
+    useAppStore.setState({ reanalyzeModalOpen: false });
+    onClosed();
+  };
+
+  const isLockedForUser = !adminMode && locked;
+  const multiplierChanged = pending ? multiplier !== pending.currentMultiplier : false;
+  const lockChanged = adminMode && pending ? locked !== pending.bpmLocked : false;
+  const canSubmit = !busy && !isLockedForUser && (multiplierChanged || lockChanged);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSubmit || !pending) {
+      return;
+    }
+    const current = getPendingReanalyze();
+    if (current?.jobId !== pending.jobId) {
+      useAppStore.setState({ reanalyzeModalOpen: false });
+      onClosed();
+      return;
+    }
+    setBusy(true);
+    let ok = false;
+    try {
+      ok = await performReanalyze(getAppContext(), current, {
+        bpmMultiplier: multiplierChanged ? multiplier : undefined,
+        bpmLocked: lockChanged ? locked : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+    if (ok) {
+      useAppStore.setState({ reanalyzeModalOpen: false });
+      onClosed();
+    }
+  };
+
+  const currentBpmText =
+    pending?.currentTempoBpm !== null && pending?.currentTempoBpm !== undefined
+      ? t("reanalyze.currentBpmValue", {
+          bpm: Math.round(pending.currentTempoBpm),
+          multiplier: `${pending.currentMultiplier}x`,
+        })
+      : `${pending?.currentMultiplier ?? 1}x`;
+
+  return (
+    <Modal
+      id="reanalyze-bpm-modal"
+      open={open}
+      onClose={close}
+      panelClassName="reanalyze-bpm-panel"
+    >
+      <ModalHeader
+        title={t("reanalyze.title")}
+        closeId="reanalyze-bpm-close"
+        onClose={close}
+      />
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        <div className="modal-body reanalyze-bpm-body">
+          <p className="hint reanalyze-bpm-description">
+            {t("reanalyze.description")}
+          </p>
+          <div className="reanalyze-bpm-current">
+            <span>{t("reanalyze.currentBpmLabel")}</span>
+            <strong id="reanalyze-current-bpm">{currentBpmText}</strong>
+          </div>
+          {isLockedForUser ? (
+            <p id="reanalyze-locked-notice" className="reanalyze-locked-notice">
+              {t("reanalyze.lockedNotice")}
+            </p>
+          ) : null}
+          <div
+            className="reanalyze-bpm-options"
+            role="radiogroup"
+            aria-label={t("reanalyze.multiplierLabel")}
+          >
+            {BPM_MULTIPLIER_OPTIONS.map((option) => {
+              const estimated = estimateReanalyzedBpm(
+                pending?.currentTempoBpm ?? null,
+                pending?.currentMultiplier ?? 1,
+                option,
+              );
+              const labelKey =
+                option === 0.5
+                  ? "reanalyze.halfBpm"
+                  : option === 2
+                    ? "reanalyze.doubleBpm"
+                    : "reanalyze.originalBpm";
+              return (
+                <label key={option} className="reanalyze-bpm-option">
+                  <input
+                    id={`reanalyze-multiplier-${String(option).replace(".", "_")}`}
+                    type="radio"
+                    name="reanalyze-bpm-multiplier"
+                    value={String(option)}
+                    checked={multiplier === option}
+                    disabled={busy || isLockedForUser}
+                    onChange={() => setMultiplier(option)}
+                  />
+                  <span>{t(labelKey)}</span>
+                  {estimated !== null ? (
+                    <span className="hint reanalyze-bpm-estimate">
+                      {t("reanalyze.estimatedBpm", { bpm: estimated })}
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
+          </div>
+          {adminMode ? (
+            <label className="reanalyze-bpm-lock">
+              <input
+                id="reanalyze-bpm-lock"
+                type="checkbox"
+                checked={locked}
+                disabled={busy}
+                onChange={(event) => setLocked(event.target.checked)}
+              />
+              <span>{t("reanalyze.adminLockLabel")}</span>
+            </label>
+          ) : null}
+        </div>
+        <div className="modal-footer">
+          <button
+            id="reanalyze-bpm-cancel"
+            type="button"
+            disabled={busy}
+            onClick={close}
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            id="reanalyze-bpm-submit"
+            className={busy ? "is-loading" : undefined}
+            type="submit"
+            disabled={!canSubmit}
+            aria-busy={busy}
+          >
+            {!multiplierChanged && lockChanged
+              ? t("reanalyze.saveLock")
+              : t("reanalyze.submit")}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function PlayMenu() {
   const { t } = useTranslation();
   const audioLoaded = useAppStore((s) => s.audioLoaded);
@@ -346,6 +530,14 @@ export function PlayMenu() {
   const allowTrackReports = useAppStore((s) =>
     Boolean(s.appConfig?.allow_track_reports),
   );
+  const reanalyzeAdminOnly = useAppStore((s) =>
+    Boolean(s.appConfig?.reanalyze_admin_only),
+  );
+  const trackBpmMultiplier = useAppStore((s) => s.trackBpmMultiplier);
+  const trackBpmLocked = useAppStore((s) => s.trackBpmLocked);
+  const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
+  const autocanonizerMixEnabled = useAppStore((s) => s.autocanonizerMixEnabled);
+  const songSyncEnabled = useAppStore((s) => s.songSyncEnabled);
   const lastSourceId = useAppStore((s) => s.lastSourceId);
   const lastSourceProvider = useAppStore((s) => s.lastSourceProvider);
   const favoriteToggleBusy = useAppStore((s) => s.favoriteToggleBusy);
@@ -356,9 +548,12 @@ export function PlayMenu() {
   const [pendingRename, setPendingRename] = useState<PendingRename | null>(
     null,
   );
+  const [pendingReanalyze, setPendingReanalyze] =
+    useState<PendingReanalyze | null>(null);
   const [reportJobId, setReportJobId] = useState<string | null>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
   const renameButtonRef = useRef<HTMLButtonElement | null>(null);
+  const reanalyzeButtonRef = useRef<HTMLButtonElement | null>(null);
   const reportButtonRef = useRef<HTMLButtonElement | null>(null);
   const titleRef = useRef<HTMLDivElement | null>(null);
 
@@ -368,6 +563,19 @@ export function PlayMenu() {
   const hideTuning = playMode === "wubmachine";
   const hideTrackInfo = playMode !== "jukebox";
   const adminMode = isAdminMode();
+  const hideReanalyze =
+    !lastJobId ||
+    multiTrackEnabled ||
+    autocanonizerMixEnabled ||
+    songSyncEnabled ||
+    (reanalyzeAdminOnly && !adminMode);
+  const reanalyzeTitle = trackBpmLocked
+    ? t("reanalyze.buttonLockedTitle")
+    : trackBpmMultiplier !== 1
+      ? t("reanalyze.buttonActiveTitle", {
+          multiplier: `${trackBpmMultiplier}x`,
+        })
+      : t("reanalyze.buttonTitle");
   const displayTitle =
     trackTitle || trackArtist
       ? (() => {
@@ -434,6 +642,15 @@ export function PlayMenu() {
     useAppStore.setState({ renameModalOpen: true });
   };
 
+  const handleReanalyzeClick = () => {
+    const pending = getPendingReanalyze();
+    if (!pending) {
+      return;
+    }
+    setPendingReanalyze(pending);
+    useAppStore.setState({ reanalyzeModalOpen: true });
+  };
+
   return (
     <>
       <div
@@ -454,6 +671,30 @@ export function PlayMenu() {
           </span>
         </div>
         <div className="menu-right">
+          <button
+            type="button"
+            id="reanalyze-bpm"
+            ref={reanalyzeButtonRef}
+            className={
+              hideReanalyze
+                ? "reanalyze-toggle hidden"
+                : trackBpmLocked
+                  ? "reanalyze-toggle is-locked"
+                  : trackBpmMultiplier !== 1
+                    ? "reanalyze-toggle is-scaled"
+                    : "reanalyze-toggle"
+            }
+            aria-label={reanalyzeTitle}
+            title={reanalyzeTitle}
+            onClick={handleReanalyzeClick}
+          >
+            <span
+              className="material-symbols-outlined reanalyze-icon"
+              aria-hidden="true"
+            >
+              speed
+            </span>
+          </button>
           <button
             type="button"
             id="rename-job"
@@ -595,6 +836,14 @@ export function PlayMenu() {
         onClosed={() => {
           setPendingRename(null);
           renameButtonRef.current?.focus();
+        }}
+      />
+      <ReanalyzeBpmModal
+        pending={pendingReanalyze}
+        adminMode={adminMode}
+        onClosed={() => {
+          setPendingReanalyze(null);
+          reanalyzeButtonRef.current?.focus();
         }}
       />
       <ReportTrackModal

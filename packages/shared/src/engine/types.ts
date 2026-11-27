@@ -4,6 +4,7 @@ export interface TrackMeta {
   duration?: number;
   tempo?: number;
   time_signature?: number;
+  bpm_multiplier?: number;
 }
 
 export interface TrackSliceMeta {

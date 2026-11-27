@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   performDelete: vi.fn(),
   getPendingRename: vi.fn(),
   performRename: vi.fn(),
+  getPendingReanalyze: vi.fn(),
+  performReanalyze: vi.fn(),
   toggleFavorite: vi.fn(),
   copyShortUrl: vi.fn(),
   reportTrack: vi.fn(),
@@ -29,6 +31,11 @@ vi.mock("../../delete-job", () => ({
 vi.mock("../../rename-job", () => ({
   getPendingRename: h.getPendingRename,
   performRename: h.performRename,
+}));
+vi.mock("../../reanalyze-job", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../reanalyze-job")>()),
+  getPendingReanalyze: h.getPendingReanalyze,
+  performReanalyze: h.performReanalyze,
 }));
 vi.mock("../../favorites-actions", () => ({ toggleFavorite: h.toggleFavorite }));
 vi.mock("../../playback-ui", () => ({ copyShortUrl: h.copyShortUrl }));
@@ -58,6 +65,16 @@ describe("PlayMenu", () => {
     });
     h.performRename.mockReset();
     h.performRename.mockResolvedValue(true);
+    h.getPendingReanalyze.mockReturnValue({
+      jobId: "job1",
+      trackId: "track1",
+      currentTempoBpm: 93,
+      currentMultiplier: 1,
+      bpmLocked: false,
+      adminKey: null,
+    });
+    h.performReanalyze.mockReset();
+    h.performReanalyze.mockResolvedValue(true);
     h.toggleFavorite.mockReset();
     h.copyShortUrl.mockReset();
     h.reportTrack.mockReset();
@@ -76,6 +93,12 @@ describe("PlayMenu", () => {
         deleteEligible: false,
         deleteConfirmOpen: false,
         renameModalOpen: false,
+        reanalyzeModalOpen: false,
+        trackBpmMultiplier: 1,
+        trackBpmLocked: false,
+        multiTrackEnabled: false,
+        autocanonizerMixEnabled: false,
+        songSyncEnabled: false,
         favorites: [],
         favoriteToggleBusy: false,
         lastTrackId: "track1",
@@ -448,5 +471,149 @@ describe("PlayMenu", () => {
     await user.keyboard("{Escape}");
     expect(useAppStore.getState().renameModalOpen).toBe(false);
     expect(h.performRename).not.toHaveBeenCalled();
+  });
+
+  it("hides the reanalyze button when reanalyze_admin_only is enabled for non-admins or in mix modes", () => {
+    render(<PlayMenu />);
+    expect(
+      document.getElementById("reanalyze-bpm")?.classList.contains("hidden"),
+    ).toBe(false);
+
+    act(() => {
+      useAppStore.setState({
+        appConfig: {
+          allow_user_upload: false,
+          allow_user_url: false,
+          reanalyze_admin_only: true,
+        },
+      });
+    });
+    expect(
+      document.getElementById("reanalyze-bpm")?.classList.contains("hidden"),
+    ).toBe(true);
+
+    cleanup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    render(<PlayMenu />);
+    expect(
+      document.getElementById("reanalyze-bpm")?.classList.contains("hidden"),
+    ).toBe(false);
+
+    act(() => {
+      useAppStore.setState({ multiTrackEnabled: true });
+    });
+    expect(
+      document.getElementById("reanalyze-bpm")?.classList.contains("hidden"),
+    ).toBe(true);
+  });
+
+  it("submits BPM reanalysis for 2x and prevents non-admin submit when locked", async () => {
+    const user = userEvent.setup();
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("reanalyze-bpm")!);
+    expect(useAppStore.getState().reanalyzeModalOpen).toBe(true);
+    expect(document.getElementById("reanalyze-current-bpm")?.textContent).toBe(
+      "93 BPM (1x)",
+    );
+
+    const submit = document.getElementById(
+      "reanalyze-bpm-submit",
+    ) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    await user.click(document.getElementById("reanalyze-multiplier-2")!);
+    expect(submit.disabled).toBe(false);
+    await user.click(submit);
+
+    await waitFor(() => {
+      expect(h.performReanalyze).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ jobId: "job1", currentMultiplier: 1 }),
+        { bpmMultiplier: 2, bpmLocked: undefined },
+      );
+      expect(useAppStore.getState().reanalyzeModalOpen).toBe(false);
+    });
+
+    // Non-admin sees locked notice and cannot select or submit.
+    h.getPendingReanalyze.mockReturnValue({
+      jobId: "job1",
+      trackId: "track1",
+      currentTempoBpm: 93,
+      currentMultiplier: 1,
+      bpmLocked: true,
+      adminKey: null,
+    });
+    await user.click(document.getElementById("reanalyze-bpm")!);
+    expect(document.getElementById("reanalyze-locked-notice")).not.toBeNull();
+    expect(
+      (document.getElementById("reanalyze-multiplier-2") as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (document.getElementById("reanalyze-bpm-submit") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("allows admins to toggle BPM lock only, bails on job switch, and closes on Escape", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(ADMIN_KEY_STORAGE_KEY, "secret");
+    h.getPendingReanalyze.mockReturnValue({
+      jobId: "job1",
+      trackId: "track1",
+      currentTempoBpm: 93,
+      currentMultiplier: 1,
+      bpmLocked: false,
+      adminKey: "secret",
+    });
+    render(<PlayMenu />);
+
+    await user.click(document.getElementById("reanalyze-bpm")!);
+    await user.click(document.getElementById("reanalyze-bpm-lock")!);
+    const submit = document.getElementById(
+      "reanalyze-bpm-submit",
+    ) as HTMLButtonElement;
+    expect(submit.textContent).toBe("Save lock");
+    await user.click(submit);
+
+    await waitFor(() => {
+      expect(h.performReanalyze).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ jobId: "job1", adminKey: "secret" }),
+        { bpmMultiplier: undefined, bpmLocked: true },
+      );
+    });
+
+    // Bailout when job changes underneath open modal.
+    await user.click(document.getElementById("reanalyze-bpm")!);
+    await user.click(document.getElementById("reanalyze-multiplier-0_5")!);
+    h.getPendingReanalyze.mockReturnValue({
+      jobId: "job2",
+      trackId: "track2",
+      currentTempoBpm: 120,
+      currentMultiplier: 1,
+      bpmLocked: false,
+      adminKey: "secret",
+    });
+    await user.click(document.getElementById("reanalyze-bpm-submit")!);
+    await waitFor(() => {
+      expect(useAppStore.getState().reanalyzeModalOpen).toBe(false);
+    });
+    expect(h.performReanalyze).toHaveBeenCalledTimes(1);
+
+    // Escape closes without submitting.
+    h.getPendingReanalyze.mockReturnValue({
+      jobId: "job1",
+      trackId: "track1",
+      currentTempoBpm: 93,
+      currentMultiplier: 1,
+      bpmLocked: false,
+      adminKey: "secret",
+    });
+    await user.click(document.getElementById("reanalyze-bpm")!);
+    expect(useAppStore.getState().reanalyzeModalOpen).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(useAppStore.getState().reanalyzeModalOpen).toBe(false);
   });
 });

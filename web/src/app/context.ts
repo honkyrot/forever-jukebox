@@ -100,6 +100,8 @@ export type AppState = {
   trackDurationSec: number | null;
   trackTitle: string | null;
   trackArtist: string | null;
+  trackBpmMultiplier: number;
+  trackBpmLocked: boolean;
   deleteEligible: boolean;
   deleteEligibilityJobId: string | null;
   appConfig: AppConfig | null;

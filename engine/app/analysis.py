@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, Callable
+from dataclasses import replace
+from typing import Dict, Any, List, Optional, Callable, Tuple
+import math
 
 import numpy as np
 
@@ -9,6 +11,8 @@ from .beats import extract_beats
 from .config import AnalysisConfig
 from .features import compute_frame_features
 from .segmentation import compute_novelty, segment_from_novelty
+
+VALID_BPM_MULTIPLIERS = (0.5, 1.0, 2.0)
 
 
 NO_BEATS_DETECTED_MESSAGE = (
@@ -141,10 +145,130 @@ def _sections_from_bars(
     return _make_quanta(section_starts, duration, confidence=section_confidence)
 
 
+def normalize_bpm_multiplier(value: float) -> float:
+    """Validate and normalize a BPM multiplier into one of the supported presets (0.5, 1.0, 2.0)."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid bpm_multiplier: {value!r}") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"Invalid bpm_multiplier: {value!r}")
+    for preset in VALID_BPM_MULTIPLIERS:
+        if math.isclose(numeric, preset, rel_tol=0.0, abs_tol=1e-6):
+            return preset
+    raise ValueError(f"bpm_multiplier must be one of {VALID_BPM_MULTIPLIERS}, got {value!r}")
+
+
+def _resolve_beats_per_bar(beat_numbers: List[int], default: int = 4) -> int:
+    """Infer the dominant bar length (beats per bar) from extracted 1-based beat numbers."""
+    bar_lengths: List[int] = []
+    current_bar_max = 0
+    for raw_num in beat_numbers:
+        num = int(raw_num)
+        if num <= 1 and current_bar_max > 0:
+            bar_lengths.append(current_bar_max)
+            current_bar_max = num
+        else:
+            current_bar_max = max(current_bar_max, num)
+    if current_bar_max > 0:
+        bar_lengths.append(current_bar_max)
+
+    valid_lengths = [length for length in bar_lengths if 2 <= length <= 12]
+    if not valid_lengths:
+        return default
+    counts: Dict[int, int] = {}
+    for length in valid_lengths:
+        counts[length] = counts.get(length, 0) + 1
+    # Prefer the most frequent bar length; break ties toward larger/default meters cleanly.
+    return max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def scale_beat_grid(
+    beat_times: List[float],
+    beat_numbers: List[int],
+    beat_confidences: List[float],
+    duration: float,
+    bpm_multiplier: float,
+    default_beats_per_bar: int = 4,
+) -> Tuple[List[float], List[int], List[float]]:
+    """Transform an extracted beat grid by doubling (2.0) or halving (0.5) its beat tempo."""
+    multiplier = normalize_bpm_multiplier(bpm_multiplier)
+    if multiplier == 1.0 or not beat_times:
+        return list(beat_times), list(beat_numbers), list(beat_confidences)
+
+    bar_len = _resolve_beats_per_bar(beat_numbers, default=default_beats_per_bar)
+
+    if multiplier == 2.0:
+        # Estimate a fallback interval for the final beat from the median beat spacing.
+        positive_dts = [
+            beat_times[i + 1] - beat_times[i]
+            for i in range(len(beat_times) - 1)
+            if beat_times[i + 1] > beat_times[i]
+        ]
+        if positive_dts:
+            median_dt = float(np.median(positive_dts))
+        elif duration > beat_times[-1]:
+            median_dt = float(duration - beat_times[-1])
+        else:
+            median_dt = 0.5
+
+        scaled_times: List[float] = []
+        scaled_numbers: List[int] = []
+        scaled_confidences: List[float] = []
+
+        for i, t in enumerate(beat_times):
+            num = beat_numbers[i] if i < len(beat_numbers) else ((i % bar_len) + 1)
+            conf = beat_confidences[i] if i < len(beat_confidences) else 1.0
+            num_idx = max(0, int(num) - 1)
+
+            # Original beat maps to an even slot within the doubled bar grid.
+            scaled_times.append(float(t))
+            scaled_numbers.append(((num_idx * 2) % bar_len) + 1)
+            scaled_confidences.append(float(conf))
+
+            dt = (beat_times[i + 1] - t) if i + 1 < len(beat_times) else median_dt
+            mid = t + 0.5 * dt
+            # Insert the midpoint subdivision when it fits strictly before track end.
+            if dt > 1e-4 and mid < duration:
+                scaled_times.append(float(mid))
+                scaled_numbers.append(((num_idx * 2 + 1) % bar_len) + 1)
+                scaled_confidences.append(float(conf))
+
+        return scaled_times, scaled_numbers, scaled_confidences
+
+    # Half-time (0.5x): drop alternating beats anchored on the first extracted downbeat.
+    if len(beat_times) < 2:
+        return list(beat_times), list(beat_numbers), list(beat_confidences)
+
+    anchor_idx = 0
+    for idx, num in enumerate(beat_numbers):
+        if int(num) == 1:
+            anchor_idx = idx
+            break
+
+    halved_times: List[float] = []
+    halved_numbers: List[int] = []
+    halved_confidences: List[float] = []
+    for i, t in enumerate(beat_times):
+        if (i - anchor_idx) % 2 != 0:
+            continue
+        kept_pos = (i - anchor_idx) // 2
+        new_num = (kept_pos % bar_len) + 1
+        conf = beat_confidences[i] if i < len(beat_confidences) else 1.0
+        halved_times.append(float(t))
+        halved_numbers.append(new_num)
+        halved_confidences.append(float(conf))
+
+    return halved_times, halved_numbers, halved_confidences
+
+
 def analyze_audio(
     audio_path: str,
     progress_cb: Optional[Callable[[int, str], None]] = None,
+    bpm_multiplier: float = 1.0,
 ) -> Dict[str, Any]:
+    """Decode audio, extract beats/features/segments, and return Spotify-style analysis JSON."""
+    multiplier = normalize_bpm_multiplier(bpm_multiplier)
     last_reported = -1
 
     def report(percent: float, stage: str) -> None:
@@ -180,6 +304,16 @@ def analyze_audio(
     if not beat_times:
         raise NoBeatsDetectedError(NO_BEATS_DETECTED_MESSAGE)
 
+    if multiplier != 1.0:
+        beat_times, beat_numbers, beat_confidences = scale_beat_grid(
+            beat_times,
+            beat_numbers,
+            beat_confidences,
+            duration,
+            multiplier,
+            default_beats_per_bar=config.time_signature,
+        )
+
     frame_features = compute_frame_features(
         audio,
         config.features,
@@ -191,11 +325,21 @@ def analyze_audio(
         frame_features["rms_db"],
     )
 
+    seg_config = config.segmentation
+    if multiplier > 1.0:
+        # Loosen duration/count caps and tighten snap tolerance so novelty peaks align to doubled beats.
+        seg_config = replace(
+            seg_config,
+            min_segment_duration=max(0.12, seg_config.min_segment_duration / multiplier),
+            max_segments_per_second=seg_config.max_segments_per_second * multiplier,
+            beat_snap_tolerance=seg_config.beat_snap_tolerance / multiplier,
+        )
+
     boundaries = segment_from_novelty(
         frame_features["frame_times"],
         novelty,
         beat_times,
-        config.segmentation,
+        seg_config,
         duration,
     )
     if len(boundaries) < 2:
@@ -323,6 +467,7 @@ def analyze_audio(
             "duration": float(duration),
             "tempo": float(tempo),
             "time_signature": float(config.time_signature),
+            "bpm_multiplier": float(multiplier),
         },
     }
 

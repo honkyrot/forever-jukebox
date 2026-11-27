@@ -18,6 +18,7 @@ SOURCE_HOST_PROVIDER = (
 
 MIGRATION_ID_0001 = "0001_sources_jobs_unification"
 MIGRATION_ID_0002 = "0002_drop_job_paths"
+MIGRATION_ID_0003 = "0003_job_bpm_reanalysis"
 
 
 @dataclass
@@ -184,6 +185,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             error TEXT,
             progress INTEGER NOT NULL DEFAULT 0,
+            bpm_multiplier REAL NOT NULL DEFAULT 1.0,
+            bpm_locked INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(source_ref) REFERENCES sources(id)
@@ -619,6 +622,17 @@ def _drop_job_path_columns(conn: sqlite3.Connection) -> None:
     # Indexes are recreated by the trailing _create_schema() in run_migrations.
 
 
+def _add_job_bpm_columns(conn: sqlite3.Connection) -> None:
+    """Add bpm_multiplier and bpm_locked columns to jobs when migrating from pre-0003 schemas."""
+    if not _table_exists(conn, "jobs"):
+        return
+    columns = _columns_for(conn, "jobs")
+    if "bpm_multiplier" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN bpm_multiplier REAL NOT NULL DEFAULT 1.0")
+    if "bpm_locked" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN bpm_locked INTEGER NOT NULL DEFAULT 0")
+
+
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -679,6 +693,10 @@ def run_migrations(conn: sqlite3.Connection) -> None:
         if MIGRATION_ID_0002 not in applied:
             _drop_job_path_columns(conn)
             _mark_migration_applied(conn, MIGRATION_ID_0002)
+
+        if MIGRATION_ID_0003 not in applied:
+            _add_job_bpm_columns(conn)
+            _mark_migration_applied(conn, MIGRATION_ID_0003)
 
         _create_schema(conn)
         conn.execute("COMMIT")

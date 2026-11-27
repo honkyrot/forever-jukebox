@@ -44,6 +44,7 @@ Optional:
 - `ALLOW_USER_UPLOAD`
 - `ALLOW_USER_URL`
 - `ALLOW_FAVORITES_SYNC`
+- `REANALYZE_ADMIN_ONLY`
 - `HOSTED_BY_NAME`
 - `HOSTED_BY_URL`
 
@@ -65,6 +66,7 @@ export WORKER_COUNT=1
 # export ALLOW_USER_UPLOAD=true
 # export ALLOW_USER_URL=true
 # export ALLOW_FAVORITES_SYNC=true
+# export REANALYZE_ADMIN_ONLY=false
 # export HOSTED_BY_NAME="Example Host"
 # export HOSTED_BY_URL="https://example.com"
 ```
@@ -110,6 +112,14 @@ curl -X POST /api/jobs/<id>/retry
 
 The backend restarts retryable source failures in place and otherwise returns
 the job's current state unchanged.
+
+Reanalyze a track at `0.5x`, `1x`, or `2x` BPM (or toggle per-track admin BPM lock):
+
+```bash
+curl -X POST /api/jobs/<id>/reanalyze -H "Content-Type: application/json" -d '{"bpm_multiplier":2}'
+```
+
+Set `REANALYZE_ADMIN_ONLY=true` to require `X-Admin-Key` for all reanalysis requests, or pass `{"bpm_locked":true}` with `X-Admin-Key` to lock a single track.
 
 Search Spotify:
 

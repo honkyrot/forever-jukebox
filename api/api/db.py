@@ -40,6 +40,8 @@ class Job:
     play_count: int
     created_at: str
     updated_at: str
+    bpm_multiplier: float = 1.0
+    bpm_locked: bool = False
 
 
 JOB_SELECT_COLUMNS = (
@@ -47,7 +49,8 @@ JOB_SELECT_COLUMNS = (
     "s.track_title, s.track_artist, "
     "CASE WHEN s.provider = 'youtube' THEN s.source_id ELSE NULL END AS source_id, "
     "s.provider AS source_provider, s.source_url, "
-    "j.progress, s.play_count, j.created_at, j.updated_at"
+    "j.progress, s.play_count, j.created_at, j.updated_at, "
+    "j.bpm_multiplier, j.bpm_locked"
 )
 
 TRACKS_BASE_FILTER = """
@@ -72,7 +75,10 @@ def _utc_now() -> str:
 def _job_from_row(row: tuple | None) -> Optional[Job]:
     if not row:
         return None
-    return Job(*row)
+    base = row[:12]
+    bpm_multiplier = float(row[12]) if len(row) > 12 and row[12] is not None else 1.0
+    bpm_locked = bool(row[13]) if len(row) > 13 and row[13] is not None else False
+    return Job(*base, bpm_multiplier=bpm_multiplier, bpm_locked=bpm_locked)
 
 
 def _top_track_from_row(row: tuple) -> dict[str, object]:
@@ -537,6 +543,74 @@ def claim_job_for_download(
               AND status NOT IN ('downloading', 'queued', 'processing')
             """,
             (now, now, job_id, expected_updated_at),
+        )
+        conn.commit()
+    return now if int(cur.rowcount or 0) == 1 else None
+
+
+def set_job_bpm_lock(db_path: Path, job_id: str, bpm_locked: bool) -> Optional[Job]:
+    """Update a job's per-track admin BPM lock flag without touching source play timestamps."""
+    locked_val = 1 if bpm_locked else 0
+    with _connect(db_path) as conn:
+        conn.execute(BEGIN_IMMEDIATE)
+        cur = conn.execute(
+            "UPDATE jobs SET bpm_locked = ? WHERE id = ?",
+            (locked_val, job_id),
+        )
+        if int(cur.rowcount or 0) == 0:
+            conn.commit()
+            return None
+        row = conn.execute(
+            f"SELECT {JOB_SELECT_COLUMNS} FROM jobs j JOIN sources s ON s.id = j.source_ref WHERE j.id = ?",
+            (job_id,),
+        ).fetchone()
+        conn.commit()
+    return _job_from_row(row)
+
+
+def requeue_job_for_reanalysis(
+    db_path: Path,
+    job_id: str,
+    expected_updated_at: str,
+    *,
+    bpm_multiplier: float,
+    status: str = "queued",
+    progress: int = 25,
+    bpm_locked: Optional[bool] = None,
+) -> Optional[str]:
+    """Atomically claim an idle job for BPM reanalysis and return its new ownership stamp."""
+    now = _utc_now()
+    assignments = [
+        "status = ?",
+        "error = NULL",
+        "progress = ?",
+        "bpm_multiplier = ?",
+        "created_at = ?",
+        "updated_at = ?",
+    ]
+    params: list[object] = [
+        status,
+        _clamp_progress(progress),
+        float(bpm_multiplier),
+        now,
+        now,
+    ]
+    if bpm_locked is not None:
+        assignments.append("bpm_locked = ?")
+        params.append(1 if bpm_locked else 0)
+    params.extend([job_id, expected_updated_at])
+
+    with _connect(db_path) as conn:
+        conn.execute(BEGIN_IMMEDIATE)
+        cur = conn.execute(
+            f"""
+            UPDATE jobs
+            SET {", ".join(assignments)}
+            WHERE id = ?
+              AND updated_at = ?
+              AND status NOT IN ('downloading', 'queued', 'processing')
+            """,
+            params,
         )
         conn.commit()
     return now if int(cur.rowcount or 0) == 1 else None

@@ -165,6 +165,7 @@ type ShellSlice = {
   playlistModalOpen: boolean;
   deleteConfirmOpen: boolean;
   renameModalOpen: boolean;
+  reanalyzeModalOpen: boolean;
   trackInfo: TrackInfoState;
   favoriteToggleBusy: boolean;
   volumePct: number;
@@ -284,6 +285,7 @@ const createUiSlice: Slice<
     | "playlistModalOpen"
     | "deleteConfirmOpen"
     | "renameModalOpen"
+    | "reanalyzeModalOpen"
     | "trackInfo"
     | "favoriteToggleBusy"
     | "volumePct"
@@ -365,6 +367,7 @@ const createUiSlice: Slice<
     playlistModalOpen: false,
     deleteConfirmOpen: false,
     renameModalOpen: false,
+    reanalyzeModalOpen: false,
     trackInfo: {
       durationText: "00:00:00",
       totalBeats: 0,
@@ -584,6 +587,8 @@ const createTrackSlice: Slice<
     | "trackTitle"
     | "trackArtist"
     | "trackDurationSec"
+    | "trackBpmMultiplier"
+    | "trackBpmLocked"
     | "lastPlayCountedJobId"
     | "deleteEligible"
     | "deleteEligibilityJobId"
@@ -600,6 +605,8 @@ const createTrackSlice: Slice<
   trackTitle: null,
   trackArtist: null,
   trackDurationSec: null,
+  trackBpmMultiplier: 1,
+  trackBpmLocked: false,
   lastPlayCountedJobId: null,
   deleteEligible: false,
   deleteEligibilityJobId: null,

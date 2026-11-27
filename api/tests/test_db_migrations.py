@@ -118,6 +118,24 @@ class DropJobPathsMigrationTests(unittest.TestCase):
             self.assertIn("idx_jobs_status_created", indexes)
             self.assertIn("idx_jobs_source_ref_created", indexes)
 
+    def test_adds_bpm_reanalysis_columns_and_preserves_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "jobs.db"
+            _build_0001_schema_with_paths(db_path)
+
+            init_db(db_path)
+
+            cols = _job_columns(db_path)
+            self.assertIn("bpm_multiplier", cols)
+            self.assertIn("bpm_locked", cols)
+            self.assertIn("0003_job_bpm_reanalysis", _applied_migrations(db_path))
+
+            job = get_job(db_path, "job1")
+            self.assertIsNotNone(job)
+            assert job is not None
+            self.assertEqual(job.bpm_multiplier, 1.0)
+            self.assertFalse(job.bpm_locked)
+
     def test_is_idempotent_on_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "jobs.db"

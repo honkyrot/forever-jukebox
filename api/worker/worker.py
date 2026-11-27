@@ -86,6 +86,7 @@ def run_job(
     job_id: str,
     title: str | None = None,
     artist: str | None = None,
+    bpm_multiplier: float = 1.0,
 ) -> float | None:
     """Analyse the job's audio and store the result; returns the track duration if known."""
     if not ENGINE_REPO.exists():
@@ -98,7 +99,11 @@ def run_job(
             raise JobFailure("Audio file is missing")
         output_abs = store.analysis_output_path(job_id)
         output_abs.parent.mkdir(parents=True, exist_ok=True)
-        _run_engine(job_id, input_abs, output_abs, env, title, artist)
+        # Preserve the 6-argument signature when multiplier is 1.0 for existing test mocks.
+        if bpm_multiplier != 1.0:
+            _run_engine(job_id, input_abs, output_abs, env, title, artist, bpm_multiplier=bpm_multiplier)
+        else:
+            _run_engine(job_id, input_abs, output_abs, env, title, artist)
     if not output_abs.is_file():
         return None
     duration_s = _track_duration_seconds(output_abs)
@@ -113,6 +118,7 @@ def _run_engine(
     env: dict[str, str],
     title: str | None,
     artist: str | None,
+    bpm_multiplier: float = 1.0,
 ) -> None:
     def map_engine_progress(value: int) -> int:
         return max(0, min(API_PROGRESS_END, int(value)))
@@ -129,6 +135,8 @@ def _run_engine(
         cmd.extend(["--title", title])
     if artist:
         cmd.extend(["--artist", artist])
+    if bpm_multiplier != 1.0:
+        cmd.extend(["--bpm-multiplier", str(bpm_multiplier)])
 
     proc = subprocess.Popen(
         cmd,
@@ -264,7 +272,15 @@ def run_worker_loop() -> None:
             time.sleep(1.0)
             continue
         try:
-            duration_s = run_job(job.id, job.track_title, job.track_artist)
+            if job.bpm_multiplier != 1.0:
+                duration_s = run_job(
+                    job.id,
+                    job.track_title,
+                    job.track_artist,
+                    bpm_multiplier=job.bpm_multiplier,
+                )
+            else:
+                duration_s = run_job(job.id, job.track_title, job.track_artist)
             set_job_progress(DB_PATH, job.id, 100)
         except StorageError as exc:
             handle_storage_error(job, exc)

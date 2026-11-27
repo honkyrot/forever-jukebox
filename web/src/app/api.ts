@@ -13,6 +13,8 @@ type AnalysisBase = {
   source_id?: string;
   source_provider?: string;
   created_at?: string;
+  bpm_multiplier?: number;
+  bpm_locked?: boolean;
 };
 
 export type AnalysisInProgress = AnalysisBase & {
@@ -91,6 +93,7 @@ export type AppConfig = {
   allow_favorites_sync?: boolean;
   allow_track_reports?: boolean;
   allow_lyrics?: boolean;
+  reanalyze_admin_only?: boolean;
   max_upload_size?: number | null;
   allowed_upload_exts?: string[] | null;
   max_track_length?: number | null;
@@ -176,6 +179,13 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
     typeof data.source_provider === "string" ? data.source_provider : undefined;
   const createdAt =
     typeof data.created_at === "string" ? data.created_at : undefined;
+  const bpmMultiplier =
+    typeof data.bpm_multiplier === "number" &&
+    Number.isFinite(data.bpm_multiplier)
+      ? data.bpm_multiplier
+      : undefined;
+  const bpmLocked =
+    typeof data.bpm_locked === "boolean" ? data.bpm_locked : undefined;
   const progress = typeof data.progress === "number" ? data.progress : undefined;
   const message = typeof data.message === "string" ? data.message : undefined;
   if (status === "downloading" || status === "queued" || status === "processing") {
@@ -190,6 +200,8 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
       source_id: sourceId,
       source_provider: sourceProvider,
       created_at: createdAt,
+      bpm_multiplier: bpmMultiplier,
+      bpm_locked: bpmLocked,
     };
   }
   if (status === "failed") {
@@ -199,6 +211,8 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
       source_id: sourceId,
       source_provider: sourceProvider,
       created_at: createdAt,
+      bpm_multiplier: bpmMultiplier,
+      bpm_locked: bpmLocked,
       error: typeof data.error === "string" ? data.error : undefined,
       error_code: typeof data.error_code === "string" ? data.error_code : undefined,
     };
@@ -214,6 +228,8 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
       source_id: sourceId,
       source_provider: sourceProvider,
       created_at: createdAt,
+      bpm_multiplier: bpmMultiplier,
+      bpm_locked: bpmLocked,
       track: isRecord(data.track) ? (data.track as TrackMeta) : undefined,
     };
   }
@@ -225,6 +241,8 @@ function parseAnalysisResponse(data: unknown): AnalysisResponse | null {
       source_id: sourceId,
       source_provider: sourceProvider,
       created_at: createdAt,
+      bpm_multiplier: bpmMultiplier,
+      bpm_locked: bpmLocked,
       track: isRecord(data.track) ? (data.track as TrackMeta) : undefined,
     };
   }
@@ -423,6 +441,28 @@ export async function renameTrack(
     body: JSON.stringify(payload),
   });
   return data as TrackMetadataResponse;
+}
+
+/**
+ * Triggers server-side BPM reanalysis (0.5x/1x/2x) or updates the admin BPM lock for a job.
+ */
+export async function reanalyzeJob(
+  jobId: string,
+  payload: { bpm_multiplier?: 0.5 | 1 | 2; bpm_locked?: boolean },
+  adminKey?: string | null,
+): Promise<AnalysisResponse | null> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (adminKey) {
+    headers["X-Admin-Key"] = adminKey;
+  }
+  const data = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/reanalyze`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  return parseAnalysisResponse(data);
 }
 
 export async function fetchJobBySource(

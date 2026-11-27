@@ -28,6 +28,7 @@ def get_app_config() -> JSONResponse:
         allow_lyrics=bool(
             env_string("SPICY_LYRICS_CLIENT_KEY") or env_string("SPICY_LYRICS_API_KEY")
         ),
+        reanalyze_admin_only=env_flag("REANALYZE_ADMIN_ONLY"),
         max_upload_size=max_upload_size,
         allowed_upload_exts=allowed_upload_exts,
         max_track_length=env_positive_float("MAX_TRACK_LENGTH"),

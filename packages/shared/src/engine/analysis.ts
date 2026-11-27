@@ -107,6 +107,12 @@ function parseTrackMeta(value: unknown): TrackMeta | undefined {
       "track.time_signature"
     );
   }
+  if (value.bpm_multiplier !== undefined) {
+    meta.bpm_multiplier = assertNumber(
+      value.bpm_multiplier,
+      "track.bpm_multiplier"
+    );
+  }
   if (value.title !== undefined) {
     meta.title = String(value.title);
   }
