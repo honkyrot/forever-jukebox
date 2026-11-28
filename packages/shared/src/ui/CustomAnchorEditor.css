@@ -6,6 +6,7 @@
   font-size: 12px;
   border-radius: 8px;
   padding: 4px 10px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -62,6 +63,10 @@
 
 /* The dot alone names each end on a phone, so the row fits without wrapping. */
 @media (max-width: 600px) {
+  .custom-anchor-toolbar {
+    flex-wrap: wrap;
+  }
+
   .custom-anchor-label {
     display: none;
   }

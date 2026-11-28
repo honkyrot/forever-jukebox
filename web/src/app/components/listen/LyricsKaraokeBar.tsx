@@ -49,6 +49,16 @@ export function LyricsKaraokeBar() {
   const playMode = useAppStore((s) => s.playMode);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const autocanonizerMixEnabled = useAppStore((s) => s.autocanonizerMixEnabled);
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
+  const singleVoiceCount =
+    autocanonizerSingleVoiceCount > 2
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
   const lyricsKaraokeEnabled = useAppStore((s) => s.lyricsKaraokeEnabled);
   const lyricsRomanizationEnabled = useAppStore(
     (s) => s.lyricsRomanizationEnabled,
@@ -59,6 +69,8 @@ export function LyricsKaraokeBar() {
 
   const sync = useLyricsSync();
   const isCanonizer = sync.mode === "autocanonizer";
+  const isMultiCanonizer = isCanonizer && singleVoiceCount >= 3;
+  const isQuadCanonizer = isCanonizer && singleVoiceCount === 4;
   const useRomanized = Boolean(
     lyricsRomanizationEnabled && lyricsData?.hasTransliterations,
   );
@@ -94,21 +106,43 @@ export function LyricsKaraokeBar() {
     ? sync.canonizer.other.activeLineIndex
     : -1;
 
+  const row3GoldLine = isMultiCanonizer ? sync.canonizer.gold.activeLine : null;
+  const row3GoldIndex = row3GoldLine
+    ? sync.canonizer.gold.activeLineIndex
+    : -1;
+
+  const row4PinkLine = isQuadCanonizer ? sync.canonizer.pink.activeLine : null;
+  const row4PinkIndex = row4PinkLine
+    ? sync.canonizer.pink.activeLineIndex
+    : -1;
+
   const [exitingLine, setExitingLine] = useState<ExitingLineState | null>(null);
   const [otherExitingLine, setOtherExitingLine] =
     useState<ExitingLineState | null>(null);
+  const [goldExitingLine, setGoldExitingLine] =
+    useState<ExitingLineState | null>(null);
+  const [pinkExitingLine, setPinkExitingLine] =
+    useState<ExitingLineState | null>(null);
   const prevActiveRef = useRef<ActiveLineSnapshot | null>(null);
   const prevOtherActiveRef = useRef<ActiveLineSnapshot | null>(null);
+  const prevGoldActiveRef = useRef<ActiveLineSnapshot | null>(null);
+  const prevPinkActiveRef = useRef<ActiveLineSnapshot | null>(null);
   const transitionIdRef = useRef(0);
   const exitTimerRef = useRef<number | null>(null);
   const otherExitTimerRef = useRef<number | null>(null);
+  const goldExitTimerRef = useRef<number | null>(null);
+  const pinkExitTimerRef = useRef<number | null>(null);
 
   // Clear pending exit tweens immediately when karaoke hides or track/mode changes.
   useEffect(() => {
     prevActiveRef.current = null;
     prevOtherActiveRef.current = null;
+    prevGoldActiveRef.current = null;
+    prevPinkActiveRef.current = null;
     setExitingLine(null);
     setOtherExitingLine(null);
+    setGoldExitingLine(null);
+    setPinkExitingLine(null);
     if (exitTimerRef.current !== null) {
       window.clearTimeout(exitTimerRef.current);
       exitTimerRef.current = null;
@@ -117,7 +151,15 @@ export function LyricsKaraokeBar() {
       window.clearTimeout(otherExitTimerRef.current);
       otherExitTimerRef.current = null;
     }
-  }, [visible, lyricsData, sync.mode]);
+    if (goldExitTimerRef.current !== null) {
+      window.clearTimeout(goldExitTimerRef.current);
+      goldExitTimerRef.current = null;
+    }
+    if (pinkExitTimerRef.current !== null) {
+      window.clearTimeout(pinkExitTimerRef.current);
+      pinkExitTimerRef.current = null;
+    }
+  }, [visible, lyricsData, sync.mode, isMultiCanonizer, isQuadCanonizer]);
 
   // Capture finished Row 1 lines so they tween smoothly upward out past the top border.
   useEffect(() => {
@@ -177,6 +219,66 @@ export function LyricsKaraokeBar() {
       : null;
   }, [visible, isCanonizer, row2CanonLine, row2CanonIndex, useRomanized]);
 
+  // Capture finished Row 3 Gold lines so they tween smoothly downward out of Row 3.
+  useEffect(() => {
+    if (!visible || !isMultiCanonizer) {
+      return;
+    }
+    const nextIndex = row3GoldLine ? row3GoldIndex : -1;
+    const prev = prevGoldActiveRef.current;
+
+    if (prev && prev.index !== nextIndex) {
+      const exitKey = ++transitionIdRef.current;
+      setGoldExitingLine({ text: prev.text, key: exitKey });
+      if (goldExitTimerRef.current !== null) {
+        window.clearTimeout(goldExitTimerRef.current);
+      }
+      goldExitTimerRef.current = window.setTimeout(() => {
+        setGoldExitingLine((current) =>
+          current?.key === exitKey ? null : current,
+        );
+        goldExitTimerRef.current = null;
+      }, EXIT_ANIMATION_FALLBACK_MS);
+    }
+
+    prevGoldActiveRef.current = row3GoldLine
+      ? {
+          index: row3GoldIndex,
+          text: getDisplayLineText(row3GoldLine, useRomanized),
+        }
+      : null;
+  }, [visible, isMultiCanonizer, row3GoldLine, row3GoldIndex, useRomanized]);
+
+  // Capture finished Row 4 Pink lines so they tween smoothly downward out of Row 4.
+  useEffect(() => {
+    if (!visible || !isQuadCanonizer) {
+      return;
+    }
+    const nextIndex = row4PinkLine ? row4PinkIndex : -1;
+    const prev = prevPinkActiveRef.current;
+
+    if (prev && prev.index !== nextIndex) {
+      const exitKey = ++transitionIdRef.current;
+      setPinkExitingLine({ text: prev.text, key: exitKey });
+      if (pinkExitTimerRef.current !== null) {
+        window.clearTimeout(pinkExitTimerRef.current);
+      }
+      pinkExitTimerRef.current = window.setTimeout(() => {
+        setPinkExitingLine((current) =>
+          current?.key === exitKey ? null : current,
+        );
+        pinkExitTimerRef.current = null;
+      }, EXIT_ANIMATION_FALLBACK_MS);
+    }
+
+    prevPinkActiveRef.current = row4PinkLine
+      ? {
+          index: row4PinkIndex,
+          text: getDisplayLineText(row4PinkLine, useRomanized),
+        }
+      : null;
+  }, [visible, isQuadCanonizer, row4PinkLine, row4PinkIndex, useRomanized]);
+
   useEffect(() => {
     return () => {
       if (exitTimerRef.current !== null) {
@@ -186,6 +288,14 @@ export function LyricsKaraokeBar() {
       if (otherExitTimerRef.current !== null) {
         window.clearTimeout(otherExitTimerRef.current);
         otherExitTimerRef.current = null;
+      }
+      if (goldExitTimerRef.current !== null) {
+        window.clearTimeout(goldExitTimerRef.current);
+        goldExitTimerRef.current = null;
+      }
+      if (pinkExitTimerRef.current !== null) {
+        window.clearTimeout(pinkExitTimerRef.current);
+        pinkExitTimerRef.current = null;
       }
     };
   }, []);
@@ -448,10 +558,160 @@ export function LyricsKaraokeBar() {
     );
   };
 
+  const renderTertiaryRow = () => {
+    if (!isMultiCanonizer) {
+      return null;
+    }
+    const hasActiveGold = Boolean(row3GoldLine);
+    const hasPreviewGold = Boolean(
+      !row3GoldLine &&
+        sync.canonizer.gold.upcomingLine &&
+        sync.canonizer.gold.upcomingLineVisible,
+    );
+
+    return (
+      <div className="lyrics-karaoke-next is-visible is-canon-gold-lane">
+        {goldExitingLine ? (
+          <div
+            key={`gold-exit-${goldExitingLine.key}`}
+            className="lyrics-karaoke-line lyrics-karaoke-exiting is-canonizer-gold-exit"
+            aria-hidden="true"
+            onAnimationEnd={() => {
+              if (goldExitTimerRef.current !== null) {
+                window.clearTimeout(goldExitTimerRef.current);
+                goldExitTimerRef.current = null;
+              }
+              setGoldExitingLine((current) =>
+                current?.key === goldExitingLine.key ? null : current,
+              );
+            }}
+          >
+            {goldExitingLine.text}
+          </div>
+        ) : null}
+        {hasActiveGold && row3GoldLine ? (
+          <div
+            key={`canon-gold-${row3GoldIndex}`}
+            className="lyrics-karaoke-line lyrics-karaoke-lane-line is-lane-active lyrics-karaoke-canon-gold lyrics-voice-gold"
+          >
+            <span className="lyrics-voice-dots" aria-hidden="true">
+              <span
+                className="lyrics-voice-dot is-gold"
+                title={t("lyrics.canonGold")}
+              />
+            </span>
+            <span className="lyrics-karaoke-lane-text">
+              {renderSyncedLyricsLine(
+                row3GoldLine,
+                sync.canonizer.gold.activeSyllableIndex,
+                sync.canonizer.gold.activeSyllableProgress,
+                useRomanized,
+              )}
+              {renderBackgroundVocals(
+                row3GoldLine,
+                sync.canonizer.gold.backgroundStates,
+                "canon",
+              )}
+            </span>
+          </div>
+        ) : hasPreviewGold && sync.canonizer.gold.upcomingLine ? (
+          <div
+            key={`canon-gold-${sync.canonizer.gold.upcomingLineIndex}`}
+            className="lyrics-karaoke-line lyrics-karaoke-lane-line is-lane-preview"
+          >
+            <span className="lyrics-karaoke-lane-text">
+              {getDisplayLineText(
+                sync.canonizer.gold.upcomingLine,
+                useRomanized,
+              )}
+            </span>
+          </div>
+        ) : (
+          "\u00A0"
+        )}
+      </div>
+    );
+  };
+
+  const renderQuaternaryRow = () => {
+    if (!isQuadCanonizer) {
+      return null;
+    }
+    const hasActivePink = Boolean(row4PinkLine);
+    const hasPreviewPink = Boolean(
+      !row4PinkLine &&
+        sync.canonizer.pink.upcomingLine &&
+        sync.canonizer.pink.upcomingLineVisible,
+    );
+
+    return (
+      <div className="lyrics-karaoke-next is-visible is-canon-pink-lane">
+        {pinkExitingLine ? (
+          <div
+            key={`pink-exit-${pinkExitingLine.key}`}
+            className="lyrics-karaoke-line lyrics-karaoke-exiting is-canonizer-pink-exit"
+            aria-hidden="true"
+            onAnimationEnd={() => {
+              if (pinkExitTimerRef.current !== null) {
+                window.clearTimeout(pinkExitTimerRef.current);
+                pinkExitTimerRef.current = null;
+              }
+              setPinkExitingLine((current) =>
+                current?.key === pinkExitingLine.key ? null : current,
+              );
+            }}
+          >
+            {pinkExitingLine.text}
+          </div>
+        ) : null}
+        {hasActivePink && row4PinkLine ? (
+          <div
+            key={`canon-pink-${row4PinkIndex}`}
+            className="lyrics-karaoke-line lyrics-karaoke-lane-line is-lane-active lyrics-karaoke-canon-pink lyrics-voice-pink"
+          >
+            <span className="lyrics-voice-dots" aria-hidden="true">
+              <span
+                className="lyrics-voice-dot is-pink"
+                title={t("lyrics.canonPink")}
+              />
+            </span>
+            <span className="lyrics-karaoke-lane-text">
+              {renderSyncedLyricsLine(
+                row4PinkLine,
+                sync.canonizer.pink.activeSyllableIndex,
+                sync.canonizer.pink.activeSyllableProgress,
+                useRomanized,
+              )}
+              {renderBackgroundVocals(
+                row4PinkLine,
+                sync.canonizer.pink.backgroundStates,
+                "canon",
+              )}
+            </span>
+          </div>
+        ) : hasPreviewPink && sync.canonizer.pink.upcomingLine ? (
+          <div
+            key={`canon-pink-${sync.canonizer.pink.upcomingLineIndex}`}
+            className="lyrics-karaoke-line lyrics-karaoke-lane-line is-lane-preview"
+          >
+            <span className="lyrics-karaoke-lane-text">
+              {getDisplayLineText(
+                sync.canonizer.pink.upcomingLine,
+                useRomanized,
+              )}
+            </span>
+          </div>
+        ) : (
+          "\u00A0"
+        )}
+      </div>
+    );
+  };
+
   return (
     <div
       id="lyrics-karaoke-bar"
-      className={`lyrics-karaoke-bar${isCanonizer ? " is-canonizer-lyrics" : ""}`}
+      className={`lyrics-karaoke-bar${isCanonizer ? " is-canonizer-lyrics" : ""}${singleVoiceCount === 3 && isCanonizer ? " is-trio-lyrics" : ""}${isQuadCanonizer ? " is-quad-lyrics" : ""}`}
       aria-live="polite"
       onClick={(event) => event.stopPropagation()}
     >
@@ -478,6 +738,8 @@ export function LyricsKaraokeBar() {
           {renderPrimaryLine()}
         </div>
         {renderSecondaryRow()}
+        {renderTertiaryRow()}
+        {renderQuaternaryRow()}
       </div>
       {lyricsData && lyricsData.type !== "static" ? (
         <div

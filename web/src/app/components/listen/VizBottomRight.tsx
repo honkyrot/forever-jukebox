@@ -65,19 +65,27 @@ function VoiceBalanceControls({
           <span style={{ color }}>{panLabel}</span>
           <span className="pan-end-label">{rightLabel}</span>
         </div>
-        <input
-          className="pan-slider stream-pan-slider"
-          id={panId}
-          type="range"
-          aria-label={panLabel}
-          min={-100}
-          max={100}
-          step={1}
-          list="autocanonizer-pan-ticks"
-          value={pan}
-          style={{ accentColor: color }}
-          onChange={(event) => onPanChange(Number(event.target.value))}
-        />
+        <div className="pan-slider-wrap">
+          <input
+            className="pan-slider stream-pan-slider"
+            id={panId}
+            type="range"
+            aria-label={panLabel}
+            min={-100}
+            max={100}
+            step={5}
+            value={pan}
+            style={{ accentColor: color }}
+            onChange={(event) => onPanChange(Number(event.target.value))}
+          />
+          <div className="pan-ticks" aria-hidden="true">
+            <span className="pan-tick is-major" style={{ left: "0%" }} />
+            <span className="pan-tick is-minor" style={{ left: "25%" }} />
+            <span className="pan-tick is-major" style={{ left: "50%" }} />
+            <span className="pan-tick is-minor" style={{ left: "75%" }} />
+            <span className="pan-tick is-major" style={{ left: "100%" }} />
+          </div>
+        </div>
       </label>
       {showGain ? (
         <label className="stream-pan-control">
@@ -92,7 +100,7 @@ function VoiceBalanceControls({
             aria-label={gainAriaLabel}
             min={MIN_MIX_TRACK_GAIN_PCT}
             max={MAX_MIX_TRACK_GAIN_PCT}
-            step={1}
+            step={5}
             value={gainPct}
             style={{ accentColor: color }}
             onChange={(event) => onGainChange(Number(event.target.value))}
@@ -123,6 +131,16 @@ export function VizBottomRight() {
     (s) => s.autocanonizerMixEnabled,
   );
   const autocanonizerQuadMode = useAppStore((s) => s.autocanonizerQuadMode);
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
+  const singleVoiceCount =
+    autocanonizerSingleVoiceCount > 2
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
   const autocanonizerMixTrackTitles = useAppStore(
     (s) => s.autocanonizerMixTrackTitles,
   );
@@ -216,6 +234,8 @@ export function VizBottomRight() {
   };
 
   const isQuadMix = autocanonizerMixEnabled && autocanonizerQuadMode;
+  const isSingleMulti = !autocanonizerMixEnabled && singleVoiceCount >= 3;
+  const isSingleQuad = !autocanonizerMixEnabled && singleVoiceCount === 4;
   const hasNonDefaultDualBalance =
     mainPan !== 0 ||
     otherPan !== 0 ||
@@ -389,6 +409,52 @@ export function VizBottomRight() {
                 />
               </div>
             )}
+            {isSingleMulti ? (
+              <div>
+                <VoiceBalanceControls
+                  panId="autocanonizer-gold-pan"
+                  gainId="autocanonizer-gold-gain"
+                  panLabel={t("playback.goldBalance")}
+                  gainAriaLabel={t("playback.goldBalance")}
+                  leftLabel={t("playback.balanceLeft")}
+                  rightLabel={t("playback.balanceRight")}
+                  color={AUTOCANONIZER_GOLD_COLOR}
+                  pan={goldPan}
+                  gainPct={goldGainPct}
+                  showGain={false}
+                  onPanChange={(value) => handleQuadPanChange("gold", value)}
+                  onGainChange={(value) =>
+                    setAutocanonizerQuadSongGainPct(
+                      getAppContext(),
+                      "gold",
+                      value,
+                    )
+                  }
+                />
+                {isSingleQuad ? (
+                  <VoiceBalanceControls
+                    panId="autocanonizer-pink-pan"
+                    gainId="autocanonizer-pink-gain"
+                    panLabel={t("playback.pinkBalance")}
+                    gainAriaLabel={t("playback.pinkBalance")}
+                    leftLabel={t("playback.balanceLeft")}
+                    rightLabel={t("playback.balanceRight")}
+                    color={AUTOCANONIZER_PINK_COLOR}
+                    pan={pinkPan}
+                    gainPct={pinkGainPct}
+                    showGain={false}
+                    onPanChange={(value) => handleQuadPanChange("pink", value)}
+                    onGainChange={(value) =>
+                      setAutocanonizerQuadSongGainPct(
+                        getAppContext(),
+                        "pink",
+                        value,
+                      )
+                    }
+                  />
+                ) : null}
+              </div>
+            ) : null}
             {autocanonizerMixEnabled && hasNonDefaultDualBalance ? (
               <button
                 type="button"
@@ -399,11 +465,6 @@ export function VizBottomRight() {
                 {t("common.reset")}
               </button>
             ) : null}
-            <datalist id="autocanonizer-pan-ticks">
-              <option value={-100} />
-              <option value={0} />
-              <option value={100} />
-            </datalist>
           </div>
           <button
             type="button"

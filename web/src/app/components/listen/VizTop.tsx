@@ -15,11 +15,13 @@ import {
 	setAutocanonizerMixAlignment,
 	setAutocanonizerQuadBranchMode,
 	setAutocanonizerQuadMode,
+	setAutocanonizerSingleVoiceCount,
 	setSongSyncLoop,
 	swapAutocanonizerMixSongs,
 } from "../../playback";
 import { showToast } from "../../ui";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
+import type { AutocanonizerSingleVoiceCount } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { useAppStore } from "../../store";
 import {
 	setActiveVisualization,
@@ -73,6 +75,16 @@ export function VizTop() {
 	const autocanonizerQuadBranchMode = useAppStore(
 		(s) => s.autocanonizerQuadBranchMode,
 	);
+	const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+	const autocanonizerSingleVoiceCount = useAppStore(
+		(s) => s.autocanonizerSingleVoiceCount,
+	);
+	const singleVoiceCount: AutocanonizerSingleVoiceCount =
+		autocanonizerSingleVoiceCount > 2
+			? autocanonizerSingleVoiceCount
+			: autocanonizerTrioMode
+				? 3
+				: 2;
   const isCanonizer = playMode === "autocanonizer";
   const isSongSync = playMode === "songsync";
   const songSyncLoop = useAppStore((s) => s.songSyncLoop);
@@ -245,6 +257,51 @@ export function VizTop() {
 							? t("playback.syncPlaylist")
 							: t("playback.addSongsToSync")}
 					</button>
+				) : null}
+				{isCanonizer &&
+				!autocanonizerMixEnabled &&
+				audioLoaded &&
+				analysisLoaded ? (
+					<>
+						<button
+							type="button"
+							id="canonizer-trio-toggle"
+							className={
+								singleVoiceCount === 3
+									? "custom-anchor-button is-active"
+									: "custom-anchor-button"
+							}
+							aria-pressed={singleVoiceCount === 3}
+							title={t("playback.trioModeTitle")}
+							onClick={() =>
+								setAutocanonizerSingleVoiceCount(
+									getAppContext(),
+									singleVoiceCount === 3 ? 2 : 3,
+								)
+							}
+						>
+							{t("playback.trioMode")}
+						</button>
+						<button
+							type="button"
+							id="canonizer-single-quad-toggle"
+							className={
+								singleVoiceCount === 4
+									? "custom-anchor-button is-active"
+									: "custom-anchor-button"
+							}
+							aria-pressed={singleVoiceCount === 4}
+							title={t("playback.singleQuadModeTitle")}
+							onClick={() =>
+								setAutocanonizerSingleVoiceCount(
+									getAppContext(),
+									singleVoiceCount === 4 ? 2 : 4,
+								)
+							}
+						>
+							{t("playback.singleQuadMode")}
+						</button>
+					</>
 				) : null}
 				{isCanonizer && autocanonizerMixEnabled ? (
 					<>

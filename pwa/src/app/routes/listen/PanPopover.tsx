@@ -7,6 +7,7 @@ import {
   AUTOCANONIZER_OTHER_COLOR,
   AUTOCANONIZER_PINK_COLOR,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
+import type { AutocanonizerSingleVoiceCount } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import {
   DEFAULT_MIX_TRACK_GAIN_PCT,
   MAX_MIX_TRACK_GAIN_PCT,
@@ -50,19 +51,27 @@ export function VoiceBalanceControls({
           <span style={{ color }}>{panLabel}</span>
           <span className="pan-end-label">{rightLabel}</span>
         </div>
-        <input
-          className="pan-slider stream-pan-slider"
-          id={panId}
-          type="range"
-          aria-label={panLabel}
-          min={-100}
-          max={100}
-          step={1}
-          list="autocanonizer-pan-ticks"
-          value={pan}
-          style={{ accentColor: color }}
-          onChange={(event) => onPanChange(Number(event.target.value))}
-        />
+        <div className="pan-slider-wrap">
+          <input
+            className="pan-slider stream-pan-slider"
+            id={panId}
+            type="range"
+            aria-label={panLabel}
+            min={-100}
+            max={100}
+            step={5}
+            value={pan}
+            style={{ accentColor: color }}
+            onChange={(event) => onPanChange(Number(event.target.value))}
+          />
+          <div className="pan-ticks" aria-hidden="true">
+            <span className="pan-tick is-major" style={{ left: "0%" }} />
+            <span className="pan-tick is-minor" style={{ left: "25%" }} />
+            <span className="pan-tick is-major" style={{ left: "50%" }} />
+            <span className="pan-tick is-minor" style={{ left: "75%" }} />
+            <span className="pan-tick is-major" style={{ left: "100%" }} />
+          </div>
+        </div>
       </label>
       {showGain ? (
         <label className="stream-pan-control">
@@ -77,7 +86,7 @@ export function VoiceBalanceControls({
             aria-label={gainAriaLabel}
             min={MIN_MIX_TRACK_GAIN_PCT}
             max={MAX_MIX_TRACK_GAIN_PCT}
-            step={1}
+            step={5}
             value={gainPct}
             style={{ accentColor: color }}
             onChange={(event) => onGainChange?.(Number(event.target.value))}
@@ -102,6 +111,8 @@ export function PanPopover({
   goldGainPct = DEFAULT_MIX_TRACK_GAIN_PCT,
   isDualMix = false,
   isQuadMix = false,
+  isTrioMode = false,
+  singleVoiceCount,
   mixTrackTitles = null,
   onPanChange,
   onQuadPanChange,
@@ -123,6 +134,8 @@ export function PanPopover({
   goldGainPct?: number;
   isDualMix?: boolean;
   isQuadMix?: boolean;
+  isTrioMode?: boolean;
+  singleVoiceCount?: AutocanonizerSingleVoiceCount;
   mixTrackTitles?: [string, string] | null;
   onPanChange: (stream: "main" | "other", value: number) => void;
   onQuadPanChange?: (stream: "pink" | "gold", value: number) => void;
@@ -133,6 +146,14 @@ export function PanPopover({
 }) {
   const { t } = useTranslation();
   const quadActive = isDualMix && isQuadMix;
+  const resolvedSingleVoiceCount: AutocanonizerSingleVoiceCount =
+    singleVoiceCount !== undefined
+      ? singleVoiceCount
+      : isTrioMode
+        ? 3
+        : 2;
+  const singleMultiActive = !isDualMix && resolvedSingleVoiceCount >= 3;
+  const singleQuadActive = !isDualMix && resolvedSingleVoiceCount === 4;
   const hasNonDefaultDualBalance =
     mainPan !== 0 ||
     otherPan !== 0 ||
@@ -276,6 +297,42 @@ export function PanPopover({
             />
           </div>
         )}
+        {singleMultiActive ? (
+          <div>
+            <VoiceBalanceControls
+              panId="autocanonizer-gold-pan"
+              gainId="autocanonizer-gold-gain"
+              panLabel={t("listen.goldBalance")}
+              gainAriaLabel={t("listen.goldBalance")}
+              volumeLabel={t("listen.volume")}
+              leftLabel={t("listen.balanceLeft")}
+              rightLabel={t("listen.balanceRight")}
+              color={AUTOCANONIZER_GOLD_COLOR}
+              pan={goldPan}
+              gainPct={goldGainPct}
+              showGain={false}
+              onPanChange={(value) => onQuadPanChange?.("gold", value)}
+              onGainChange={(value) => onQuadGainChange?.("gold", value)}
+            />
+            {singleQuadActive ? (
+              <VoiceBalanceControls
+                panId="autocanonizer-pink-pan"
+                gainId="autocanonizer-pink-gain"
+                panLabel={t("listen.pinkBalance")}
+                gainAriaLabel={t("listen.pinkBalance")}
+                volumeLabel={t("listen.volume")}
+                leftLabel={t("listen.balanceLeft")}
+                rightLabel={t("listen.balanceRight")}
+                color={AUTOCANONIZER_PINK_COLOR}
+                pan={pinkPan}
+                gainPct={pinkGainPct}
+                showGain={false}
+                onPanChange={(value) => onQuadPanChange?.("pink", value)}
+                onGainChange={(value) => onQuadGainChange?.("pink", value)}
+              />
+            ) : null}
+          </div>
+        ) : null}
         {isDualMix && hasNonDefaultDualBalance && onResetBalance ? (
           <button
             type="button"
@@ -286,11 +343,6 @@ export function PanPopover({
             {t("common.reset")}
           </button>
         ) : null}
-        <datalist id="autocanonizer-pan-ticks">
-          <option value={-100} />
-          <option value={0} />
-          <option value={100} />
-        </datalist>
       </div>
       <button
         id="autocanonizer-pan-button"

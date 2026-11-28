@@ -11,6 +11,10 @@ import {
   QUAD_BRANCH_BLEND,
   QUAD_MAIN_BLEND,
   QUAD_SYNC_MAX_SKEW_DELTA,
+  SINGLE_QUAD_BRANCH_BLEND,
+  SINGLE_QUAD_MAIN_BLEND,
+  TRIO_BRANCH_BLEND,
+  TRIO_MAIN_BLEND,
   planCanonizerRender,
   type CanonizerRenderPlan,
 } from "./canonizerRenderPlan";
@@ -29,6 +33,7 @@ type BeatWithSim = CanonizerBeat & {
 
 export type AutocanonizerMixAlignmentMode = "cover-sync" | "section-fold";
 export type AutocanonizerQuadBranchMode = "synced" | "independent";
+export type AutocanonizerSingleVoiceCount = 2 | 3 | 4;
 
 export type AutocanonizerDualAnalysisOptions = {
   mainDuration?: number | null;
@@ -53,13 +58,15 @@ const SECTION_FOLD_BAR_MISMATCH_PENALTY = 15;
 export type AutocanonizerCursorTimes = {
   mainSeconds: number;
   otherSeconds: number;
-  pinkSeconds?: number;
-  goldSeconds?: number;
+  pinkSeconds?: number | null;
+  goldSeconds?: number | null;
 };
 
 export type AutocanonizerLiveCursorTimes = {
   mainSeconds: number | null;
   otherSeconds: number | null;
+  pinkSeconds?: number | null;
+  goldSeconds?: number | null;
   inUnison: boolean;
 };
 
@@ -77,6 +84,7 @@ class AutocanonizerPlayer {
   private readonly goldPanner: StereoPannerNode | null;
   private readonly masterBlend: number;
   private quadMode = false;
+  private singleVoiceCount: AutocanonizerSingleVoiceCount = 2;
   private baseVolume = 1;
   private mainStreamPan = 0;
   private otherStreamPan = 0;
@@ -91,12 +99,17 @@ class AutocanonizerPlayer {
   private goldBeatGain = 1;
 
   private currentBeat: CanonizerBeat | null = null;
+  private lastFinishOutOther: CanonizerBeat | null = null;
+  private lastFinishOutGold: CanonizerBeat | null = null;
+  private lastFinishOutPink: CanonizerBeat | null = null;
   private mainSource: AudioBufferSourceNode | null = null;
   private otherSource: AudioBufferSourceNode | null = null;
   private pinkSource: AudioBufferSourceNode | null = null;
   private goldSource: AudioBufferSourceNode | null = null;
   private deltaTime = 0;
   private otherDeltaTime = 0;
+  private pinkDeltaTime = 0;
+  private goldDeltaTime = 0;
   private skewDelta = 0;
   private pinkSkewDelta = 0;
   private goldSkewDelta = 0;
@@ -142,14 +155,47 @@ class AutocanonizerPlayer {
   setQuadMode(enabled: boolean) {
     this.quadMode = enabled;
     if (!enabled) {
-      this.stopSource(this.pinkSource);
-      this.pinkSource = null;
-      this.stopSource(this.goldSource);
-      this.goldSource = null;
-      this.pinkSkewDelta = 0;
-      this.goldSkewDelta = 0;
+      if (this.singleVoiceCount < 4) {
+        this.stopSource(this.pinkSource);
+        this.pinkSource = null;
+        this.pinkSkewDelta = 0;
+      }
+      if (this.singleVoiceCount < 3) {
+        this.stopSource(this.goldSource);
+        this.goldSource = null;
+        this.goldSkewDelta = 0;
+      }
     }
     this.applyGains();
+  }
+
+  /**
+   * Sets the single-song Autocanonizer voice count (2, 3, or 4), stopping Gold
+   * or Pink sources when voices are disabled (unless dual quad mode owns them).
+   */
+  setSingleSongVoiceCount(count: AutocanonizerSingleVoiceCount) {
+    this.singleVoiceCount = count;
+    if (!this.quadMode) {
+      if (count < 3) {
+        this.stopSource(this.goldSource);
+        this.goldSource = null;
+        this.goldSkewDelta = 0;
+      }
+      if (count < 4) {
+        this.stopSource(this.pinkSource);
+        this.pinkSource = null;
+        this.pinkSkewDelta = 0;
+      }
+    }
+    this.applyGains();
+  }
+
+  /**
+   * Enables or disables 3-voice single-song trio playback, stopping Gold when
+   * returning to 2-voice mode (unless 4-voice quad mode owns Gold).
+   */
+  setTrioMode(enabled: boolean) {
+    this.setSingleSongVoiceCount(enabled ? 3 : 2);
   }
 
   setBuffer(buffer: AudioBuffer) {
@@ -218,8 +264,13 @@ class AutocanonizerPlayer {
   reset() {
     this.stop();
     this.currentBeat = null;
+    this.lastFinishOutOther = null;
+    this.lastFinishOutGold = null;
+    this.lastFinishOutPink = null;
     this.deltaTime = 0;
     this.otherDeltaTime = 0;
+    this.pinkDeltaTime = 0;
+    this.goldDeltaTime = 0;
     this.skewDelta = 0;
     this.pinkSkewDelta = 0;
     this.goldSkewDelta = 0;
@@ -238,6 +289,9 @@ class AutocanonizerPlayer {
   }
 
   stop() {
+    this.lastFinishOutOther = null;
+    this.lastFinishOutGold = null;
+    this.lastFinishOutPink = null;
     this.stopSource(this.mainSource);
     this.mainSource = null;
     this.stopSource(this.otherSource);
@@ -248,18 +302,22 @@ class AutocanonizerPlayer {
     this.goldSource = null;
   }
 
-  stopMain() {
+  stopMain(keepGold = false, keepPink = false) {
     this.stopSource(this.mainSource);
     this.mainSource = null;
-    this.stopSource(this.pinkSource);
-    this.pinkSource = null;
-    this.stopSource(this.goldSource);
-    this.goldSource = null;
+    if (!keepPink) {
+      this.stopSource(this.pinkSource);
+      this.pinkSource = null;
+    }
+    if (!keepGold) {
+      this.stopSource(this.goldSource);
+      this.goldSource = null;
+    }
   }
 
   /**
    * Computes continuous AudioContext-anchored playback times (seconds) for the
-   * Blue (main) and Green (canon/other) voices.
+   * Blue (main), Green (canon/other), Gold, and optional Pink voices.
    */
   getLiveCursorTimes(secondaryOnly: boolean): AutocanonizerLiveCursorTimes {
     if (!this.currentBeat) {
@@ -283,6 +341,26 @@ class AutocanonizerPlayer {
       !secondaryOnly &&
       this.currentBeat.other === this.currentBeat &&
       otherSeconds !== null;
+    if (!this.quadMode && this.singleVoiceCount >= 3) {
+      const goldSeconds =
+        this.goldSource && this.goldBeatGain > 0
+          ? clampTime(now - this.goldDeltaTime, this.buffer.duration)
+          : null;
+      if (this.singleVoiceCount >= 4) {
+        const pinkSeconds =
+          this.pinkSource && this.pinkBeatGain > 0
+            ? clampTime(now - this.pinkDeltaTime, this.buffer.duration)
+            : null;
+        return {
+          mainSeconds,
+          otherSeconds,
+          goldSeconds,
+          pinkSeconds,
+          inUnison,
+        };
+      }
+      return { mainSeconds, otherSeconds, goldSeconds, inUnison };
+    }
     return { mainSeconds, otherSeconds, inUnison };
   }
 
@@ -290,6 +368,9 @@ class AutocanonizerPlayer {
     if (this.context.state === "suspended") {
       void this.context.resume();
     }
+    this.lastFinishOutOther = null;
+    this.lastFinishOutGold = null;
+    this.lastFinishOutPink = null;
     if (this.currentBeat?.next !== beat) {
       if (this.mainSource) {
         this.mainSource.stop();
@@ -344,65 +425,114 @@ class AutocanonizerPlayer {
 
     if (this.quadMode && beat.pink && beat.gold) {
       const song2Buf = this.otherBuffer ?? this.buffer;
-      this.pinkBeatGain = Math.max(0, Math.min(1, beat.pinkGain ?? 1));
-      this.applyPinkGain();
-      if (this.pinkBeatGain === 0) {
-        this.stopSource(this.pinkSource);
-        this.pinkSource = null;
-        this.pinkSkewDelta = 0;
-      } else {
-        if (
-          !this.pinkSource ||
-          this.currentBeat?.pinkGain === 0 ||
-          this.currentBeat?.pink?.next !== beat.pink ||
-          Math.abs(this.pinkSkewDelta) > QUAD_SYNC_MAX_SKEW_DELTA
-        ) {
-          this.pinkSkewDelta = 0;
-          if (this.pinkSource) {
-            this.pinkSource.stop();
-          }
-          const pinkDur = song2Buf.duration - beat.pink.start;
-          this.pinkSource = this.playBuffer(
-            song2Buf,
-            beat.pink.start,
-            pinkDur,
-            this.pinkPanner ?? this.pinkGain,
-          );
-        }
-        this.pinkSkewDelta += beat.duration - beat.pink.duration;
-      }
-
-      this.goldBeatGain = Math.max(0, Math.min(1, beat.goldGain ?? 1));
-      this.applyGoldGain();
-      if (this.goldBeatGain === 0) {
-        this.stopSource(this.goldSource);
-        this.goldSource = null;
-        this.goldSkewDelta = 0;
-      } else {
-        if (
-          !this.goldSource ||
-          this.currentBeat?.goldGain === 0 ||
-          this.currentBeat?.gold?.next !== beat.gold ||
-          Math.abs(this.goldSkewDelta) > this.maxSkewDelta
-        ) {
-          this.goldSkewDelta = 0;
-          if (this.goldSource) {
-            this.goldSource.stop();
-          }
-          const goldDur = song2Buf.duration - beat.gold.start;
-          this.goldSource = this.playBuffer(
-            song2Buf,
-            beat.gold.start,
-            goldDur,
-            this.goldPanner ?? this.goldGain,
-          );
-        }
-        this.goldSkewDelta += beat.duration - beat.gold.duration;
+      this.stepPinkVoice(
+        beat,
+        song2Buf,
+        beat.pinkGain ?? 1,
+        QUAD_SYNC_MAX_SKEW_DELTA,
+      );
+      this.stepGoldVoice(beat, song2Buf, beat.goldGain ?? 1);
+    } else if (!this.quadMode && this.singleVoiceCount >= 3) {
+      this.stepGoldVoice(beat, this.buffer, beat.goldGain ?? 0);
+      if (this.singleVoiceCount >= 4) {
+        this.stepPinkVoice(
+          beat,
+          this.buffer,
+          beat.pinkGain ?? 0,
+          this.maxSkewDelta,
+        );
       }
     }
 
     this.currentBeat = beat;
     return beat.duration - delta;
+  }
+
+  private stepPinkVoice(
+    beat: CanonizerBeat,
+    pinkBuf: AudioBuffer,
+    rawPinkGain: number,
+    maxSkew: number,
+  ) {
+    if (!beat.pink) {
+      this.pinkBeatGain = 0;
+      this.applyPinkGain();
+      this.stopSource(this.pinkSource);
+      this.pinkSource = null;
+      this.pinkSkewDelta = 0;
+      return;
+    }
+    this.pinkBeatGain = Math.max(0, Math.min(1, rawPinkGain));
+    this.applyPinkGain();
+    if (this.pinkBeatGain === 0) {
+      this.stopSource(this.pinkSource);
+      this.pinkSource = null;
+      this.pinkSkewDelta = 0;
+      return;
+    }
+    if (
+      !this.pinkSource ||
+      (this.currentBeat?.pinkGain ?? 0) === 0 ||
+      this.currentBeat?.pink?.next !== beat.pink ||
+      Math.abs(this.pinkSkewDelta) > maxSkew
+    ) {
+      this.pinkSkewDelta = 0;
+      if (this.pinkSource) {
+        this.pinkSource.stop();
+      }
+      const pinkDur = pinkBuf.duration - beat.pink.start;
+      this.pinkSource = this.playBuffer(
+        pinkBuf,
+        beat.pink.start,
+        pinkDur,
+        this.pinkPanner ?? this.pinkGain,
+      );
+      this.pinkDeltaTime = this.context.currentTime - beat.pink.start;
+    }
+    this.pinkSkewDelta += beat.duration - beat.pink.duration;
+  }
+
+  private stepGoldVoice(
+    beat: CanonizerBeat,
+    goldBuf: AudioBuffer,
+    rawGoldGain: number,
+  ) {
+    if (!beat.gold) {
+      this.goldBeatGain = 0;
+      this.applyGoldGain();
+      this.stopSource(this.goldSource);
+      this.goldSource = null;
+      this.goldSkewDelta = 0;
+      return;
+    }
+    this.goldBeatGain = Math.max(0, Math.min(1, rawGoldGain));
+    this.applyGoldGain();
+    if (this.goldBeatGain === 0) {
+      this.stopSource(this.goldSource);
+      this.goldSource = null;
+      this.goldSkewDelta = 0;
+      return;
+    }
+    if (
+      !this.goldSource ||
+      (this.currentBeat?.goldGain ?? 0) === 0 ||
+      this.currentBeat?.gold?.next !== beat.gold ||
+      Math.abs(this.goldSkewDelta) > this.maxSkewDelta
+    ) {
+      this.goldSkewDelta = 0;
+      if (this.goldSource) {
+        this.goldSource.stop();
+      }
+      const goldDur = goldBuf.duration - beat.gold.start;
+      this.goldSource = this.playBuffer(
+        goldBuf,
+        beat.gold.start,
+        goldDur,
+        this.goldPanner ?? this.goldGain,
+      );
+      this.goldDeltaTime = this.context.currentTime - beat.gold.start;
+    }
+    this.goldSkewDelta += beat.duration - beat.gold.duration;
   }
 
   playOtherOnly(beat: CanonizerBeat) {
@@ -434,6 +564,132 @@ class AutocanonizerPlayer {
     return beat.duration - delta;
   }
 
+  /**
+   * Advances active canon branches (Green, Gold, and Pink) during single-song
+   * multi-voice finish-out until all active streams reach the end of the track.
+   */
+  playFinishOutBeat(
+    otherBeat: CanonizerBeat | null,
+    goldBeat: CanonizerBeat | null,
+    pinkBeat: CanonizerBeat | null = null,
+  ): number {
+    if (this.context.state === "suspended") {
+      void this.context.resume();
+    }
+    const clockBeat = otherBeat ?? goldBeat ?? pinkBeat;
+    if (otherBeat) {
+      this.otherBeatGain = Math.max(0, Math.min(1, otherBeat.otherGain));
+      this.applyOtherGain();
+      if (!this.otherSource || this.lastFinishOutOther?.next !== otherBeat) {
+        if (this.otherSource) {
+          this.otherSource.stop();
+        }
+        const duration = this.buffer.duration - otherBeat.start;
+        this.otherSource = this.playBuffer(
+          this.buffer,
+          otherBeat.start,
+          duration,
+          this.otherPanner ?? this.otherGain,
+        );
+        this.otherDeltaTime = this.context.currentTime - otherBeat.start;
+      }
+    } else {
+      this.stopSource(this.otherSource);
+      this.otherSource = null;
+      this.otherBeatGain = 0;
+      this.applyOtherGain();
+    }
+
+    if (goldBeat) {
+      this.goldBeatGain = 1;
+      this.applyGoldGain();
+      const isClock = !otherBeat;
+      const needsResync = isClock
+        ? !this.goldSource || this.lastFinishOutGold?.next !== goldBeat
+        : !this.goldSource ||
+          this.lastFinishOutGold?.next !== goldBeat ||
+          Math.abs(this.goldSkewDelta) > this.maxSkewDelta;
+      if (needsResync) {
+        this.goldSkewDelta = 0;
+        if (this.goldSource) {
+          this.goldSource.stop();
+        }
+        const goldDur = this.buffer.duration - goldBeat.start;
+        this.goldSource = this.playBuffer(
+          this.buffer,
+          goldBeat.start,
+          goldDur,
+          this.goldPanner ?? this.goldGain,
+        );
+        this.goldDeltaTime = this.context.currentTime - goldBeat.start;
+      }
+      if (!isClock && clockBeat) {
+        this.goldSkewDelta += clockBeat.duration - goldBeat.duration;
+      }
+    } else {
+      this.stopSource(this.goldSource);
+      this.goldSource = null;
+      this.goldBeatGain = 0;
+      this.goldSkewDelta = 0;
+      this.applyGoldGain();
+    }
+
+    if (pinkBeat) {
+      this.pinkBeatGain = 1;
+      this.applyPinkGain();
+      const isClock = !otherBeat && !goldBeat;
+      const needsResync = isClock
+        ? !this.pinkSource || this.lastFinishOutPink?.next !== pinkBeat
+        : !this.pinkSource ||
+          this.lastFinishOutPink?.next !== pinkBeat ||
+          Math.abs(this.pinkSkewDelta) > this.maxSkewDelta;
+      if (needsResync) {
+        this.pinkSkewDelta = 0;
+        if (this.pinkSource) {
+          this.pinkSource.stop();
+        }
+        const pinkDur = this.buffer.duration - pinkBeat.start;
+        this.pinkSource = this.playBuffer(
+          this.buffer,
+          pinkBeat.start,
+          pinkDur,
+          this.pinkPanner ?? this.pinkGain,
+        );
+        this.pinkDeltaTime = this.context.currentTime - pinkBeat.start;
+      }
+      if (!isClock && clockBeat) {
+        this.pinkSkewDelta += clockBeat.duration - pinkBeat.duration;
+      }
+    } else {
+      this.stopSource(this.pinkSource);
+      this.pinkSource = null;
+      this.pinkBeatGain = 0;
+      this.pinkSkewDelta = 0;
+      this.applyPinkGain();
+    }
+
+    this.lastFinishOutOther = otherBeat;
+    this.lastFinishOutGold = goldBeat;
+    this.lastFinishOutPink = pinkBeat;
+
+    if (otherBeat) {
+      const now = this.context.currentTime - this.otherDeltaTime;
+      const delta = now - otherBeat.start;
+      return otherBeat.duration - delta;
+    }
+    if (goldBeat) {
+      const now = this.context.currentTime - this.goldDeltaTime;
+      const delta = now - goldBeat.start;
+      return goldBeat.duration - delta;
+    }
+    if (pinkBeat) {
+      const now = this.context.currentTime - this.pinkDeltaTime;
+      const delta = now - pinkBeat.start;
+      return pinkBeat.duration - delta;
+    }
+    return 0;
+  }
+
   private playBuffer(
     buffer: AudioBuffer,
     start: number,
@@ -448,7 +704,13 @@ class AutocanonizerPlayer {
   }
 
   private applyGains() {
-    const mainWeight = this.quadMode ? QUAD_MAIN_BLEND : this.masterBlend;
+    const mainWeight = this.quadMode
+      ? QUAD_MAIN_BLEND
+      : this.singleVoiceCount === 4
+        ? SINGLE_QUAD_MAIN_BLEND
+        : this.singleVoiceCount === 3
+          ? TRIO_MAIN_BLEND
+          : this.masterBlend;
     this.mainGain.gain.value =
       this.baseVolume * mainWeight * this.mainStreamGain;
     this.applyOtherGain();
@@ -459,21 +721,39 @@ class AutocanonizerPlayer {
   private applyOtherGain() {
     const otherWeight = this.quadMode
       ? QUAD_BRANCH_BLEND
-      : 1 - this.masterBlend;
+      : this.singleVoiceCount === 4
+        ? SINGLE_QUAD_BRANCH_BLEND
+        : this.singleVoiceCount === 3
+          ? TRIO_BRANCH_BLEND
+          : 1 - this.masterBlend;
     this.otherGain.gain.value =
       this.baseVolume * otherWeight * this.otherStreamGain * this.otherBeatGain;
   }
 
   private applyPinkGain() {
-    this.pinkGain.gain.value = this.quadMode
-      ? this.baseVolume * QUAD_MAIN_BLEND * this.pinkStreamGain * this.pinkBeatGain
-      : 0;
+    const pinkWeight = this.quadMode
+      ? QUAD_MAIN_BLEND
+      : this.singleVoiceCount === 4
+        ? SINGLE_QUAD_BRANCH_BLEND
+        : 0;
+    this.pinkGain.gain.value =
+      pinkWeight > 0
+        ? this.baseVolume * pinkWeight * this.pinkStreamGain * this.pinkBeatGain
+        : 0;
   }
 
   private applyGoldGain() {
-    this.goldGain.gain.value = this.quadMode
-      ? this.baseVolume * QUAD_BRANCH_BLEND * this.goldStreamGain * this.goldBeatGain
-      : 0;
+    const goldWeight = this.quadMode
+      ? QUAD_BRANCH_BLEND
+      : this.singleVoiceCount === 4
+        ? SINGLE_QUAD_BRANCH_BLEND
+        : this.singleVoiceCount === 3
+          ? TRIO_BRANCH_BLEND
+          : 0;
+    this.goldGain.gain.value =
+      goldWeight > 0
+        ? this.baseVolume * goldWeight * this.goldStreamGain * this.goldBeatGain
+        : 0;
   }
 
   private applyPans() {
@@ -503,11 +783,14 @@ export class AutocanonizerController {
   private dualAlignmentMode: AutocanonizerMixAlignmentMode = "cover-sync";
   private quadMode = false;
   private quadBranchMode: AutocanonizerQuadBranchMode = "synced";
+  private singleVoiceCount: AutocanonizerSingleVoiceCount = 2;
   private player: AutocanonizerPlayer | null = null;
   private running = false;
   private timerId: number | null = null;
   private secondaryOnly = false;
   private secondaryIndex = 0;
+  private tertiaryIndex: number | null = null;
+  private quaternaryIndex: number | null = null;
   private finishOutSong = false;
   private currentIndex = 0;
   private mainStreamPan = 0;
@@ -639,6 +922,52 @@ export class AutocanonizerController {
     this.refreshDualVizAndPlayback();
   }
 
+  /**
+   * Sets the single-song Autocanonizer voice count (2 = Blue+Green, 3 = +Gold,
+   * 4 = +Gold+Pink) and updates playback and visuals live without affecting
+   * 2-song mix sessions.
+   */
+  setSingleSongVoiceCount(count: AutocanonizerSingleVoiceCount) {
+    this.singleVoiceCount = count;
+    const isSingleSong = this.otherBeats.length === 0;
+    this.player?.setSingleSongVoiceCount(isSingleSong ? count : 2);
+    if (!this.beats.length || !isSingleSong) {
+      return;
+    }
+    if (count === 3 || count === 4) {
+      applyMultiVoiceAlignment(this.beats, count);
+    } else {
+      for (const beat of this.beats) {
+        beat.gold = undefined;
+        beat.goldGain = undefined;
+        beat.pink = undefined;
+        beat.pinkGain = undefined;
+      }
+    }
+    this.viz.setData(this.beats, this.mainDuration, this.mainSections, count);
+    if (this.running && !this.secondaryOnly) {
+      if (this.timerId !== null) {
+        backgroundClearTimeout(this.timerId);
+        this.timerId = null;
+      }
+      this.player?.reset();
+      this.tick();
+    } else if (
+      this.currentIndex >= 0 &&
+      this.currentIndex < this.beats.length
+    ) {
+      this.viz.update(this.currentIndex);
+    }
+  }
+
+  /**
+   * Toggles 3-voice single-song trio mode (Blue + Green + runner-up Gold) and
+   * updates playback and visuals live without affecting 2-song mix sessions.
+   */
+  setTrioMode(enabled: boolean) {
+    this.setSingleSongVoiceCount(enabled ? 3 : 2);
+  }
+
   setAudio(buffer: AudioBuffer | null, context: AudioContext | null) {
     if (buffer && context) {
       if (!this.player) {
@@ -648,10 +977,12 @@ export class AutocanonizerController {
         this.player.setQuadStreamPans(this.pinkStreamPan, this.goldStreamPan);
         this.player.setQuadStreamGains(this.pinkStreamGain, this.goldStreamGain);
         this.player.setQuadMode(false);
+        this.player.setSingleSongVoiceCount(this.singleVoiceCount);
         this.player.setVolume(this.volume);
       } else {
         this.player.setBuffers(buffer, null);
         this.player.setQuadMode(false);
+        this.player.setSingleSongVoiceCount(this.singleVoiceCount);
       }
     } else {
       this.player = null;
@@ -676,10 +1007,12 @@ export class AutocanonizerController {
         this.player.setQuadStreamPans(this.pinkStreamPan, this.goldStreamPan);
         this.player.setQuadStreamGains(this.pinkStreamGain, this.goldStreamGain);
         this.player.setQuadMode(this.quadMode);
+        this.player.setSingleSongVoiceCount(2);
         this.player.setVolume(this.volume);
       } else {
         this.player.setBuffers(mainBuffer, otherBuffer);
         this.player.setQuadMode(this.quadMode);
+        this.player.setSingleSongVoiceCount(2);
       }
     } else {
       this.player = null;
@@ -694,6 +1027,7 @@ export class AutocanonizerController {
     this.otherDuration = 0;
     this.quadMode = false;
     this.player?.setQuadMode(false);
+    this.player?.setSingleSongVoiceCount(this.singleVoiceCount);
     if (!beats.length) {
       this.beats = [];
       this.mainSections = [];
@@ -706,13 +1040,21 @@ export class AutocanonizerController {
       beats[beats.length - 1].start + beats[beats.length - 1].duration;
     calculateNearestNeighbors(beats);
     foldBySection(beats);
+    if (this.singleVoiceCount === 3 || this.singleVoiceCount === 4) {
+      applyMultiVoiceAlignment(beats, this.singleVoiceCount);
+    }
     this.beats = beats;
     this.mainDuration = trackDuration;
     this.mainSections = analysis.sections.map((section) => ({
       start: section.start,
       duration: section.duration,
     }));
-    this.viz.setData(beats, trackDuration, this.mainSections);
+    this.viz.setData(
+      beats,
+      trackDuration,
+      this.mainSections,
+      this.singleVoiceCount,
+    );
   }
 
   /**
@@ -764,6 +1106,7 @@ export class AutocanonizerController {
     this.quadMode = options?.quadMode ?? this.quadMode;
     this.quadBranchMode = options?.quadBranchMode ?? this.quadBranchMode;
     this.player?.setQuadMode(this.quadMode);
+    this.player?.setSingleSongVoiceCount(2);
 
     this.beats = mainBeats;
     this.otherBeats = otherBeats;
@@ -926,6 +1269,7 @@ export class AutocanonizerController {
   // The canon as a timed plan for offline rendering, with the current
   // finish-out setting, stream pans/gains, and dual/quad mix state. Null until an analysis is set.
   planRender(): CanonizerRenderPlan | null {
+    const isSingleSong = this.otherBeats.length === 0;
     return planCanonizerRender(this.beats, {
       finishOutSong: this.finishOutSong,
       mainPan: this.mainStreamPan,
@@ -936,8 +1280,10 @@ export class AutocanonizerController {
       pinkGain: this.pinkStreamGain,
       goldPan: this.goldStreamPan,
       goldGain: this.goldStreamGain,
-      isDual: this.otherBeats.length > 0,
+      isDual: !isSingleSong,
       quadMode: this.quadMode,
+      trioMode: this.singleVoiceCount === 3 && isSingleSong,
+      singleVoiceCount: isSingleSong ? this.singleVoiceCount : 2,
       otherBeats: this.otherBeats,
     });
   }
@@ -966,6 +1312,8 @@ export class AutocanonizerController {
     this.stop();
     this.running = true;
     this.secondaryOnly = false;
+    this.tertiaryIndex = null;
+    this.quaternaryIndex = null;
     this.currentIndex = Math.max(0, Math.min(index, this.beats.length - 1));
     this.player.reset();
     this.tick();
@@ -980,6 +1328,8 @@ export class AutocanonizerController {
     }
     this.running = false;
     this.secondaryOnly = false;
+    this.tertiaryIndex = null;
+    this.quaternaryIndex = null;
     if (this.timerId !== null) {
       backgroundClearTimeout(this.timerId);
       this.timerId = null;
@@ -1005,6 +1355,9 @@ export class AutocanonizerController {
     }
     const beat = this.beats[this.currentIndex];
     const isFinal = this.currentIndex === this.beats.length - 1;
+    const isSingleSong = this.otherBeats.length === 0;
+    const isSingleMulti = isSingleSong && this.singleVoiceCount >= 3;
+    const isSingleQuad = isSingleSong && this.singleVoiceCount >= 4;
     const delay = this.player.playBeat(beat);
     this.viz.update(this.currentIndex);
     const cursorTimes: AutocanonizerCursorTimes = {
@@ -1014,13 +1367,35 @@ export class AutocanonizerController {
     if (this.quadMode && beat.pink && beat.gold) {
       cursorTimes.pinkSeconds = beat.pink.start;
       cursorTimes.goldSeconds = beat.gold.start;
+    } else if (isSingleMulti) {
+      cursorTimes.goldSeconds =
+        beat.gold && (beat.goldGain ?? 0) > 0 ? beat.gold.start : null;
+      if (isSingleQuad) {
+        cursorTimes.pinkSeconds =
+          beat.pink && (beat.pinkGain ?? 0) > 0 ? beat.pink.start : null;
+      }
     }
     this.onBeat?.(this.currentIndex, beat, cursorTimes);
     if (isFinal) {
       if (this.finishOutSong) {
         this.secondaryOnly = true;
         this.secondaryIndex = beat.other.which;
-        this.player.stopMain();
+        if (isSingleMulti) {
+          this.tertiaryIndex =
+            beat.gold && (beat.goldGain ?? 0) > 0 ? beat.gold.which : null;
+          this.quaternaryIndex =
+            isSingleQuad && beat.pink && (beat.pinkGain ?? 0) > 0
+              ? beat.pink.which
+              : null;
+          this.player.stopMain(
+            this.tertiaryIndex !== null,
+            this.quaternaryIndex !== null,
+          );
+        } else {
+          this.tertiaryIndex = null;
+          this.quaternaryIndex = null;
+          this.player.stopMain();
+        }
         this.tickSecondary();
         return;
       }
@@ -1037,6 +1412,86 @@ export class AutocanonizerController {
     if (!this.running || !this.secondaryOnly) {
       return;
     }
+    const isSingleSong = this.otherBeats.length === 0;
+    const isSingleMulti = isSingleSong && this.singleVoiceCount >= 3;
+    const isSingleQuad = isSingleSong && this.singleVoiceCount >= 4;
+    if (
+      !this.quadMode &&
+      isSingleMulti &&
+      (this.tertiaryIndex !== null || this.quaternaryIndex !== null)
+    ) {
+      if (!this.player || !this.beats.length) {
+        this.stop();
+        this.onEnded?.();
+        return;
+      }
+      const otherBeat =
+        this.secondaryIndex < this.beats.length
+          ? this.beats[this.secondaryIndex]
+          : null;
+      const goldBeat =
+        this.tertiaryIndex !== null && this.tertiaryIndex < this.beats.length
+          ? this.beats[this.tertiaryIndex]
+          : null;
+      const pinkBeat =
+        this.quaternaryIndex !== null &&
+        this.quaternaryIndex < this.beats.length
+          ? this.beats[this.quaternaryIndex]
+          : null;
+      if (!otherBeat && !goldBeat && !pinkBeat) {
+        this.stop();
+        this.onEnded?.();
+        return;
+      }
+      const delay = this.player.playFinishOutBeat(
+        otherBeat,
+        goldBeat,
+        pinkBeat,
+      );
+      this.viz.setFinishOutIndices(
+        otherBeat ? this.secondaryIndex : null,
+        goldBeat ? this.tertiaryIndex : null,
+        pinkBeat ? this.quaternaryIndex : null,
+      );
+      const finalMainStart = this.beats[this.beats.length - 1]?.start ?? 0;
+      const activeBeat = (otherBeat ?? goldBeat ?? pinkBeat)!;
+      const activeIndex = otherBeat
+        ? this.secondaryIndex
+        : goldBeat
+          ? this.tertiaryIndex!
+          : this.quaternaryIndex!;
+      const cursorTimes: AutocanonizerCursorTimes = {
+        mainSeconds: finalMainStart,
+        otherSeconds: otherBeat ? otherBeat.start : finalMainStart,
+        goldSeconds: goldBeat ? goldBeat.start : null,
+      };
+      if (isSingleQuad) {
+        cursorTimes.pinkSeconds = pinkBeat ? pinkBeat.start : null;
+      }
+      this.onBeat?.(activeIndex, activeBeat, cursorTimes);
+      if (otherBeat) {
+        this.secondaryIndex += 1;
+      }
+      if (goldBeat) {
+        this.tertiaryIndex =
+          this.tertiaryIndex! + 1 < this.beats.length
+            ? this.tertiaryIndex! + 1
+            : null;
+      }
+      if (pinkBeat) {
+        this.quaternaryIndex =
+          this.quaternaryIndex! + 1 < this.beats.length
+            ? this.quaternaryIndex! + 1
+            : null;
+      }
+      const nextDelayMs = Math.max(0, delay * 1000);
+      this.timerId = backgroundSetTimeout(
+        () => this.tickSecondary(),
+        nextDelayMs,
+      );
+      return;
+    }
+
     const secondaryBeats =
       !this.quadMode && this.otherBeats.length ? this.otherBeats : this.beats;
     if (!this.player || !secondaryBeats.length) {
@@ -1052,10 +1507,17 @@ export class AutocanonizerController {
     const beat = secondaryBeats[this.secondaryIndex];
     const delay = this.player.playOtherOnly(beat);
     this.viz.setOtherIndex(this.secondaryIndex);
-    this.onBeat?.(this.secondaryIndex, beat, {
+    const cursorTimes: AutocanonizerCursorTimes = {
       mainSeconds: this.beats[this.beats.length - 1]?.start ?? 0,
       otherSeconds: beat.start,
-    });
+    };
+    if (isSingleMulti) {
+      cursorTimes.goldSeconds = null;
+    }
+    if (isSingleQuad) {
+      cursorTimes.pinkSeconds = null;
+    }
+    this.onBeat?.(this.secondaryIndex, beat, cursorTimes);
     this.secondaryIndex += 1;
     const nextDelayMs = Math.max(0, delay * 1000);
     this.timerId = backgroundSetTimeout(() => this.tickSecondary(), nextDelayMs);
@@ -1640,6 +2102,235 @@ function foldBySection(beats: BeatWithSim[]) {
     }
   }
   applyOtherSeamDucking(beats);
+}
+
+/**
+ * Returns the median of a non-empty numeric array.
+ */
+function medianNumber(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Selects a runner-up section match for one section of beats, excluding any
+ * sections already claimed by prior voices, and applies the strict quality gate.
+ */
+function assignRunnerUpSectionVoice(
+  beats: BeatWithSim[],
+  list: BeatWithSim[],
+  trackMedianSimDist: number,
+  isSectionExcluded: (beat: BeatWithSim, cand: BeatWithSim) => boolean,
+  assign: (beat: BeatWithSim, target: CanonizerBeat, gain: number) => void,
+) {
+  const sectionOtherDists: number[] = [];
+  for (const beat of list) {
+    if (beat.other !== beat) {
+      const d = compareBeats(beat, beat.other);
+      if (Number.isFinite(d)) {
+        sectionOtherDists.push(d);
+      }
+    }
+  }
+  const sectionOtherDist = sectionOtherDists.length
+    ? medianNumber(sectionOtherDists)
+    : trackMedianSimDist;
+
+  const counter = new Map<number, number>();
+  for (const beat of list) {
+    let bestCand: BeatWithSim | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const cand of beats) {
+      if (cand === beat || isSectionExcluded(beat, cand)) {
+        continue;
+      }
+      const dist = compareBeats(beat, cand);
+      if (Number.isFinite(dist) && dist >= 0 && dist < bestDist) {
+        bestDist = dist;
+        bestCand = cand;
+      }
+    }
+    if (bestCand) {
+      const delta = beat.which - bestCand.which;
+      counter.set(delta, (counter.get(delta) ?? 0) + 1);
+    }
+  }
+
+  let bestDelta: number | null = null;
+  let bestCount = -1;
+  for (const [delta, count] of counter) {
+    if (delta === 0) {
+      continue;
+    }
+    let inBoundsCount = 0;
+    let distinctCount = 0;
+    for (const beat of list) {
+      const rawIdx = beat.which - delta;
+      if (rawIdx >= 0 && rawIdx < beats.length) {
+        inBoundsCount += 1;
+        const target = beats[rawIdx];
+        if (!isSectionExcluded(beat, target)) {
+          distinctCount += 1;
+        }
+      }
+    }
+    if (
+      inBoundsCount === 0 ||
+      inBoundsCount * 2 < list.length ||
+      distinctCount * 2 <= inBoundsCount
+    ) {
+      continue;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      bestDelta = delta;
+    }
+  }
+
+  if (bestDelta === null) {
+    for (const beat of list) {
+      assign(beat, beat, 0);
+    }
+    return;
+  }
+
+  const candDists: number[] = [];
+  for (const beat of list) {
+    const rawIdx = beat.which - bestDelta;
+    if (rawIdx >= 0 && rawIdx < beats.length) {
+      const d = compareBeats(beat, beats[rawIdx]);
+      if (Number.isFinite(d)) {
+        candDists.push(d);
+      }
+    }
+  }
+  const sectionCandDist = candDists.length
+    ? medianNumber(candDists)
+    : Number.POSITIVE_INFINITY;
+  const maxAcceptableDist = Math.min(
+    sectionOtherDist * 1.5 + 15,
+    trackMedianSimDist * 1.75 + 20,
+  );
+  const acceptMatch =
+    Number.isFinite(sectionCandDist) && sectionCandDist <= maxAcceptableDist;
+
+  for (const beat of list) {
+    const rawIdx = beat.which - bestDelta;
+    const inBounds = rawIdx >= 0 && rawIdx < beats.length;
+    const clampedIdx = Math.max(0, Math.min(beats.length - 1, rawIdx));
+    assign(beat, beats[clampedIdx], acceptMatch && inBounds ? 1 : 0);
+  }
+}
+
+/**
+ * Configures Voice 3 (`beat.gold`) and optional Voice 4 (`beat.pink`) for
+ * single-song multi-voice mode by picking each section's distinct runner-up
+ * matches, muting any section that lacks a distinct, musically similar match.
+ */
+function applyMultiVoiceAlignment(beats: BeatWithSim[], voiceCount: 3 | 4) {
+  const sections = new Map<number, BeatWithSim[]>();
+  for (const beat of beats) {
+    const list = sections.get(beat.section) ?? [];
+    list.push(beat);
+    sections.set(beat.section, list);
+  }
+
+  const allSimDists: number[] = [];
+  for (const beat of beats) {
+    if (beat.simDistance !== undefined && Number.isFinite(beat.simDistance)) {
+      allSimDists.push(beat.simDistance);
+    }
+  }
+  const trackMedianSimDist = allSimDists.length
+    ? medianNumber(allSimDists)
+    : Number.POSITIVE_INFINITY;
+
+  // Pass 1: assign Gold excluding own section and Voice 2's matched section.
+  if (sections.size < 3) {
+    for (const beat of beats) {
+      beat.gold = beat;
+      beat.goldGain = 0;
+    }
+  } else {
+    for (const [, list] of sections) {
+      if (!list.length) {
+        continue;
+      }
+      assignRunnerUpSectionVoice(
+        beats,
+        list,
+        trackMedianSimDist,
+        (beat, cand) =>
+          cand.section === beat.section || cand.section === beat.other.section,
+        (beat, target, gain) => {
+          beat.gold = target;
+          beat.goldGain = gain;
+        },
+      );
+    }
+    applyStreamSeamDucking(
+      beats,
+      (beat) => beat.gold,
+      (beat, gain) => {
+        if ((beat.goldGain ?? 0) > 0) {
+          beat.goldGain = gain;
+        }
+      },
+    );
+  }
+
+  if (voiceCount < 4) {
+    for (const beat of beats) {
+      beat.pink = undefined;
+      beat.pinkGain = undefined;
+    }
+    return;
+  }
+
+  // Pass 2: assign Pink excluding own, Green, and Gold sections (or mute if Gold muted).
+  if (sections.size < 4) {
+    for (const beat of beats) {
+      beat.pink = beat;
+      beat.pinkGain = 0;
+    }
+    return;
+  }
+
+  for (const [, list] of sections) {
+    if (!list.length) {
+      continue;
+    }
+    if (!list.some((b) => (b.goldGain ?? 0) > 0)) {
+      for (const beat of list) {
+        beat.pink = beat;
+        beat.pinkGain = 0;
+      }
+      continue;
+    }
+    assignRunnerUpSectionVoice(
+      beats,
+      list,
+      trackMedianSimDist,
+      (beat, cand) =>
+        cand.section === beat.section ||
+        cand.section === beat.other.section ||
+        cand.section === beat.gold?.section,
+      (beat, target, gain) => {
+        beat.pink = target;
+        beat.pinkGain = gain;
+      },
+    );
+  }
+
+  applyStreamSeamDucking(
+    beats,
+    (beat) => beat.pink,
+    (beat, gain) => {
+      if ((beat.pinkGain ?? 0) > 0) {
+        beat.pinkGain = gain;
+      }
+    },
+  );
 }
 
 function assignNormalizedVolumes(beats: BeatWithSim[]) {

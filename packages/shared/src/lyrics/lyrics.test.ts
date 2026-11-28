@@ -521,4 +521,73 @@ describe("lyrics sync & branch-aware karaoke", () => {
     expect(tail.other.activeLine?.text).toBe("Line two");
     expect(tail.inUnison).toBe(false);
   });
+
+  it("resolves an independent 3rd Gold cursor (including syllable sweep, preview, and muted null) in 3-Voice mode", () => {
+    const trio = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: 15.25,
+    });
+    expect(trio.main.activeLine?.text).toBe("Line one");
+    expect(trio.other.activeLine?.text).toBe("Line two");
+    expect(trio.gold.activeLine?.text).toBe("Branch target");
+    expect(trio.gold.activeSyllableIndex).toBe(1);
+    expect(trio.gold.activeSyllableProgress).toBeCloseTo(0.25);
+
+    const goldResting = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: 12.2,
+    });
+    expect(goldResting.gold.activeLine).toBeNull();
+    expect(goldResting.gold.upcomingLine?.text).toBe("Branch target");
+    expect(goldResting.gold.upcomingLineVisible).toBe(true);
+
+    const goldMuted = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: null,
+    });
+    expect(goldMuted.gold.activeLine).toBeNull();
+    expect(goldMuted.gold.upcomingLine).toBeNull();
+  });
+
+  it("resolves an independent 4th Pink cursor (syllable sweep, preview, and muted null) in 4-Voice mode", () => {
+    const quad = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: 12.2,
+      pinkTimeSec: 15.25,
+    });
+    expect(quad.main.activeLine?.text).toBe("Line one");
+    expect(quad.other.activeLine?.text).toBe("Line two");
+    expect(quad.pink.activeLine?.text).toBe("Branch target");
+    expect(quad.pink.activeSyllableIndex).toBe(1);
+    expect(quad.pink.activeSyllableProgress).toBeCloseTo(0.25);
+
+    const pinkResting = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: null,
+      pinkTimeSec: 12.2,
+    });
+    expect(pinkResting.pink.activeLine).toBeNull();
+    expect(pinkResting.pink.upcomingLine?.text).toBe("Branch target");
+    expect(pinkResting.pink.upcomingLineVisible).toBe(true);
+
+    const pinkMuted = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.5,
+      otherTimeSec: 8.5,
+      goldTimeSec: null,
+      pinkTimeSec: null,
+    });
+    expect(pinkMuted.pink.activeLine).toBeNull();
+    expect(pinkMuted.pink.upcomingLine).toBeNull();
+  });
 });

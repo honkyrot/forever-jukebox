@@ -277,8 +277,10 @@ export function initializePlayback(): void {
         lastBeatIndex: index,
         autocanonizerMainSeconds: cursorTimes.mainSeconds,
         autocanonizerOtherSeconds: cursorTimes.otherSeconds,
-        autocanonizerPinkSeconds: cursorTimes.pinkSeconds ?? 0,
-        autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
+        autocanonizerPinkSeconds:
+          cursorTimes.pinkSeconds === undefined ? 0 : cursorTimes.pinkSeconds,
+        autocanonizerGoldSeconds:
+          cursorTimes.goldSeconds === undefined ? 0 : cursorTimes.goldSeconds,
       });
       pulseVizStats(index, beat);
       context.metronomeOverlay.handleBeatEnter(

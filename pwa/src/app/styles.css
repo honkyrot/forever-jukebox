@@ -1105,6 +1105,38 @@ button,
   width: 100%;
 }
 
+.pan-slider-wrap {
+  display: grid;
+  gap: 1px;
+}
+
+.pan-ticks {
+  position: relative;
+  height: 6px;
+  /* Inset half of the range thumb width so 0%/50%/100% align with thumb centers. */
+  margin: 0 7px;
+  pointer-events: none;
+}
+
+.pan-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  transform: translateX(-50%);
+  background: currentColor;
+  border-radius: 1px;
+}
+
+.pan-tick.is-major {
+  height: 6px;
+  opacity: 0.78;
+}
+
+.pan-tick.is-minor {
+  height: 3px;
+  opacity: 0.48;
+}
+
 .volume-slider {
   writing-mode: vertical-lr;
   transform: rotate(180deg);
@@ -2053,7 +2085,9 @@ body.theme-light .viz-bpm.is-bpm-changed {
 .custom-anchor-button.is-active {
   border-color: var(--accent);
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+  font-weight: 600;
 }
 
 /* BPM Pulse & Smooth Progress Bar */

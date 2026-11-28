@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   setAutocanonizerMixAlignment: vi.fn(),
   setAutocanonizerQuadMode: vi.fn(),
   setAutocanonizerQuadBranchMode: vi.fn(),
+  setAutocanonizerSingleVoiceCount: vi.fn(),
   swapAutocanonizerMixSongs: vi.fn(),
   trackEvent: vi.fn(),
   getCount: vi.fn(() => 6),
@@ -32,6 +33,7 @@ vi.mock("../../playback", async (importOriginal) => ({
   setAutocanonizerMixAlignment: h.setAutocanonizerMixAlignment,
   setAutocanonizerQuadMode: h.setAutocanonizerQuadMode,
   setAutocanonizerQuadBranchMode: h.setAutocanonizerQuadBranchMode,
+  setAutocanonizerSingleVoiceCount: h.setAutocanonizerSingleVoiceCount,
   swapAutocanonizerMixSongs: h.swapAutocanonizerMixSongs,
 }));
 vi.mock("../../analytics", () => ({
@@ -58,6 +60,7 @@ describe("VizTop", () => {
         autocanonizerMixAlignment: "cover-sync",
         autocanonizerQuadMode: false,
         autocanonizerQuadBranchMode: "synced",
+        autocanonizerTrioMode: false,
         playlistAddSticky: false,
         playlist: { tracks: [], currentIndex: -1 },
       });
@@ -175,6 +178,7 @@ describe("VizTop", () => {
         autocanonizerMixEnabled: true,
         autocanonizerQuadMode: false,
         autocanonizerQuadBranchMode: "synced",
+        autocanonizerTrioMode: false,
       });
     });
     render(<VizTop />);
@@ -201,6 +205,67 @@ describe("VizTop", () => {
       expect.anything(),
       "independent",
     );
+  });
+
+  it("shows and toggles 3-Voice and 4-Voice modes only in single-song autocanonizer", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: false,
+        autocanonizerSingleVoiceCount: 2,
+      });
+    });
+    render(<VizTop />);
+    const trioToggle = document.getElementById("canonizer-trio-toggle")!;
+    const singleQuadToggle = document.getElementById(
+      "canonizer-single-quad-toggle",
+    )!;
+    expect(trioToggle).not.toBeNull();
+    expect(singleQuadToggle).not.toBeNull();
+    expect(trioToggle.getAttribute("aria-pressed")).toBe("false");
+    expect(singleQuadToggle.getAttribute("aria-pressed")).toBe("false");
+
+    await userEvent.click(trioToggle);
+    expect(h.setAutocanonizerSingleVoiceCount).toHaveBeenCalledWith(
+      expect.anything(),
+      3,
+    );
+
+    await userEvent.click(singleQuadToggle);
+    expect(h.setAutocanonizerSingleVoiceCount).toHaveBeenCalledWith(
+      expect.anything(),
+      4,
+    );
+
+    act(() => {
+      useAppStore.setState({
+        autocanonizerTrioMode: true,
+        autocanonizerSingleVoiceCount: 3,
+      });
+    });
+    expect(trioToggle.classList.contains("is-active")).toBe(true);
+    expect(singleQuadToggle.classList.contains("is-active")).toBe(false);
+
+    act(() => {
+      useAppStore.setState({
+        autocanonizerTrioMode: false,
+        autocanonizerSingleVoiceCount: 4,
+      });
+    });
+    expect(trioToggle.classList.contains("is-active")).toBe(false);
+    expect(singleQuadToggle.classList.contains("is-active")).toBe(true);
+    await userEvent.click(singleQuadToggle);
+    expect(h.setAutocanonizerSingleVoiceCount).toHaveBeenCalledWith(
+      expect.anything(),
+      2,
+    );
+
+    act(() => {
+      useAppStore.setState({ autocanonizerMixEnabled: true });
+    });
+    expect(document.getElementById("canonizer-trio-toggle")).toBeNull();
+    expect(document.getElementById("canonizer-single-quad-toggle")).toBeNull();
   });
 
   it("exposes Song Sync mode in the mode selector and renders its loop toggle", async () => {

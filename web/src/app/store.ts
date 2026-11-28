@@ -515,6 +515,8 @@ const createPlaybackSlice: Slice<
     | "autocanonizerMixAlignment"
     | "autocanonizerQuadMode"
     | "autocanonizerQuadBranchMode"
+    | "autocanonizerTrioMode"
+    | "autocanonizerSingleVoiceCount"
     | "autocanonizerMixTrackTitles"
     | "autocanonizerOtherDurationSec"
     | "wubMachineSeconds"
@@ -555,6 +557,8 @@ const createPlaybackSlice: Slice<
   autocanonizerMixAlignment: "cover-sync",
   autocanonizerQuadMode: false,
   autocanonizerQuadBranchMode: "synced",
+  autocanonizerTrioMode: false,
+  autocanonizerSingleVoiceCount: 2,
   autocanonizerMixTrackTitles: null,
   autocanonizerOtherDurationSec: null,
   wubMachineSeconds: 0,

@@ -6,6 +6,7 @@ import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
 import type {
   AutocanonizerMixAlignmentMode,
   AutocanonizerQuadBranchMode,
+  AutocanonizerSingleVoiceCount,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 
 export function VizTop({
@@ -24,8 +25,12 @@ export function VizTop({
   autocanonizerMixAlignment = "cover-sync",
   autocanonizerQuadMode = false,
   autocanonizerQuadBranchMode = "synced",
+  autocanonizerTrioMode = false,
+  autocanonizerSingleVoiceCount,
   onToggleMix,
   onSwapAutocanonizerMix,
+  onToggleAutocanonizerTrio,
+  onSetAutocanonizerSingleVoiceCount,
   onToggleAutocanonizerQuad,
   onAutocanonizerQuadBranchModeChange,
   onAutocanonizerMixAlignmentChange,
@@ -46,8 +51,14 @@ export function VizTop({
   autocanonizerMixAlignment?: AutocanonizerMixAlignmentMode;
   autocanonizerQuadMode?: boolean;
   autocanonizerQuadBranchMode?: AutocanonizerQuadBranchMode;
+  autocanonizerTrioMode?: boolean;
+  autocanonizerSingleVoiceCount?: AutocanonizerSingleVoiceCount;
   onToggleMix?: () => void;
   onSwapAutocanonizerMix?: () => void;
+  onToggleAutocanonizerTrio?: () => void;
+  onSetAutocanonizerSingleVoiceCount?: (
+    count: AutocanonizerSingleVoiceCount,
+  ) => void;
   onToggleAutocanonizerQuad?: () => void;
   onAutocanonizerQuadBranchModeChange?: (
     mode: AutocanonizerQuadBranchMode,
@@ -60,6 +71,12 @@ export function VizTop({
 }) {
   const { t } = useTranslation();
   const isCanonizer = playMode === "autocanonizer";
+  const singleVoiceCount: AutocanonizerSingleVoiceCount =
+    autocanonizerSingleVoiceCount !== undefined
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
   const entries = Array.from({ length: vizCount }, (_, index) => ({
     index,
     label: getVisualizationLabel(index, t),
@@ -116,6 +133,55 @@ export function VizTop({
                 ? t("mix.mix2Songs")
                 : t("mix.mixSongs")}
           </button>
+        ) : null}
+        {isCanonizer &&
+        !autocanonizerMixEnabled &&
+        canMix &&
+        (onSetAutocanonizerSingleVoiceCount || onToggleAutocanonizerTrio) ? (
+          <>
+            <button
+              type="button"
+              id="canonizer-trio-toggle"
+              className={
+                singleVoiceCount === 3
+                  ? "custom-anchor-button is-active"
+                  : "custom-anchor-button"
+              }
+              aria-pressed={singleVoiceCount === 3}
+              title={t("mix.trioModeTitle")}
+              onClick={() => {
+                if (onSetAutocanonizerSingleVoiceCount) {
+                  onSetAutocanonizerSingleVoiceCount(
+                    singleVoiceCount === 3 ? 2 : 3,
+                  );
+                } else {
+                  onToggleAutocanonizerTrio?.();
+                }
+              }}
+            >
+              {t("mix.trioMode")}
+            </button>
+            {onSetAutocanonizerSingleVoiceCount ? (
+              <button
+                type="button"
+                id="canonizer-single-quad-toggle"
+                className={
+                  singleVoiceCount === 4
+                    ? "custom-anchor-button is-active"
+                    : "custom-anchor-button"
+                }
+                aria-pressed={singleVoiceCount === 4}
+                title={t("mix.singleQuadModeTitle")}
+                onClick={() =>
+                  onSetAutocanonizerSingleVoiceCount(
+                    singleVoiceCount === 4 ? 2 : 4,
+                  )
+                }
+              >
+                {t("mix.singleQuadMode")}
+              </button>
+            ) : null}
+          </>
         ) : null}
         {isCanonizer && autocanonizerMixEnabled ? (
           <>

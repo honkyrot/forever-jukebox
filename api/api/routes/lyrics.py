@@ -9,7 +9,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from ..db import get_job
-from ..lyrics import get_spicy_lyrics_api_key, resolve_track_lyrics
+from ..lyrics import (
+    LYRICS_MATCH_VERSION,
+    get_spicy_lyrics_api_key,
+    resolve_track_lyrics,
+    verify_cached_lyrics_match,
+)
 from ..models import LyricsResponse
 from ..paths import DB_PATH, STORAGE_ROOT
 from ..route_responses import error_responses
@@ -51,6 +56,29 @@ def _response_from_payload(payload: dict[str, Any]) -> LyricsResponse:
     )
 
 
+def _resolve_job_duration(store: Any, job_id: str, duration: float | None) -> float | None:
+    """Return explicit query duration or fall back to the job's analyzed track duration."""
+    if duration is not None:
+        return duration
+    analysis = store.read_analysis(job_id)
+    if isinstance(analysis, dict):
+        track_meta = analysis.get("track")
+        if isinstance(track_meta, dict) and isinstance(track_meta.get("duration"), (int, float)):
+            return float(track_meta["duration"])
+    return None
+
+
+def _cache_matches_job_metadata(cached: dict[str, Any], job: Any) -> bool:
+    """Return True for legacy entries without query metadata or when title/artist still match."""
+    if "query_title" not in cached and "query_artist" not in cached:
+        return True
+    cached_title = (cached.get("query_title") or "").strip() if isinstance(cached.get("query_title"), str) else ""
+    cached_artist = (cached.get("query_artist") or "").strip() if isinstance(cached.get("query_artist"), str) else ""
+    job_title = (getattr(job, "track_title", None) or "").strip()
+    job_artist = (getattr(job, "track_artist", None) or "").strip()
+    return cached_title == job_title and cached_artist == job_artist
+
+
 @router.get("/api/lyrics/{job_id}", responses=error_responses(404, 502, 503))
 def get_job_lyrics(
     job_id: str,
@@ -66,21 +94,25 @@ def get_job_lyrics(
         raise HTTPException(status_code=404, detail="Job not found")
 
     store = get_store(STORAGE_ROOT)
+    resolved_duration: float | None = duration
     if not refresh:
         cached = store.read_lyrics(job_id)
-        if isinstance(cached, dict):
+        if isinstance(cached, dict) and _cache_matches_job_metadata(cached, job):
             if cached.get("status") == "found" and isinstance(cached.get("lyrics"), dict):
-                return JSONResponse(_response_from_payload(cached).model_dump(), status_code=200)
-            if _is_fresh_not_found(cached):
+                if cached.get("match_version") == LYRICS_MATCH_VERSION:
+                    return JSONResponse(_response_from_payload(cached).model_dump(), status_code=200)
+                resolved_duration = _resolve_job_duration(store, job_id, resolved_duration)
+                if verify_cached_lyrics_match(
+                    cached,
+                    title=job.track_title,
+                    artist=job.track_artist,
+                    duration=resolved_duration,
+                ):
+                    return JSONResponse(_response_from_payload(cached).model_dump(), status_code=200)
+            elif _is_fresh_not_found(cached):
                 return JSONResponse(_response_from_payload(cached).model_dump(), status_code=200)
 
-    resolved_duration = duration
-    if resolved_duration is None:
-        analysis = store.read_analysis(job_id)
-        if isinstance(analysis, dict):
-            track_meta = analysis.get("track")
-            if isinstance(track_meta, dict) and isinstance(track_meta.get("duration"), (int, float)):
-                resolved_duration = float(track_meta["duration"])
+    resolved_duration = _resolve_job_duration(store, job_id, resolved_duration)
 
     try:
         youtube_id = (
@@ -100,6 +132,9 @@ def get_job_lyrics(
 
     cache_entry = {
         **resolved,
+        "match_version": LYRICS_MATCH_VERSION,
+        "query_title": job.track_title,
+        "query_artist": job.track_artist,
         "cached_at": datetime.now(timezone.utc).isoformat(),
     }
     store.save_lyrics(job_id, cache_entry)

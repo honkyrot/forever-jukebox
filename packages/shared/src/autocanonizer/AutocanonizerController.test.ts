@@ -13,6 +13,7 @@ vi.mock("./AutocanonizerViz", () => ({
     destroy() {}
     update() {}
     setOtherIndex() {}
+    setFinishOutIndices() {}
   },
 }));
 
@@ -400,8 +401,8 @@ describe("AutocanonizerController", () => {
         const start = beatIdx * dur;
         beats.push({ start, duration: dur, confidence: 1 });
         segments.push({
-          start,
-          duration: dur,
+          start: start + 0.01,
+          duration: dur - 0.02,
           confidence: 1,
           loudness_start: spec.loudness - 2,
           loudness_max: spec.loudness,
@@ -693,5 +694,494 @@ describe("AutocanonizerController", () => {
 
     controller.stop();
     expect(controller.getLiveCursorTimes()).toBeNull();
+  });
+
+  it("supports 3-voice single-song trio mode with runner-up matching, muted sections, and 0.4/0.3/0.3 gains", () => {
+    const pA = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pB = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pC = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pD = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    // 5 sections: [A, B, A, B, A] of 2 beats each (10 beats total).
+    // A repeats 3 times (sections 0, 2, 4) -> Gold finds a distinct 3rd match!
+    // B repeats only 2 times (sections 1, 3) -> Gold has no 3rd match and mutes!
+    // Slight loudness variations ensure non-zero self-similarity distance > 0.
+    const sectionSpecs = [
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5 },
+      { pitches: [pC, pD], timbreVal: -10, loudness: -25 },
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5.1 },
+      { pitches: [pC, pD], timbreVal: -10, loudness: -25.1 },
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5.2 },
+    ];
+    const dur = 0.5;
+    const beats: Array<{ start: number; duration: number; confidence: number }> = [];
+    const bars: Array<{ start: number; duration: number; confidence: number }> = [];
+    const sections: Array<{ start: number; duration: number; confidence: number }> = [];
+    const segments: Array<{
+      start: number;
+      duration: number;
+      confidence: number;
+      loudness_start: number;
+      loudness_max: number;
+      loudness_max_time: number;
+      pitches: number[];
+      timbre: number[];
+    }> = [];
+    let idx = 0;
+    for (const spec of sectionSpecs) {
+      sections.push({
+        start: idx * dur,
+        duration: spec.pitches.length * dur,
+        confidence: 1,
+      });
+      bars.push({
+        start: idx * dur,
+        duration: spec.pitches.length * dur,
+        confidence: 1,
+      });
+      for (const pitches of spec.pitches) {
+        const start = idx * dur;
+        beats.push({ start, duration: dur, confidence: 1 });
+        segments.push({
+          start: start + 0.01,
+          duration: dur - 0.02,
+          confidence: 1,
+          loudness_start: spec.loudness - 2,
+          loudness_max: spec.loudness,
+          loudness_max_time: 0.1,
+          pitches,
+          timbre: Array.from({ length: 12 }, (_, k) =>
+            k === 0 ? spec.timbreVal : 0,
+          ),
+        });
+        idx += 1;
+      }
+    }
+    const raw = {
+      track: { duration: idx * dur },
+      sections,
+      bars,
+      beats,
+      tatums: [],
+      segments,
+    };
+
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains, sources } = createAudioContext();
+    const mainBuffer = { duration: 10 } as AudioBuffer;
+    controller.setAudio(mainBuffer, context);
+    controller.setAnalysis(raw, raw.track.duration);
+    controller.setTrioMode(true);
+
+    // Trio gains: Blue 0.4, Green 0.3, Pink 0, Gold 0.3 (on active beats).
+    expect(gains[0].gain.value).toBeCloseTo(0.4);
+    expect(gains[1].gain.value).toBeCloseTo(0.3);
+    expect(gains[2].gain.value).toBe(0);
+    expect(gains[3].gain.value).toBeCloseTo(0.3);
+
+    const inner = controller as unknown as {
+      beats: Array<CanonizerBeat & { gold?: CanonizerBeat; goldGain?: number }>;
+    };
+    // Section 0 (beats 0-1, A) has active Gold in section 2 or 4 (distinct from Blue and Green).
+    expect((inner.beats[0].goldGain ?? 0) > 0).toBe(true);
+    expect(inner.beats[0].gold?.section).not.toBe(inner.beats[0].section);
+    expect(inner.beats[0].gold?.section).not.toBe(inner.beats[0].other.section);
+    // Section 1 (beats 2-3, B) only appears twice, so Gold mutes.
+    expect(inner.beats[2].goldGain).toBe(0);
+    expect(inner.beats[3].goldGain).toBe(0);
+
+    const onBeat = vi.fn();
+    controller.setOnBeat(onBeat);
+    controller.startAtIndex(0);
+    expect(sources).toHaveLength(3);
+    expect(sources.every((s) => s.buffer === mainBuffer)).toBe(true);
+    expect(onBeat).toHaveBeenLastCalledWith(
+      0,
+      inner.beats[0],
+      expect.objectContaining({
+        mainSeconds: 0,
+        goldSeconds: inner.beats[0].gold!.start,
+      }),
+    );
+
+    // Selecting beat 2 (muted section B) emits goldSeconds: null and mutes gains[3].
+    controller.startAtIndex(2);
+    expect(gains[3].gain.value).toBe(0);
+    expect(onBeat).toHaveBeenLastCalledWith(
+      2,
+      inner.beats[2],
+      expect.objectContaining({
+        mainSeconds: 1,
+        goldSeconds: null,
+      }),
+    );
+    controller.stop();
+
+    // Preserves trioMode across subsequent setAnalysis calls.
+    controller.setAnalysis(raw, raw.track.duration);
+    expect((inner.beats[0].goldGain ?? 0) > 0).toBe(true);
+
+    const plan = controller.planRender();
+    expect(plan?.voices).toHaveLength(3);
+    expect(plan?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 0]);
+  });
+
+  it("finishes out both Green and Gold voices to the end in 3-voice trio mode", () => {
+    vi.useFakeTimers();
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains } = createAudioContext();
+    controller.setAudio({ duration: 10 } as AudioBuffer, context);
+    controller.setTrioMode(true);
+
+    // 4 beats (duration 0.1s each): final beat (3) has other=2 (2 beats left: 2,3)
+    // and gold=1 (3 beats left: 1,2,3), so Gold continues 1 beat after Green ends.
+    const b0 = createBeat(0, 0);
+    const b1 = createBeat(1, 0.1);
+    const b2 = createBeat(2, 0.2);
+    const b3 = createBeat(3, 0.3);
+    b0.next = b1;
+    b1.prev = b0;
+    b1.next = b2;
+    b2.prev = b1;
+    b2.next = b3;
+    b3.prev = b2;
+    b0.other = b1;
+    b1.other = b2;
+    b2.other = b3;
+    b3.other = b2;
+    b0.gold = b2;
+    b1.gold = b3;
+    b2.gold = b0;
+    b3.gold = b1;
+    b0.goldGain = 1;
+    b1.goldGain = 1;
+    b2.goldGain = 1;
+    b3.goldGain = 1;
+
+    (controller as unknown as { beats: CanonizerBeat[] }).beats = [b0, b1, b2, b3];
+    const onBeat = vi.fn();
+    const onEnded = vi.fn();
+    controller.setFinishOutSong(true);
+    controller.setOnBeat(onBeat);
+    controller.setOnEnded(onEnded);
+
+    controller.startAtIndex(3);
+    // Beat 3 immediately enters finish-out step 1: other=2 (0.2), gold=1 (0.1)
+    expect(onBeat).toHaveBeenLastCalledWith(2, b2, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.2,
+      goldSeconds: 0.1,
+    });
+    expect(gains[1].gain.value).toBeCloseTo(0.3);
+    expect(gains[3].gain.value).toBeCloseTo(0.3);
+
+    // Step 2: other=3 (0.3), gold=2 (0.2)
+    (context as unknown as { currentTime: number }).currentTime = 0.1;
+    vi.advanceTimersByTime(100);
+    expect(onBeat).toHaveBeenLastCalledWith(3, b3, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.3,
+      goldSeconds: 0.2,
+    });
+
+    // Step 3: other finished, gold=3 (0.3) continues alone
+    (context as unknown as { currentTime: number }).currentTime = 0.2;
+    vi.advanceTimersByTime(100);
+    expect(onBeat).toHaveBeenLastCalledWith(3, b3, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.3,
+      goldSeconds: 0.3,
+    });
+    expect(gains[1].gain.value).toBe(0);
+    expect(gains[3].gain.value).toBeCloseTo(0.3);
+    expect(onEnded).not.toHaveBeenCalled();
+
+    // Step 4: both finished -> stops and fires onEnded
+    (context as unknown as { currentTime: number }).currentTime = 0.3;
+    vi.advanceTimersByTime(100);
+    expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes goldSeconds in getLiveCursorTimes only during 3-voice trio playback", () => {
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context } = createAudioContext();
+    controller.setAudio({ duration: 30 } as AudioBuffer, context);
+
+    const b0 = createBeat(0, 0);
+    const b1 = createBeat(1, 2);
+    const b2 = createBeat(2, 4);
+    b0.next = b1;
+    b1.prev = b0;
+    b1.next = b2;
+    b2.prev = b1;
+    b0.other = b2;
+    b1.other = b1;
+    b2.other = b0;
+    b0.gold = b1;
+    b0.goldGain = 1;
+    b1.gold = b1;
+    b1.goldGain = 0;
+    b2.gold = b0;
+    b2.goldGain = 1;
+    (controller as unknown as { beats: CanonizerBeat[] }).beats = [b0, b1, b2];
+    controller.setTrioMode(true);
+    // Re-assign custom gold targets after setTrioMode computed defaults.
+    b0.gold = b1;
+    b0.goldGain = 1;
+    b1.gold = b1;
+    b1.goldGain = 0;
+
+    controller.startAtIndex(0);
+    (context as unknown as { currentTime: number }).currentTime = 0.3;
+    expect(controller.getLiveCursorTimes()).toEqual({
+      mainSeconds: 0.3,
+      otherSeconds: 4.3,
+      goldSeconds: 2.3,
+      inUnison: false,
+    });
+
+    // Muted Gold section reports goldSeconds: null.
+    controller.startAtIndex(1);
+    (context as unknown as { currentTime: number }).currentTime = 0.5;
+    expect(controller.getLiveCursorTimes()).toEqual({
+      mainSeconds: 2.2,
+      otherSeconds: 2.2,
+      goldSeconds: null,
+      inUnison: true,
+    });
+
+    controller.stop();
+  });
+
+  it("supports 4-voice single-song mode with distinct Pink matches, muted sections, and 0.31/0.23/0.23/0.23 gains", () => {
+    const pA = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pB = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pC = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pD = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    const pE = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0];
+    const pF = [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    // Sections: [A, B, A, A, A] (A occurs 4 times at sections 0, 2, 3, 4; B occurs once at section 1).
+    const sectionSpecs = [
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5 },
+      { pitches: [pC, pD], timbreVal: -10, loudness: -25 },
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5.1 },
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5.2 },
+      { pitches: [pE, pF], timbreVal: 25, loudness: -35 },
+      { pitches: [pA, pB], timbreVal: 10, loudness: -5.3 },
+    ];
+    const dur = 0.5;
+    const beats: Array<{ start: number; duration: number; confidence: number }> = [];
+    const bars: Array<{ start: number; duration: number; confidence: number }> = [];
+    const sections: Array<{ start: number; duration: number; confidence: number }> = [];
+    const segments: Array<{
+      start: number;
+      duration: number;
+      confidence: number;
+      loudness_start: number;
+      loudness_max: number;
+      loudness_max_time: number;
+      pitches: number[];
+      timbre: number[];
+    }> = [];
+    let idx = 0;
+    for (const spec of sectionSpecs) {
+      sections.push({
+        start: idx * dur,
+        duration: spec.pitches.length * dur,
+        confidence: 1,
+      });
+      bars.push({
+        start: idx * dur,
+        duration: spec.pitches.length * dur,
+        confidence: 1,
+      });
+      for (const pitches of spec.pitches) {
+        const start = idx * dur;
+        beats.push({ start, duration: dur, confidence: 1 });
+        segments.push({
+          start: start + 0.01,
+          duration: dur - 0.02,
+          confidence: 1,
+          loudness_start: spec.loudness - 2,
+          loudness_max: spec.loudness,
+          loudness_max_time: 0.1,
+          pitches,
+          timbre: Array.from({ length: 12 }, (_, k) =>
+            k === 0 ? spec.timbreVal : 0,
+          ),
+        });
+        idx += 1;
+      }
+    }
+    const raw = {
+      track: { duration: idx * dur },
+      sections,
+      bars,
+      beats,
+      tatums: [],
+      segments,
+    };
+
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains, sources } = createAudioContext();
+    const mainBuffer = { duration: 12 } as AudioBuffer;
+    controller.setAudio(mainBuffer, context);
+    controller.setAnalysis(raw, raw.track.duration);
+    controller.setSingleSongVoiceCount(4);
+
+    expect(gains[0].gain.value).toBeCloseTo(0.31);
+    expect(gains[1].gain.value).toBeCloseTo(0.23);
+    expect(gains[2].gain.value).toBeCloseTo(0.23);
+    expect(gains[3].gain.value).toBeCloseTo(0.23);
+
+    const inner = controller as unknown as {
+      beats: Array<
+        CanonizerBeat & {
+          gold?: CanonizerBeat;
+          goldGain?: number;
+          pink?: CanonizerBeat;
+          pinkGain?: number;
+        }
+      >;
+    };
+    const b0 = inner.beats[0];
+    expect((b0.goldGain ?? 0) > 0).toBe(true);
+    expect((b0.pinkGain ?? 0) > 0).toBe(true);
+    expect(b0.pink?.section).not.toBe(b0.section);
+    expect(b0.pink?.section).not.toBe(b0.other.section);
+    expect(b0.pink?.section).not.toBe(b0.gold?.section);
+
+    // Unique section B (beat 2) mutes both Gold and Pink cleanly.
+    expect(inner.beats[2].goldGain).toBe(0);
+    expect(inner.beats[2].pinkGain).toBe(0);
+
+    const onBeat = vi.fn();
+    controller.setOnBeat(onBeat);
+    controller.startAtIndex(0);
+    expect(sources).toHaveLength(4);
+    expect(onBeat).toHaveBeenLastCalledWith(
+      0,
+      b0,
+      expect.objectContaining({
+        mainSeconds: 0,
+        goldSeconds: b0.gold!.start,
+        pinkSeconds: b0.pink!.start,
+      }),
+    );
+
+    (context as unknown as { currentTime: number }).currentTime = 0.2;
+    expect(controller.getLiveCursorTimes()).toEqual(
+      expect.objectContaining({
+        mainSeconds: 0.2,
+        goldSeconds: b0.gold!.start + 0.2,
+        pinkSeconds: b0.pink!.start + 0.2,
+      }),
+    );
+
+    // Beat 2 (muted Gold & Pink) emits pinkSeconds: null and goldSeconds: null.
+    controller.startAtIndex(2);
+    expect(gains[2].gain.value).toBe(0);
+    expect(gains[3].gain.value).toBe(0);
+    expect(controller.getLiveCursorTimes()).toEqual(
+      expect.objectContaining({
+        goldSeconds: null,
+        pinkSeconds: null,
+      }),
+    );
+    controller.stop();
+
+    const plan = controller.planRender();
+    expect(plan?.voices).toHaveLength(4);
+    expect(plan?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 0, 0]);
+  });
+
+  it("finishes out Green, Gold, and Pink voices sequentially in 4-voice single-song mode", () => {
+    vi.useFakeTimers();
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains } = createAudioContext();
+    controller.setAudio({ duration: 10 } as AudioBuffer, context);
+    controller.setSingleSongVoiceCount(4);
+
+    // Final beat 3: other=2 (2 beats left), gold=1 (3 beats left), pink=0 (4 beats left).
+    const b0 = createBeat(0, 0);
+    const b1 = createBeat(1, 0.1);
+    const b2 = createBeat(2, 0.2);
+    const b3 = createBeat(3, 0.3);
+    b0.next = b1;
+    b1.prev = b0;
+    b1.next = b2;
+    b2.prev = b1;
+    b2.next = b3;
+    b3.prev = b2;
+    b0.other = b1;
+    b1.other = b2;
+    b2.other = b3;
+    b3.other = b2;
+    b0.gold = b2;
+    b1.gold = b3;
+    b2.gold = b0;
+    b3.gold = b1;
+    b0.pink = b3;
+    b1.pink = b0;
+    b2.pink = b1;
+    b3.pink = b0;
+    b0.goldGain = 1;
+    b1.goldGain = 1;
+    b2.goldGain = 1;
+    b3.goldGain = 1;
+    b0.pinkGain = 1;
+    b1.pinkGain = 1;
+    b2.pinkGain = 1;
+    b3.pinkGain = 1;
+
+    (controller as unknown as { beats: CanonizerBeat[] }).beats = [b0, b1, b2, b3];
+    const onBeat = vi.fn();
+    const onEnded = vi.fn();
+    controller.setFinishOutSong(true);
+    controller.setOnBeat(onBeat);
+    controller.setOnEnded(onEnded);
+
+    controller.startAtIndex(3);
+    expect(onBeat).toHaveBeenLastCalledWith(2, b2, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.2,
+      goldSeconds: 0.1,
+      pinkSeconds: 0,
+    });
+
+    (context as unknown as { currentTime: number }).currentTime = 0.1;
+    vi.advanceTimersByTime(100);
+    expect(onBeat).toHaveBeenLastCalledWith(3, b3, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.3,
+      goldSeconds: 0.2,
+      pinkSeconds: 0.1,
+    });
+
+    (context as unknown as { currentTime: number }).currentTime = 0.2;
+    vi.advanceTimersByTime(100);
+    expect(onBeat).toHaveBeenLastCalledWith(3, b3, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.3,
+      goldSeconds: 0.3,
+      pinkSeconds: 0.2,
+    });
+
+    // Final beat with Pink alone (Green & Gold both finished).
+    (context as unknown as { currentTime: number }).currentTime = 0.3;
+    vi.advanceTimersByTime(100);
+    expect(onBeat).toHaveBeenLastCalledWith(3, b3, {
+      mainSeconds: 0.3,
+      otherSeconds: 0.3,
+      goldSeconds: null,
+      pinkSeconds: 0.3,
+    });
+    expect(gains[1].gain.value).toBe(0);
+    expect(gains[3].gain.value).toBe(0);
+    expect(gains[2].gain.value).toBeCloseTo(0.23);
+    expect(onEnded).not.toHaveBeenCalled();
+
+    (context as unknown as { currentTime: number }).currentTime = 0.4;
+    vi.advanceTimersByTime(100);
+    expect(onEnded).toHaveBeenCalledTimes(1);
   });
 });

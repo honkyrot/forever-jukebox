@@ -180,4 +180,153 @@ describe("planCanonizerRender", () => {
       [1, 1, 4, 0.22 * 2],
     ]);
   });
+
+  it("plans a 3-voice single-song trio with 0.4/0.3/0.3 weights, muted sections, and dual-branch finish-out", () => {
+    const beats = makeBeats(0, [1, 1, 1, 1], [1, 2, 3, 2]);
+    beats[0].gold = beats[2];
+    beats[0].goldGain = 1;
+    beats[1].gold = beats[1];
+    beats[1].goldGain = 0;
+    beats[2].gold = beats[0];
+    beats[2].goldGain = 0.5;
+    beats[3].gold = beats[1];
+    beats[3].goldGain = 1;
+
+    const looped = planCanonizerRender(beats, {
+      finishOutSong: false,
+      mainPan: -0.25,
+      otherPan: 0.25,
+      goldPan: 0.75,
+      trioMode: true,
+    });
+    expect(looped?.voices).toHaveLength(3);
+    expect(looped?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 0]);
+    expect(looped?.voices.map((v) => v.pan)).toEqual([-0.25, 0.25, 0.75]);
+    expect(looped?.durationSeconds).toBeCloseTo(4);
+    expectSegments(looped!.voices[0].segments, [[0, 4, 0, 0.4]]);
+    expectSegments(looped!.voices[1].segments, [
+      [0, 1, 1, 0.3],
+      [1, 1, 1, 0.3],
+      [2, 1, 1, 0.3],
+      [3, 1, -1, 0.3],
+    ]);
+    expectSegments(looped!.voices[2].segments, [
+      [0, 1, 2, 0.3],
+      [1, 1, 0, 0],
+      [2, 1, -2, 0.15],
+      [3, 1, -2, 0.3],
+    ]);
+
+    // Finish-out: final beat (index 3) has other=2 (2 beats left) and gold=1 (3 beats left).
+    // Both play out until both reach beat 3 (total 3s main + 3s finish-out = 6s).
+    const finishOut = planCanonizerRender(beats, {
+      finishOutSong: true,
+      mainPan: 0,
+      otherPan: 0,
+      goldPan: 0,
+      trioMode: true,
+    });
+    expect(finishOut?.durationSeconds).toBeCloseTo(6);
+    expectSegments(finishOut!.voices[0].segments, [[0, 3, 0, 0.4]]);
+    expectSegments(finishOut!.voices[1].segments, [
+      [0, 1, 1, 0.3],
+      [1, 1, 1, 0.3],
+      [2, 1, 1, 0.3],
+      [3, 1, -1, 0.3],
+      [4, 1, -1, 0.3],
+    ]);
+    expectSegments(finishOut!.voices[2].segments, [
+      [0, 1, 2, 0.3],
+      [1, 1, 0, 0],
+      [2, 1, -2, 0.15],
+      [3, 1, -2, 0.3],
+      [4, 1, -2, 0.3],
+      [5, 1, -2, 0.3],
+    ]);
+  });
+
+  it("stops Gold at the final beat during trio finish-out if Gold was muted on the final beat", () => {
+    const beats = makeBeats(0, [1, 1, 1], [1, 2, 1]);
+    beats[0].gold = beats[2];
+    beats[0].goldGain = 1;
+    beats[1].gold = beats[0];
+    beats[1].goldGain = 1;
+    beats[2].gold = beats[2];
+    beats[2].goldGain = 0;
+
+    const plan = planCanonizerRender(beats, {
+      finishOutSong: true,
+      mainPan: 0,
+      otherPan: 0,
+      goldPan: 0,
+      trioMode: true,
+    });
+    // Final beat (2) has other=1 (2 beats left: 1, 2) and muted gold -> total 2s + 2s = 4s.
+    expect(plan?.durationSeconds).toBeCloseTo(4);
+    expect(plan!.voices[2].segments).toHaveLength(2);
+  });
+
+  it("mixes 4 single-song voices (0.31/0.23/0.23/0.23) and finishes out all active branches", () => {
+    const beats = makeBeats(0, [1, 1, 1, 1], [1, 2, 3, 2]);
+    beats[0].gold = beats[2];
+    beats[0].goldGain = 1;
+    beats[1].gold = beats[3];
+    beats[1].goldGain = 1;
+    beats[2].gold = beats[0];
+    beats[2].goldGain = 0.5;
+    beats[3].gold = beats[2];
+    beats[3].goldGain = 1;
+
+    beats[0].pink = beats[3];
+    beats[0].pinkGain = 1;
+    beats[1].pink = beats[1];
+    beats[1].pinkGain = 0; // muted section
+    beats[2].pink = beats[1];
+    beats[2].pinkGain = 0.5; // ducked entry
+    beats[3].pink = beats[0];
+    beats[3].pinkGain = 1; // 4 beats left in finish-out: 0, 1, 2, 3
+
+    const looped = planCanonizerRender(beats, {
+      finishOutSong: false,
+      mainPan: -0.5,
+      otherPan: 0.5,
+      goldPan: 0.25,
+      pinkPan: -0.25,
+      singleVoiceCount: 4,
+    });
+    expect(looped?.voices).toHaveLength(4);
+    expect(looped?.voices.map((v) => v.sourceIndex)).toEqual([0, 0, 0, 0]);
+    expect(looped?.voices.map((v) => v.pan)).toEqual([-0.5, 0.5, 0.25, -0.25]);
+    expect(looped?.durationSeconds).toBeCloseTo(4);
+    expectSegments(looped!.voices[0].segments, [[0, 4, 0, 0.31]]);
+    expectSegments(looped!.voices[3].segments, [
+      [0, 1, 3, 0.23],
+      [1, 1, 0, 0],
+      [2, 1, -1, 0.115],
+      [3, 1, -3, 0.23],
+    ]);
+
+    // Finish-out: main stops at beat 3 (t=3); other finishes at t=5, gold finishes at t=5, pink plays 0,1,2,3 (t=7).
+    const finishOut = planCanonizerRender(beats, {
+      finishOutSong: true,
+      mainPan: 0,
+      otherPan: 0,
+      goldPan: 0,
+      pinkPan: 0,
+      singleVoiceCount: 4,
+    });
+    expect(finishOut?.durationSeconds).toBeCloseTo(7);
+    expectSegments(finishOut!.voices[0].segments, [[0, 3, 0, 0.31]]);
+    expect(finishOut!.voices[1].segments).toHaveLength(5);
+    expect(finishOut!.voices[2].segments).toHaveLength(5);
+    expectSegments(finishOut!.voices[3].segments, [
+      [0, 1, 3, 0.23],
+      [1, 1, 0, 0],
+      [2, 1, -1, 0.115],
+      [3, 1, -3, 0.23],
+      [4, 1, -3, 0.23],
+      [5, 1, -3, 0.23],
+      [6, 1, -3, 0.23],
+    ]);
+  });
 });

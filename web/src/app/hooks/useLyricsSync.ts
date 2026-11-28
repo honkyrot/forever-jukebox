@@ -101,6 +101,8 @@ function canonizerStatesMatch(
   return (
     voiceCursorsMatch(a.main, b.main) &&
     voiceCursorsMatch(a.other, b.other) &&
+    voiceCursorsMatch(a.gold, b.gold) &&
+    voiceCursorsMatch(a.pink, b.pink) &&
     a.inUnison === b.inUnison &&
     a.fallbackNextLineIndex === b.fallbackNextLineIndex &&
     a.fallbackNextLineVisible === b.fallbackNextLineVisible &&
@@ -143,6 +145,22 @@ export function useLyricsSync(): LyricsSyncResult {
   const autocanonizerOtherSeconds = useAppStore(
     (s) => s.autocanonizerOtherSeconds,
   );
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
+  const autocanonizerGoldSeconds = useAppStore(
+    (s) => s.autocanonizerGoldSeconds,
+  );
+  const autocanonizerPinkSeconds = useAppStore(
+    (s) => s.autocanonizerPinkSeconds,
+  );
+  const singleVoiceCount =
+    autocanonizerSingleVoiceCount > 2
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
 
   const [syncResult, setSyncResult] =
     useState<LyricsSyncResult>(INITIAL_SYNC_RESULT);
@@ -200,6 +218,22 @@ export function useLyricsSync(): LyricsSyncResult {
           : isPaused
             ? autocanonizerOtherSeconds
             : null;
+        const goldTimeSec =
+          singleVoiceCount < 3
+            ? null
+            : live
+              ? (live.goldSeconds ?? null)
+              : isPaused
+                ? autocanonizerGoldSeconds
+                : null;
+        const pinkTimeSec =
+          singleVoiceCount < 4
+            ? null
+            : live
+              ? (live.pinkSeconds ?? null)
+              : isPaused
+                ? autocanonizerPinkSeconds
+                : null;
         const inUnison = live ? live.inUnison : false;
 
         return {
@@ -209,6 +243,8 @@ export function useLyricsSync(): LyricsSyncResult {
             lyrics: lyricsData,
             mainTimeSec,
             otherTimeSec,
+            goldTimeSec,
+            pinkTimeSec,
             offsetSec: lyricsOffsetSec,
             inUnison,
           }),
@@ -278,6 +314,11 @@ export function useLyricsSync(): LyricsSyncResult {
     beatsPerBar,
     autocanonizerMainSeconds,
     autocanonizerOtherSeconds,
+    autocanonizerTrioMode,
+    autocanonizerSingleVoiceCount,
+    singleVoiceCount,
+    autocanonizerGoldSeconds,
+    autocanonizerPinkSeconds,
   ]);
 
   return syncResult;

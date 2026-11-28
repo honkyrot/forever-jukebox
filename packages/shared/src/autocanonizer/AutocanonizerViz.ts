@@ -59,12 +59,14 @@ export class AutocanonizerViz {
   private otherDuration = 0;
   private otherLayouts: BeatLayout[] = [];
   private quadMode = false;
+  private singleVoiceCount: 2 | 3 | 4 = 2;
   private visible = false;
   private currentIndex = -1;
   private maxDelta = 1;
   private onSelect: ((index: number) => void) | null = null;
   private connections: Array<ConnectionPath | null> = [];
   private goldConnections: Array<ConnectionPath | null> = [];
+  private pinkConnections: Array<ConnectionPath | null> = [];
   private readonly tileColorOverrides = new Map<number, string>();
   private readonly otherTileColorOverrides = new Map<number, string>();
   private otherAnim: {
@@ -77,11 +79,21 @@ export class AutocanonizerViz {
     start: number;
     duration: number;
   } | null = null;
+  private pinkAnim: {
+    path: ConnectionPath;
+    start: number;
+    duration: number;
+  } | null = null;
+  private inFinishOut = false;
   private forcedOtherIndex: number | null = null;
+  private forcedGoldIndex: number | null = null;
+  private forcedPinkIndex: number | null = null;
   private lastOtherCursor: { x: number; y: number } | null = null;
   private lastGoldCursor: { x: number; y: number } | null = null;
+  private lastPinkCursor: { x: number; y: number } | null = null;
   private otherAnimEndedAt: number | null = null;
   private goldAnimEndedAt: number | null = null;
+  private pinkAnimEndedAt: number | null = null;
   private rafId: number | null = null;
 
   private layoutMetrics = {
@@ -137,7 +149,14 @@ export class AutocanonizerViz {
     beats: CanonizerBeat[],
     trackDuration: number,
     sections: CanonizerSections,
+    voiceCountOrTrio: boolean | 2 | 3 | 4 = 2,
   ) {
+    const resolvedVoiceCount: 2 | 3 | 4 =
+      typeof voiceCountOrTrio === "boolean"
+        ? voiceCountOrTrio
+          ? 3
+          : 2
+        : voiceCountOrTrio;
     this.beats = beats;
     this.trackDuration = trackDuration;
     this.sections = sections;
@@ -146,16 +165,24 @@ export class AutocanonizerViz {
     this.otherDuration = 0;
     this.otherLayouts = [];
     this.quadMode = false;
+    this.singleVoiceCount = resolvedVoiceCount;
     this.goldConnections = [];
+    this.pinkConnections = [];
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.otherAnim = null;
     this.goldAnim = null;
+    this.pinkAnim = null;
+    this.inFinishOut = false;
     this.forcedOtherIndex = null;
+    this.forcedGoldIndex = null;
+    this.forcedPinkIndex = null;
     this.lastOtherCursor = null;
     this.lastGoldCursor = null;
+    this.lastPinkCursor = null;
     this.otherAnimEndedAt = null;
     this.goldAnimEndedAt = null;
+    this.pinkAnimEndedAt = null;
     this.computeLayout();
     this.drawBase();
     this.drawOverlay();
@@ -184,15 +211,23 @@ export class AutocanonizerViz {
     this.otherDuration = otherDuration;
     this.otherSections = otherSections;
     this.quadMode = quadMode;
+    this.singleVoiceCount = 2;
+    this.pinkConnections = [];
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.otherAnim = null;
     this.goldAnim = null;
+    this.pinkAnim = null;
+    this.inFinishOut = false;
     this.forcedOtherIndex = null;
+    this.forcedGoldIndex = null;
+    this.forcedPinkIndex = null;
     this.lastOtherCursor = null;
     this.lastGoldCursor = null;
+    this.lastPinkCursor = null;
     this.otherAnimEndedAt = null;
     this.goldAnimEndedAt = null;
+    this.pinkAnimEndedAt = null;
     this.computeLayout();
     this.drawBase();
     this.drawOverlay();
@@ -200,13 +235,19 @@ export class AutocanonizerViz {
 
   reset() {
     this.currentIndex = -1;
+    this.inFinishOut = false;
     this.forcedOtherIndex = null;
+    this.forcedGoldIndex = null;
+    this.forcedPinkIndex = null;
     this.otherAnim = null;
     this.goldAnim = null;
+    this.pinkAnim = null;
     this.lastOtherCursor = null;
     this.lastGoldCursor = null;
+    this.lastPinkCursor = null;
     this.otherAnimEndedAt = null;
     this.goldAnimEndedAt = null;
+    this.pinkAnimEndedAt = null;
     this.tileColorOverrides.clear();
     this.otherTileColorOverrides.clear();
     this.clearCanvas(this.overlayCtx);
@@ -248,7 +289,13 @@ export class AutocanonizerViz {
     this.otherSections = [];
     this.otherLayouts = [];
     this.goldConnections = [];
+    this.pinkConnections = [];
     this.quadMode = false;
+    this.singleVoiceCount = 2;
+    this.inFinishOut = false;
+    this.forcedOtherIndex = null;
+    this.forcedGoldIndex = null;
+    this.forcedPinkIndex = null;
   }
 
   setOnSelect(handler: ((index: number) => void) | null) {
@@ -356,11 +403,12 @@ export class AutocanonizerViz {
       this.maxDelta = this.computeMaxDelta();
       this.connections = this.computeConnections();
       this.goldConnections = this.quadMode ? this.computeGoldConnections() : [];
+      this.pinkConnections = [];
       return;
     }
 
-    const tileHeight = Math.max(120, availableHeight * 0.64);
-    const connectionHeight = Math.max(80, availableHeight - tileHeight - 6);
+    const tileHeight = Math.max(120, availableHeight * 0.72);
+    const connectionHeight = Math.max(60, availableHeight - tileHeight - 6);
     const sectionY = topPad + tileHeight - vPad;
     this.layoutMetrics = {
       width: rect.width,
@@ -403,7 +451,10 @@ export class AutocanonizerViz {
     this.otherLayouts = [];
     this.maxDelta = this.computeMaxDelta();
     this.connections = this.computeConnections();
-    this.goldConnections = [];
+    this.goldConnections =
+      this.singleVoiceCount >= 3 ? this.computeGoldConnections() : [];
+    this.pinkConnections =
+      this.singleVoiceCount >= 4 ? this.computePinkConnections() : [];
   }
 
   private computeMaxDelta(
@@ -428,8 +479,8 @@ export class AutocanonizerViz {
   private computeConnections() {
     const {
       width,
+      height,
       tileHeight,
-      connectionHeight,
       mainSectionY,
       otherSectionY,
       hPad,
@@ -454,8 +505,10 @@ export class AutocanonizerViz {
         : sectionY + OTHER_CURSOR_CENTER_OFFSET;
     const maxApexY = isQuad
       ? otherSectionY - 6
-      : mainSectionY + SECTION_HEIGHT + 6;
-    const maxApexSpan = isQuad
+      : isDual
+        ? mainSectionY + SECTION_HEIGHT + 6
+        : topPad + height - 10;
+    const maxApexSpan = isQuad || !isDual
       ? Math.max(12, maxApexY - startY)
       : Math.max(12, startY - maxApexY);
     return this.beats.map((beat, i) => {
@@ -471,13 +524,7 @@ export class AutocanonizerViz {
       const toX = hPad + (spanWidth * next.other.start) / otherDuration;
       const cx = (toX - fromX) / 2 + fromX;
       let cy: number;
-      if (isQuad) {
-        const apexDrop = Math.max(
-          Math.min(18, maxApexSpan),
-          (Math.abs(delta) / maxDelta) * maxApexSpan,
-        );
-        cy = startY + apexDrop * 2;
-      } else if (isDual) {
+      if (isDual && !isQuad) {
         // Quadratic Bezier apex sits at 0.5 * (startY + cy), so pull cy up by
         // twice the desired apex rise to fill the middle band cleanly.
         const apexRise = Math.max(
@@ -486,14 +533,7 @@ export class AutocanonizerViz {
         );
         cy = startY - apexRise * 2;
       } else {
-        cy = (Math.abs(delta) / maxDelta) * connectionHeight * 1.35;
-        if (cy < 24) {
-          cy = 24;
-        }
-        cy = Math.min(
-          topPad + tileHeight + connectionHeight - 8,
-          topPad + tileHeight + cy,
-        );
+        cy = computeDownwardArcControlY(delta, maxDelta, startY, maxApexSpan);
       }
       const samples = sampleQuadraticPath(
         fromX,
@@ -510,37 +550,121 @@ export class AutocanonizerViz {
   }
 
   /**
-   * Computes upward connection arcs inside the shared middle channel for Song 2's
-   * Gold branch in 4-voice quad mode.
+   * Computes connection arcs for the Gold voice:
+   * - In 4-voice quad mode: upward arcs inside the shared middle channel for Song 2.
+   * - In 3-voice single-song trio mode: downward arcs inside the lower channel.
    */
   private computeGoldConnections(): Array<ConnectionPath | null> {
-    if (!this.isDualMode() || !this.quadMode || !this.otherDuration) {
-      return [];
+    if (this.isDualMode() && this.quadMode && this.otherDuration) {
+      const { width, mainSectionY, otherSectionY, hPad } = this.layoutMetrics;
+      const spanWidth = Math.max(1, width - hPad * 2);
+      const sharedDuration = Math.max(this.trackDuration, this.otherDuration);
+      const maxDelta = this.computeMaxDelta((beat) => beat.gold) || 1;
+      const startY = otherSectionY + CURSOR_SIZE / 2;
+      const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
+      const maxApexRise = Math.max(12, startY - maxApexY);
+      return this.beats.map((beat, i) => {
+        const next = this.beats[i + 1];
+        if (
+          !beat?.gold ||
+          !next?.gold ||
+          (beat.goldGain ?? 1) === 0 ||
+          (next.goldGain ?? 1) === 0
+        ) {
+          return null;
+        }
+        const delta = next.gold.which - beat.gold.which;
+        if (i === 0 || delta === 1) {
+          return null;
+        }
+        const fromX = hPad + (spanWidth * beat.gold.start) / sharedDuration;
+        const toX = hPad + (spanWidth * next.gold.start) / sharedDuration;
+        const cx = (toX - fromX) / 2 + fromX;
+        const apexRise = Math.max(
+          Math.min(18, maxApexRise),
+          (Math.abs(delta) / maxDelta) * maxApexRise,
+        );
+        const cy = startY - apexRise * 2;
+        const samples = sampleQuadraticPath(
+          fromX,
+          startY,
+          cx,
+          cy,
+          toX,
+          startY,
+          80,
+        );
+        const totalLength = samples.length
+          ? samples[samples.length - 1].len
+          : 0;
+        return { fromX, toX, cx, cy, startY, samples, totalLength };
+      });
     }
-    const { width, mainSectionY, otherSectionY, hPad } = this.layoutMetrics;
+
+    if (!this.isDualMode() && this.singleVoiceCount >= 3 && this.trackDuration) {
+      return this.computeSingleDownwardConnections(
+        (beat) => beat.gold,
+        (beat) => beat.goldGain ?? 0,
+      );
+    }
+
+    return [];
+  }
+
+  /**
+   * Computes downward connection arcs for the Pink voice in 4-voice single-song mode.
+   */
+  private computePinkConnections(): Array<ConnectionPath | null> {
+    if (!this.isDualMode() && this.singleVoiceCount >= 4 && this.trackDuration) {
+      return this.computeSingleDownwardConnections(
+        (beat) => beat.pink,
+        (beat) => beat.pinkGain ?? 0,
+      );
+    }
+    return [];
+  }
+
+  /**
+   * Computes downward quadratic Bezier jump arcs for a single-song canon branch
+   * (`gold` or `pink`), skipping muted beats.
+   */
+  private computeSingleDownwardConnections(
+    pickTarget: (beat: CanonizerBeat) => CanonizerBeat | undefined,
+    pickGain: (beat: CanonizerBeat) => number,
+  ): Array<ConnectionPath | null> {
+    const { width, height, tileHeight, hPad, topPad, vPad } =
+      this.layoutMetrics;
     const spanWidth = Math.max(1, width - hPad * 2);
-    const sharedDuration = Math.max(this.trackDuration, this.otherDuration);
-    const maxDelta = this.computeMaxDelta((beat) => beat.gold) || 1;
-    const startY = otherSectionY + CURSOR_SIZE / 2;
-    const maxApexY = mainSectionY + SECTION_HEIGHT + 6;
-    const maxApexRise = Math.max(12, startY - maxApexY);
+    const maxDelta = this.computeMaxDelta(pickTarget) || 1;
+    const sectionY = topPad + tileHeight - vPad;
+    const startY = sectionY + OTHER_CURSOR_CENTER_OFFSET;
+    const maxApexY = topPad + height - 10;
+    const maxApexDrop = Math.max(12, maxApexY - startY);
     return this.beats.map((beat, i) => {
       const next = this.beats[i + 1];
-      if (!beat?.gold || !next?.gold) {
+      const target = pickTarget(beat);
+      const nextTarget = next ? pickTarget(next) : undefined;
+      if (
+        !target ||
+        !nextTarget ||
+        pickGain(beat) === 0 ||
+        pickGain(next) === 0
+      ) {
         return null;
       }
-      const delta = next.gold.which - beat.gold.which;
+      const delta = nextTarget.which - target.which;
       if (i === 0 || delta === 1) {
         return null;
       }
-      const fromX = hPad + (spanWidth * beat.gold.start) / sharedDuration;
-      const toX = hPad + (spanWidth * next.gold.start) / sharedDuration;
+      const fromX = hPad + (spanWidth * target.start) / this.trackDuration;
+      const toX = hPad + (spanWidth * nextTarget.start) / this.trackDuration;
       const cx = (toX - fromX) / 2 + fromX;
-      const apexRise = Math.max(
-        Math.min(18, maxApexRise),
-        (Math.abs(delta) / maxDelta) * maxApexRise,
+      const cy = computeDownwardArcControlY(
+        delta,
+        maxDelta,
+        startY,
+        maxApexDrop,
       );
-      const cy = startY - apexRise * 2;
       const samples = sampleQuadraticPath(
         fromX,
         startY,
@@ -550,7 +674,9 @@ export class AutocanonizerViz {
         startY,
         80,
       );
-      const totalLength = samples.length ? samples[samples.length - 1].len : 0;
+      const totalLength = samples.length
+        ? samples[samples.length - 1].len
+        : 0;
       return { fromX, toX, cx, cy, startY, samples, totalLength };
     });
   }
@@ -720,14 +846,33 @@ export class AutocanonizerViz {
       this.baseCtx.quadraticCurveTo(path.cx, path.cy, path.toX, path.startY);
       this.baseCtx.stroke();
     }
-    if (this.isDualMode() && this.quadMode) {
+    const isQuad = this.isDualMode() && this.quadMode;
+    const isSingleMulti = !this.isDualMode() && this.singleVoiceCount >= 3;
+    const isSingleQuad = !this.isDualMode() && this.singleVoiceCount >= 4;
+    if (isQuad || isSingleMulti) {
       for (let i = 0; i < this.beats.length - 1; i += 1) {
         const beat = this.beats[i];
         const path = this.goldConnections[i];
         if (!beat?.gold || !path) {
           continue;
         }
-        this.baseCtx.strokeStyle = withAlpha(beat.gold.color, 0.6);
+        this.baseCtx.strokeStyle = isSingleMulti
+          ? "rgba(255, 184, 0, 0.55)"
+          : withAlpha(beat.gold.color, 0.6);
+        this.baseCtx.beginPath();
+        this.baseCtx.moveTo(path.fromX, path.startY);
+        this.baseCtx.quadraticCurveTo(path.cx, path.cy, path.toX, path.startY);
+        this.baseCtx.stroke();
+      }
+    }
+    if (isSingleQuad) {
+      for (let i = 0; i < this.beats.length - 1; i += 1) {
+        const beat = this.beats[i];
+        const path = this.pinkConnections[i];
+        if (!beat?.pink || !path) {
+          continue;
+        }
+        this.baseCtx.strokeStyle = "rgba(255, 79, 163, 0.55)";
         this.baseCtx.beginPath();
         this.baseCtx.moveTo(path.fromX, path.startY);
         this.baseCtx.quadraticCurveTo(path.cx, path.cy, path.toX, path.startY);
@@ -761,11 +906,18 @@ export class AutocanonizerViz {
     }
     const isDual = this.isDualMode();
     const isQuad = isDual && this.quadMode;
-    const otherIndex = this.forcedOtherIndex ?? beat.other.which;
-    const otherActive = this.forcedOtherIndex !== null || beat.otherGain > 0;
-    const otherLayout = otherActive
-      ? (isDual && !isQuad ? this.otherLayouts : this.layouts)[otherIndex]
-      : undefined;
+    const isSingleMulti = !isDual && this.singleVoiceCount >= 3;
+    const isSingleQuad = !isDual && this.singleVoiceCount >= 4;
+    const otherIndex = this.inFinishOut
+      ? this.forcedOtherIndex
+      : beat.otherGain > 0
+        ? beat.other.which
+        : null;
+    const otherActive = otherIndex !== null;
+    const otherLayout =
+      otherIndex !== null
+        ? (isDual && !isQuad ? this.otherLayouts : this.layouts)[otherIndex]
+        : undefined;
     const cursorWidth = CURSOR_SIZE;
     const cursorHeight = CURSOR_SIZE;
     const sectionY = isDual ? mainSectionY : topPad + tileHeight - vPad;
@@ -832,7 +984,7 @@ export class AutocanonizerViz {
     };
 
     const otherAnimCursor =
-      this.forcedOtherIndex !== null || !otherActive
+      this.inFinishOut || this.forcedOtherIndex !== null || !otherActive
         ? null
         : this.getAnimatedOtherCursor();
     const otherResolved = otherActive
@@ -856,7 +1008,91 @@ export class AutocanonizerViz {
       );
     }
 
-    if (isQuad) {
+    if (isSingleMulti) {
+      const goldIndex = this.inFinishOut
+        ? this.forcedGoldIndex
+        : beat.gold && (beat.goldGain ?? 0) > 0
+          ? beat.gold.which
+          : null;
+      const goldActive = goldIndex !== null;
+      const goldLayout =
+        goldIndex !== null ? this.layouts[goldIndex] : undefined;
+      if (goldLayout) {
+        this.overlayCtx.fillStyle = "rgba(255, 184, 0, 0.45)";
+        this.overlayCtx.fillRect(
+          goldLayout.x,
+          goldLayout.y,
+          goldLayout.width,
+          goldLayout.height,
+        );
+      }
+      const goldCursorCenterY = sectionY + OTHER_CURSOR_CENTER_OFFSET;
+      const goldAnimCursor =
+        this.inFinishOut || !goldActive ? null : this.getAnimatedGoldCursor();
+      const goldResolved = goldActive
+        ? resolveAnimatedOrFollowCursor(
+            goldAnimCursor,
+            this.lastGoldCursor,
+            this.goldAnimEndedAt,
+            goldLayout,
+            goldCursorCenterY,
+            this.forcedGoldIndex,
+          )
+        : { cursor: null, nextLast: null };
+      this.lastGoldCursor = goldResolved.nextLast;
+      if (goldResolved.cursor) {
+        this.overlayCtx.fillStyle = AUTOCANONIZER_GOLD_COLOR;
+        this.drawCenteredCursor(
+          goldResolved.cursor.x,
+          goldResolved.cursor.y,
+          cursorWidth,
+          cursorHeight,
+        );
+      }
+
+      if (isSingleQuad) {
+        const pinkIndex = this.inFinishOut
+          ? this.forcedPinkIndex
+          : beat.pink && (beat.pinkGain ?? 0) > 0
+            ? beat.pink.which
+            : null;
+        const pinkActive = pinkIndex !== null;
+        const pinkLayout =
+          pinkIndex !== null ? this.layouts[pinkIndex] : undefined;
+        if (pinkLayout) {
+          this.overlayCtx.fillStyle = "rgba(255, 79, 163, 0.45)";
+          this.overlayCtx.fillRect(
+            pinkLayout.x,
+            pinkLayout.y,
+            pinkLayout.width,
+            pinkLayout.height,
+          );
+        }
+        const pinkCursorCenterY = sectionY + OTHER_CURSOR_CENTER_OFFSET;
+        const pinkAnimCursor =
+          this.inFinishOut || !pinkActive ? null : this.getAnimatedPinkCursor();
+        const pinkResolved = pinkActive
+          ? resolveAnimatedOrFollowCursor(
+              pinkAnimCursor,
+              this.lastPinkCursor,
+              this.pinkAnimEndedAt,
+              pinkLayout,
+              pinkCursorCenterY,
+              this.forcedPinkIndex,
+            )
+          : { cursor: null, nextLast: null };
+        this.lastPinkCursor = pinkResolved.nextLast;
+        if (pinkResolved.cursor) {
+          this.overlayCtx.fillStyle = AUTOCANONIZER_PINK_COLOR;
+          this.drawCenteredCursor(
+            pinkResolved.cursor.x,
+            pinkResolved.cursor.y,
+            cursorWidth,
+            cursorHeight,
+          );
+        }
+      }
+    } else if (isQuad) {
       // Draw Song 2's Pink (synced) and Gold (branching) highlights & cursors.
       const pinkActive = (beat.pinkGain ?? 1) > 0;
       const goldActive = (beat.goldGain ?? 1) > 0;
@@ -989,6 +1225,27 @@ export class AutocanonizerViz {
     return { x: point.x, y: point.y };
   }
 
+  private getAnimatedPinkCursor() {
+    if (!this.pinkAnim) {
+      return null;
+    }
+    const now = performance.now();
+    const elapsed = now - this.pinkAnim.start;
+    if (elapsed >= this.pinkAnim.duration) {
+      const endPath = this.pinkAnim.path;
+      this.lastPinkCursor = { x: endPath.toX, y: endPath.startY };
+      this.pinkAnim = null;
+      this.pinkAnimEndedAt = now;
+      return null;
+    }
+    const t = elapsed / this.pinkAnim.duration;
+    const { path } = this.pinkAnim;
+    const progress = path.totalLength * t;
+    const point = pointAtLength(path, progress);
+    this.requestAnimation();
+    return { x: point.x, y: point.y };
+  }
+
   private requestAnimation() {
     if (this.rafId !== null) {
       return;
@@ -1001,13 +1258,20 @@ export class AutocanonizerViz {
 
   setCurrentIndex(index: number, animate: boolean) {
     this.currentIndex = index;
+    this.inFinishOut = false;
     this.forcedOtherIndex = null;
+    this.forcedGoldIndex = null;
+    this.forcedPinkIndex = null;
     this.otherAnim = null;
     this.goldAnim = null;
+    this.pinkAnim = null;
     this.otherAnimEndedAt = null;
     this.goldAnimEndedAt = null;
+    this.pinkAnimEndedAt = null;
     const isDual = this.isDualMode();
     const isQuad = isDual && this.quadMode;
+    const isSingleMulti = !isDual && this.singleVoiceCount >= 3;
+    const isSingleQuad = !isDual && this.singleVoiceCount >= 4;
     if (animate) {
       const path = this.connections[index];
       if (path) {
@@ -1020,7 +1284,7 @@ export class AutocanonizerViz {
         };
         this.requestAnimation();
       }
-      if (isQuad) {
+      if (isQuad || isSingleMulti) {
         const goldPath = this.goldConnections[index];
         if (goldPath) {
           const beat = this.beats[index];
@@ -1029,6 +1293,19 @@ export class AutocanonizerViz {
             path: goldPath,
             start: performance.now(),
             duration: Math.max(0, goldDur * 0.75) * 1000,
+          };
+          this.requestAnimation();
+        }
+      }
+      if (isSingleQuad) {
+        const pinkPath = this.pinkConnections[index];
+        if (pinkPath) {
+          const beat = this.beats[index];
+          const pinkDur = beat.pink?.duration ?? beat.other.duration;
+          this.pinkAnim = {
+            path: pinkPath,
+            start: performance.now(),
+            duration: Math.max(0, pinkDur * 0.75) * 1000,
           };
           this.requestAnimation();
         }
@@ -1051,6 +1328,12 @@ export class AutocanonizerViz {
         this.applyOtherTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
       } else {
         this.applyTileOverride(beat.other.which, AUTOCANONIZER_OTHER_COLOR);
+        if (isSingleMulti && beat.gold && (beat.goldGain ?? 0) > 0) {
+          this.applyTileOverride(beat.gold.which, AUTOCANONIZER_GOLD_COLOR);
+        }
+        if (isSingleQuad && beat.pink && (beat.pinkGain ?? 0) > 0) {
+          this.applyTileOverride(beat.pink.which, AUTOCANONIZER_PINK_COLOR);
+        }
       }
     }
     this.drawOverlay();
@@ -1062,15 +1345,53 @@ export class AutocanonizerViz {
     if (!targetLayouts[index]) {
       return;
     }
-    this.forcedOtherIndex = index;
+    this.setFinishOutIndices(index, null, null);
+  }
+
+  /**
+   * Updates the forced Green, Gold, and Pink beat indices while finishing out
+   * the track in single-song multi-voice mode (voices may be null once finished).
+   */
+  setFinishOutIndices(
+    otherIndex: number | null,
+    goldIndex: number | null,
+    pinkIndex: number | null = null,
+  ) {
+    const usesOtherLayouts = this.isDualMode() && !this.quadMode;
+    const targetLayouts = usesOtherLayouts ? this.otherLayouts : this.layouts;
+    const validOther =
+      otherIndex !== null && Boolean(targetLayouts[otherIndex])
+        ? otherIndex
+        : null;
+    const validGold =
+      goldIndex !== null && Boolean(this.layouts[goldIndex]) ? goldIndex : null;
+    const validPink =
+      pinkIndex !== null && Boolean(this.layouts[pinkIndex]) ? pinkIndex : null;
+    if (validOther === null && validGold === null && validPink === null) {
+      return;
+    }
+    this.inFinishOut = true;
+    this.forcedOtherIndex = validOther;
+    this.forcedGoldIndex = validGold;
+    this.forcedPinkIndex = validPink;
     this.otherAnim = null;
     this.goldAnim = null;
+    this.pinkAnim = null;
     this.otherAnimEndedAt = null;
     this.goldAnimEndedAt = null;
-    if (usesOtherLayouts) {
-      this.applyOtherTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
-    } else {
-      this.applyTileOverride(index, AUTOCANONIZER_OTHER_COLOR);
+    this.pinkAnimEndedAt = null;
+    if (validOther !== null) {
+      if (usesOtherLayouts) {
+        this.applyOtherTileOverride(validOther, AUTOCANONIZER_OTHER_COLOR);
+      } else {
+        this.applyTileOverride(validOther, AUTOCANONIZER_OTHER_COLOR);
+      }
+    }
+    if (validGold !== null) {
+      this.applyTileOverride(validGold, AUTOCANONIZER_GOLD_COLOR);
+    }
+    if (validPink !== null) {
+      this.applyTileOverride(validPink, AUTOCANONIZER_PINK_COLOR);
     }
     this.drawOverlay();
   }
@@ -1153,6 +1474,23 @@ export class AutocanonizerViz {
       }
     }
   };
+}
+
+/**
+ * Computes the quadratic Bezier control-point Y for a downward arc whose true
+ * apex (`0.5 * (startY + cy)`) reaches up to `startY + maxApexDrop`.
+ */
+function computeDownwardArcControlY(
+  delta: number,
+  maxDelta: number,
+  startY: number,
+  maxApexDrop: number,
+): number {
+  const apexDrop = Math.max(
+    Math.min(18, maxApexDrop),
+    (Math.abs(delta) / maxDelta) * maxApexDrop,
+  );
+  return startY + apexDrop * 2;
 }
 
 function withAlpha(color: string, alpha: number) {

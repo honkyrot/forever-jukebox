@@ -340,4 +340,101 @@ describe("VizBottomRight", () => {
       100,
     );
   });
+
+  it("shows the Gold pan slider in single-song 3-Voice trio mode", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: true,
+        autocanonizerMainPan: 0,
+        autocanonizerOtherPan: -25,
+        autocanonizerGoldPan: 35,
+      });
+    });
+    render(<VizBottomRight />);
+    await userEvent.click(document.getElementById("autocanonizer-pan-button")!);
+
+    expect(document.getElementById("autocanonizer-pink-pan")).toBeNull();
+    const goldPan = document.getElementById("autocanonizer-gold-pan") as HTMLInputElement;
+    expect(goldPan).not.toBeNull();
+    expect(goldPan.value).toBe("35");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(goldPan, "60");
+      goldPan.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(h.setAutocanonizerQuadStreamPans).toHaveBeenCalledWith(
+      expect.anything(),
+      0,
+      60,
+    );
+  });
+
+  it("shows both Gold and Pink pan sliders in single-song 4-Voice mode", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerSingleVoiceCount: 4,
+        autocanonizerPinkPan: -15,
+        autocanonizerGoldPan: 35,
+      });
+    });
+    render(<VizBottomRight />);
+    await userEvent.click(document.getElementById("autocanonizer-pan-button")!);
+
+    const goldPan = document.getElementById("autocanonizer-gold-pan") as HTMLInputElement;
+    const pinkPan = document.getElementById("autocanonizer-pink-pan") as HTMLInputElement;
+    expect(goldPan.value).toBe("35");
+    expect(pinkPan.value).toBe("-15");
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(pinkPan, "-50");
+      pinkPan.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(h.setAutocanonizerQuadStreamPans).toHaveBeenCalledWith(
+      expect.anything(),
+      -50,
+      35,
+    );
+  });
+
+  it("snaps balance and volume sliders to step 5 with major and 25%/75% minor ticks", async () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: true,
+        autocanonizerQuadMode: true,
+        autocanonizerMixTrackTitles: ["Cover A", "Cover B"],
+      });
+    });
+    render(<VizBottomRight />);
+    await userEvent.click(document.getElementById("autocanonizer-pan-button")!);
+
+    const panSlider = document.getElementById("autocanonizer-main-pan") as HTMLInputElement;
+    const gainSlider = document.getElementById("autocanonizer-main-gain") as HTMLInputElement;
+    expect(panSlider.step).toBe("5");
+    expect(gainSlider.step).toBe("5");
+
+    const wrap = panSlider.closest(".pan-slider-wrap");
+    expect(wrap).not.toBeNull();
+    const majorTicks = wrap!.querySelectorAll(".pan-tick.is-major");
+    const minorTicks = wrap!.querySelectorAll(".pan-tick.is-minor");
+    expect(majorTicks).toHaveLength(3);
+    expect(minorTicks).toHaveLength(2);
+    expect((majorTicks[0] as HTMLElement).style.left).toBe("0%");
+    expect((minorTicks[0] as HTMLElement).style.left).toBe("25%");
+    expect((majorTicks[1] as HTMLElement).style.left).toBe("50%");
+    expect((minorTicks[1] as HTMLElement).style.left).toBe("75%");
+    expect((majorTicks[2] as HTMLElement).style.left).toBe("100%");
+  });
 });

@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   canonizerCursor: null as {
     mainSeconds: number | null;
     otherSeconds: number | null;
+    goldSeconds?: number | null;
+    pinkSeconds?: number | null;
     inUnison: boolean;
   } | null,
   findBeatIndexByTime: vi.fn(() => 6),
@@ -347,5 +349,130 @@ describe("LyricsPanel", () => {
     const bgSyllables = bgEl?.querySelectorAll(".lyrics-syllable");
     expect(bgSyllables).toHaveLength(2);
     expect((bgSyllables?.[0] as HTMLElement).style.getPropertyValue("--syllable-progress")).toBe("50%");
+  });
+
+  it("shows Canon 2 legend and highlights Gold and all-voice lines in 3-Voice mode", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Line",
+        Content: [
+          { Type: "Vocal", Text: "Line A", StartTime: 2.0, EndTime: 5.0 },
+          { Type: "Vocal", Text: "Line B", StartTime: 8.0, EndTime: 11.0 },
+          { Type: "Vocal", Text: "Line C", StartTime: 14.0, EndTime: 17.0 },
+        ],
+      },
+    });
+
+    h.canonizerCursor = {
+      mainSeconds: 3.0,
+      otherSeconds: 9.0,
+      goldSeconds: 15.0,
+      inUnison: false,
+    };
+
+    act(() => {
+      useAppStore.setState({
+        activeTabId: "play",
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: true,
+        audioLoaded: true,
+        analysisLoaded: true,
+        lyricsPanelOpen: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        lyricsOffsetSec: 0,
+        isRunning: true,
+      });
+    });
+
+    render(<LyricsPanel />);
+    const panel = document.getElementById("lyrics-side-panel")!;
+    expect(panel.querySelectorAll(".lyrics-legend-item")).toHaveLength(3);
+    expect(panel.querySelector(".lyrics-legend-item .lyrics-voice-dot.is-gold")).not.toBeNull();
+
+    let lines = panel.querySelectorAll(".lyrics-panel-line");
+    expect(lines[0]?.classList.contains("is-canon-main")).toBe(true);
+    expect(lines[1]?.classList.contains("is-canon-other")).toBe(true);
+    expect(lines[2]?.classList.contains("is-canon-gold")).toBe(true);
+
+    // All three voices overlapping on Line A marks it .is-canon-all with all 3 dots.
+    h.canonizerCursor = {
+      mainSeconds: 3.0,
+      otherSeconds: 3.5,
+      goldSeconds: 4.0,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.05 });
+    });
+    lines = panel.querySelectorAll(".lyrics-panel-line");
+    expect(lines[0]?.classList.contains("is-canon-all")).toBe(true);
+    expect(lines[0]?.querySelectorAll(".lyrics-voice-dot")).toHaveLength(3);
+  });
+
+  it("shows Canon 3 legend and highlights Pink and 4-voice overlaps in 4-Voice mode", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Line",
+        Content: [
+          { Type: "Vocal", Text: "Line A", StartTime: 2.0, EndTime: 5.0 },
+          { Type: "Vocal", Text: "Line B", StartTime: 8.0, EndTime: 11.0 },
+          { Type: "Vocal", Text: "Line C", StartTime: 14.0, EndTime: 17.0 },
+          { Type: "Vocal", Text: "Line D", StartTime: 20.0, EndTime: 23.0 },
+        ],
+      },
+    });
+
+    h.canonizerCursor = {
+      mainSeconds: 3.0,
+      otherSeconds: 9.0,
+      goldSeconds: 15.0,
+      pinkSeconds: 21.0,
+      inUnison: false,
+    };
+
+    act(() => {
+      useAppStore.setState({
+        activeTabId: "play",
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerSingleVoiceCount: 4,
+        audioLoaded: true,
+        analysisLoaded: true,
+        lyricsPanelOpen: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        lyricsOffsetSec: 0,
+        isRunning: true,
+      });
+    });
+
+    render(<LyricsPanel />);
+    const panel = document.getElementById("lyrics-side-panel")!;
+    expect(panel.querySelectorAll(".lyrics-legend-item")).toHaveLength(4);
+    expect(panel.querySelector(".lyrics-legend-item .lyrics-voice-dot.is-pink")).not.toBeNull();
+
+    let lines = panel.querySelectorAll(".lyrics-panel-line");
+    expect(lines[0]?.classList.contains("is-canon-main")).toBe(true);
+    expect(lines[1]?.classList.contains("is-canon-other")).toBe(true);
+    expect(lines[2]?.classList.contains("is-canon-gold")).toBe(true);
+    expect(lines[3]?.classList.contains("is-canon-pink")).toBe(true);
+
+    h.canonizerCursor = {
+      mainSeconds: 3.0,
+      otherSeconds: 3.4,
+      goldSeconds: 3.8,
+      pinkSeconds: 4.2,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.05 });
+    });
+    lines = panel.querySelectorAll(".lyrics-panel-line");
+    expect(lines[0]?.classList.contains("is-canon-all")).toBe(true);
+    expect(lines[0]?.querySelectorAll(".lyrics-voice-dot")).toHaveLength(4);
   });
 });

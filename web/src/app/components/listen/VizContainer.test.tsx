@@ -148,6 +148,9 @@ describe("VizContainer", () => {
     expect(observer.observe).toHaveBeenCalledWith(
       document.getElementById("viz-panel"),
     );
+    expect(observer.observe).toHaveBeenCalledWith(
+      document.getElementById("canonizer-layer"),
+    );
 
     act(() => observer.trigger());
     expect(h.jukebox.resizeNow).toHaveBeenCalled();
@@ -420,5 +423,46 @@ describe("VizContainer", () => {
     expect(smoothFill?.classList.contains("is-animating")).toBe(false);
     expect(segments?.[0]?.classList.contains("is-pulsing")).toBe(false);
     expect(segments?.[1]?.classList.contains("is-pulsing")).toBe(false);
+  });
+
+  it("resizes Autocanonizer when toggling 3-Voice mode or Karaoke lyrics", () => {
+    act(() => {
+      useAppStore.setState({
+        audioLoaded: true,
+        analysisLoaded: true,
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: false,
+        lyricsKaraokeEnabled: false,
+        appConfig: {
+          allow_user_upload: false,
+          allow_user_url: false,
+          allow_lyrics: true,
+        },
+      });
+    });
+
+    render(<VizContainer />);
+    h.autocanonizer.resizeNow.mockClear();
+
+    act(() => {
+      useAppStore.setState({ lyricsKaraokeEnabled: true });
+    });
+    expect(h.autocanonizer.resizeNow).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useAppStore.setState({ autocanonizerTrioMode: true });
+    });
+    expect(h.autocanonizer.resizeNow).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      useAppStore.setState({ autocanonizerTrioMode: false });
+    });
+    expect(h.autocanonizer.resizeNow).toHaveBeenCalledTimes(3);
+
+    act(() => {
+      useAppStore.setState({ autocanonizerSingleVoiceCount: 4 });
+    });
+    expect(h.autocanonizer.resizeNow).toHaveBeenCalledTimes(4);
   });
 });

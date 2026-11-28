@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   canonizerCursor: null as {
     mainSeconds: number | null;
     otherSeconds: number | null;
+    goldSeconds?: number | null;
+    pinkSeconds?: number | null;
     inUnison: boolean;
   } | null,
 }));
@@ -460,5 +462,149 @@ describe("LyricsKaraokeBar", () => {
     });
     render(<LyricsKaraokeBar />);
     expect(document.getElementById("lyrics-karaoke-bar")).toBeNull();
+  });
+
+  it("renders a 3rd Gold lyric row with preview, active, and exit transitions in 3-Voice mode", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Line",
+        Content: [
+          { Type: "Vocal", Text: "Main voice line", StartTime: 3.0, EndTime: 6.0 },
+          { Type: "Vocal", Text: "Green voice line", StartTime: 11.0, EndTime: 14.0 },
+          { Type: "Vocal", Text: "Gold voice line", StartTime: 19.0, EndTime: 22.0 },
+        ],
+      },
+    });
+
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: 17.5,
+      inUnison: false,
+    };
+
+    act(() => {
+      useAppStore.setState({
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: true,
+        lyricsKaraokeEnabled: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        isRunning: true,
+      });
+    });
+
+    render(<LyricsKaraokeBar />);
+    const bar = document.getElementById("lyrics-karaoke-bar")!;
+    expect(bar.classList.contains("is-trio-lyrics")).toBe(true);
+    const goldPreview = bar.querySelector(".is-canon-gold-lane .is-lane-preview");
+    expect(goldPreview?.textContent).toBe("Gold voice line");
+
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: 19.5,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.05 });
+    });
+    const goldActive = bar.querySelector(".is-canon-gold-lane .is-lane-active.lyrics-voice-gold");
+    expect(goldActive).toBe(goldPreview);
+    expect(goldActive?.textContent).toBe("Gold voice line");
+
+    // Muting Gold clears Row 3 with a downward exit tween.
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: null,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.1 });
+    });
+    const goldExit = bar.querySelector(".is-canon-gold-lane .is-canonizer-gold-exit");
+    expect(goldExit?.textContent).toBe("Gold voice line");
+    fireEvent.animationEnd(goldExit!);
+    expect(bar.querySelector(".is-canon-gold-lane .is-canonizer-gold-exit")).toBeNull();
+
+    // Toggling off 3-Voice hides the 3rd lane.
+    act(() => {
+      useAppStore.setState({ autocanonizerTrioMode: false });
+    });
+    expect(bar.classList.contains("is-trio-lyrics")).toBe(false);
+    expect(bar.querySelector(".is-canon-gold-lane")).toBeNull();
+  });
+
+  it("renders a 4th Pink lyric row with preview, active, and exit transitions in 4-Voice mode", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Line",
+        Content: [
+          { Type: "Vocal", Text: "Main voice line", StartTime: 3.0, EndTime: 6.0 },
+          { Type: "Vocal", Text: "Green voice line", StartTime: 11.0, EndTime: 14.0 },
+          { Type: "Vocal", Text: "Gold voice line", StartTime: 19.0, EndTime: 22.0 },
+          { Type: "Vocal", Text: "Pink voice line", StartTime: 27.0, EndTime: 30.0 },
+        ],
+      },
+    });
+
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: 19.5,
+      pinkSeconds: 25.5,
+      inUnison: false,
+    };
+
+    act(() => {
+      useAppStore.setState({
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerSingleVoiceCount: 4,
+        lyricsKaraokeEnabled: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        isRunning: true,
+      });
+    });
+
+    render(<LyricsKaraokeBar />);
+    const bar = document.getElementById("lyrics-karaoke-bar")!;
+    expect(bar.classList.contains("is-quad-lyrics")).toBe(true);
+    const pinkPreview = bar.querySelector(".is-canon-pink-lane .is-lane-preview");
+    expect(pinkPreview?.textContent).toBe("Pink voice line");
+
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: 19.5,
+      pinkSeconds: 27.5,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.05 });
+    });
+    const pinkActive = bar.querySelector(".is-canon-pink-lane .is-lane-active.lyrics-voice-pink");
+    expect(pinkActive).toBe(pinkPreview);
+    expect(pinkActive?.textContent).toBe("Pink voice line");
+
+    h.canonizerCursor = {
+      mainSeconds: 3.5,
+      otherSeconds: 11.5,
+      goldSeconds: 19.5,
+      pinkSeconds: null,
+      inUnison: false,
+    };
+    act(() => {
+      useAppStore.setState({ lyricsOffsetSec: 0.1 });
+    });
+    const pinkExit = bar.querySelector(".is-canon-pink-lane .is-canonizer-pink-exit");
+    expect(pinkExit?.textContent).toBe("Pink voice line");
+    fireEvent.animationEnd(pinkExit!);
+    expect(bar.querySelector(".is-canon-pink-lane .is-canonizer-pink-exit")).toBeNull();
   });
 });

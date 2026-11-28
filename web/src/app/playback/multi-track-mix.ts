@@ -21,6 +21,7 @@ import {
 import type {
 	AutocanonizerMixAlignmentMode,
 	AutocanonizerQuadBranchMode,
+	AutocanonizerSingleVoiceCount,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { detectTrackBeatsPerBar } from "@forever-jukebox/shared/audio/MetronomeOverlayService";
 import {
@@ -1460,6 +1461,32 @@ export function setAutocanonizerQuadBranchMode(
 		return;
 	}
 	context.autocanonizer?.setQuadBranchMode?.(mode);
+}
+
+/**
+ * Sets the single-song Autocanonizer voice count (2 = Blue+Green, 3 = +Gold,
+ * 4 = +Gold+Pink) and notifies the active Autocanonizer controller.
+ */
+export function setAutocanonizerSingleVoiceCount(
+	context: AppContext,
+	count: AutocanonizerSingleVoiceCount,
+): void {
+	useAppStore.setState({
+		autocanonizerSingleVoiceCount: count,
+		autocanonizerTrioMode: count === 3,
+	});
+	context.autocanonizer?.setSingleSongVoiceCount?.(count);
+}
+
+/**
+ * Toggles 3-voice single-song trio mode (Blue + Green + runner-up Gold) and
+ * notifies the active Autocanonizer controller.
+ */
+export function setAutocanonizerTrioMode(
+	context: AppContext,
+	enabled: boolean,
+): void {
+	setAutocanonizerSingleVoiceCount(context, enabled ? 3 : 2);
 }
 
 /**

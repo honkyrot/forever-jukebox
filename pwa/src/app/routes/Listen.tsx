@@ -71,6 +71,7 @@ import {
   AutocanonizerController,
   type AutocanonizerMixAlignmentMode,
   type AutocanonizerQuadBranchMode,
+  type AutocanonizerSingleVoiceCount,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import { SongSyncController } from "@forever-jukebox/shared/songsync/SongSyncController";
 import { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
@@ -450,6 +451,8 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
     React.useState(false);
   const [autocanonizerQuadBranchMode, setAutocanonizerQuadBranchMode] =
     React.useState<AutocanonizerQuadBranchMode>("synced");
+  const [autocanonizerSingleVoiceCount, setAutocanonizerSingleVoiceCount] =
+    React.useState<AutocanonizerSingleVoiceCount>(2);
   const [autocanonizerMixTrackTitles, setAutocanonizerMixTrackTitles] =
     React.useState<[string, string] | null>(null);
   const [autocanonizerOtherDurationSec, setAutocanonizerOtherDurationSec] =
@@ -1054,8 +1057,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
         beatsPlayed: index + 1,
         autocanonizerMainSeconds: cursorTimes.mainSeconds,
         autocanonizerOtherSeconds: cursorTimes.otherSeconds,
-        autocanonizerPinkSeconds: cursorTimes.pinkSeconds ?? 0,
-        autocanonizerGoldSeconds: cursorTimes.goldSeconds ?? 0,
+        autocanonizerPinkSeconds:
+          cursorTimes.pinkSeconds === undefined ? 0 : cursorTimes.pinkSeconds,
+        autocanonizerGoldSeconds:
+          cursorTimes.goldSeconds === undefined ? 0 : cursorTimes.goldSeconds,
       });
       updateLiveBpmForBeat(beat);
       const runtimeConfig = bpmBarRuntimeRef.current.bpmBarConfig;
@@ -4195,8 +4200,20 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
               autocanonizerMixAlignment={autocanonizerMixAlignment}
               autocanonizerQuadMode={autocanonizerQuadMode}
               autocanonizerQuadBranchMode={autocanonizerQuadBranchMode}
+              autocanonizerTrioMode={autocanonizerSingleVoiceCount === 3}
+              autocanonizerSingleVoiceCount={autocanonizerSingleVoiceCount}
               onToggleMix={onToggleMix}
               onSwapAutocanonizerMix={onSwapAutocanonizerMix}
+              onSetAutocanonizerSingleVoiceCount={(count) => {
+                setAutocanonizerSingleVoiceCount(count);
+                autocanonizerRef.current?.setSingleSongVoiceCount?.(count);
+              }}
+              onToggleAutocanonizerTrio={() => {
+                const next: AutocanonizerSingleVoiceCount =
+                  autocanonizerSingleVoiceCount === 3 ? 2 : 3;
+                setAutocanonizerSingleVoiceCount(next);
+                autocanonizerRef.current?.setSingleSongVoiceCount?.(next);
+              }}
               onToggleAutocanonizerQuad={() => {
                 const next = !autocanonizerQuadMode;
                 setAutocanonizerQuadMode(next);
@@ -4309,6 +4326,13 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                 bringItHomeMode={bringItHomeMode}
                 forceBranchActive={forceBranchActive}
                 isQuadMix={autocanonizerMixEnabled && autocanonizerQuadMode}
+                isTrioSingle={
+                  !autocanonizerMixEnabled &&
+                  autocanonizerSingleVoiceCount === 3
+                }
+                singleVoiceCount={
+                  autocanonizerMixEnabled ? 2 : autocanonizerSingleVoiceCount
+                }
                 autocanonizerOtherDurationSeconds={
                   autocanonizerOtherDurationSec
                 }
@@ -4354,6 +4378,10 @@ export function Listen({ isActive = true }: { isActive?: boolean }) {
                   goldGainPct={autocanonizerGoldGainPct}
                   isDualMix={autocanonizerMixEnabled}
                   isQuadMix={autocanonizerQuadMode}
+                  isTrioMode={autocanonizerSingleVoiceCount === 3}
+                  singleVoiceCount={
+                    autocanonizerMixEnabled ? 2 : autocanonizerSingleVoiceCount
+                  }
                   mixTrackTitles={autocanonizerMixTrackTitles}
                   onPanChange={onAutocanonizerStreamPanChange}
                   onQuadPanChange={onAutocanonizerQuadPanChange}

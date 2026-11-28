@@ -60,6 +60,8 @@ type MockAutocanonizerInstance = {
   setQuadStreamGains: ReturnType<typeof vi.fn>;
   setQuadMode: ReturnType<typeof vi.fn>;
   setQuadBranchMode: ReturnType<typeof vi.fn>;
+  setTrioMode: ReturnType<typeof vi.fn>;
+  setSingleSongVoiceCount: ReturnType<typeof vi.fn>;
   setDualAlignmentMode: ReturnType<typeof vi.fn>;
   getAudioBuffers: ReturnType<typeof vi.fn>;
   setVolume: ReturnType<typeof vi.fn>;
@@ -69,8 +71,8 @@ type MockAutocanonizerInstance = {
     cursorTimes: {
       mainSeconds: number;
       otherSeconds: number;
-      pinkSeconds?: number;
-      goldSeconds?: number;
+      pinkSeconds?: number | null;
+      goldSeconds?: number | null;
     },
   ) => void;
   emitSelect: (index: number) => void;
@@ -589,6 +591,8 @@ vi.mock("@forever-jukebox/shared/autocanonizer/AutocanonizerController", () => (
     setQuadStreamGains = vi.fn();
     setQuadMode = vi.fn();
     setQuadBranchMode = vi.fn();
+    setTrioMode = vi.fn();
+    setSingleSongVoiceCount = vi.fn();
     setDualAlignmentMode = vi.fn();
     getAudioBuffers = vi.fn(() => ({
       mainBuffer: { duration: 4 } as AudioBuffer,
@@ -3526,6 +3530,76 @@ describe("Listen route behavior", () => {
     } finally {
       resolveSpy.mockRestore();
       buildSyncSpy.mockRestore();
+      rendered.unmount();
+    }
+  });
+
+  it("toggles 3-Voice single-song trio mode and reveals the Gold balance slider", async () => {
+    const rendered = renderListen();
+    try {
+      await settleEffects();
+
+      await changeSelect(
+        getRequired<HTMLSelectElement>(rendered.container, "#play-mode-select"),
+        "autocanonizer",
+      );
+      await settleEffects();
+
+      const canonizer = autocanonizerInstances[autocanonizerInstances.length - 1];
+      const trioToggle = getRequired<HTMLButtonElement>(
+        rendered.container,
+        "#canonizer-trio-toggle",
+      );
+      expect(trioToggle.getAttribute("aria-pressed")).toBe("false");
+      await click(trioToggle);
+      expect(canonizer.setSingleSongVoiceCount).toHaveBeenLastCalledWith(3);
+      expect(trioToggle.getAttribute("aria-pressed")).toBe("true");
+
+      await click(
+        getRequired<HTMLButtonElement>(
+          rendered.container,
+          "#autocanonizer-pan-button",
+        ),
+      );
+      const goldPan = getRequired<HTMLInputElement>(
+        rendered.container,
+        "#autocanonizer-gold-pan",
+      );
+      expect(goldPan).not.toBeNull();
+      await changeRange(goldPan, "40");
+      expect(canonizer.setQuadStreamPans).toHaveBeenCalledWith(0, 0.4);
+
+      const singleQuadToggle = getRequired<HTMLButtonElement>(
+        rendered.container,
+        "#canonizer-single-quad-toggle",
+      );
+      await click(singleQuadToggle);
+      expect(canonizer.setSingleSongVoiceCount).toHaveBeenLastCalledWith(4);
+      expect(singleQuadToggle.getAttribute("aria-pressed")).toBe("true");
+      expect(trioToggle.getAttribute("aria-pressed")).toBe("false");
+
+      const pinkPan = getRequired<HTMLInputElement>(
+        rendered.container,
+        "#autocanonizer-pink-pan",
+      );
+      await changeRange(pinkPan, "-35");
+      expect(canonizer.setQuadStreamPans).toHaveBeenCalledWith(-0.35, 0.4);
+
+      await act(async () => {
+        canonizer.emitBeat(2, {
+          mainSeconds: 12,
+          otherSeconds: 34,
+          goldSeconds: 56,
+          pinkSeconds: null,
+        } as never);
+      });
+      expect(
+        getRequired(rendered.container, "#autocanonizer-gold-time").textContent,
+      ).toBe("0:56");
+      expect(
+        getRequired(rendered.container, "#autocanonizer-pink-time").textContent,
+      ).toBe("—");
+    } finally {
       rendered.unmount();
     }
   });

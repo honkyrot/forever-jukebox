@@ -139,9 +139,9 @@ describe("AutocanonizerViz", () => {
       beats.map((beat) => ({ start: beat.start, duration: beat.duration })),
     );
     const inner = viz as unknown as {
-      layoutMetrics: { topPad: number; tileHeight: number; vPad: number };
+      layoutMetrics: { topPad: number; height: number; tileHeight: number; vPad: number };
       layouts: Array<{ y: number; height: number }>;
-      connections: Array<{ startY: number } | null>;
+      connections: Array<{ startY: number; cy: number } | null>;
       baseCtx: CanvasRenderingContext2D;
     };
     const sectionY =
@@ -152,9 +152,20 @@ describe("AutocanonizerViz", () => {
     const maxBeatBottom = Math.max(
       ...inner.layouts.map((layout) => layout.y + layout.height),
     );
-    const branch = inner.connections.find(Boolean);
+    const branches = inner.connections.filter(
+      (c): c is { startY: number; cy: number } => Boolean(c),
+    );
+    const branch = branches[0];
+    const deepestApex = Math.max(
+      ...branches.map((c) => 0.5 * (c.startY + c.cy)),
+    );
+    const bottomY = inner.layoutMetrics.topPad + inner.layoutMetrics.height;
+    // The drawn arc at i=1 has |delta|=2 while maxDelta=3 (from skipped i=0).
+    const expectedApex = branchCursorY + (2 / 3) * (bottomY - 10 - branchCursorY);
     expect(maxBeatBottom).toBeCloseTo(sectionY, 5);
     expect(branch?.startY).toBeCloseTo(branchCursorY, 5);
+    expect(deepestApex).toBeCloseTo(expectedApex, 5);
+    expect(deepestApex).toBeLessThan(bottomY - 10);
     expect(inner.baseCtx.fillStyle).toBe("hsl(141, 80%, 55%)");
   });
 
@@ -366,5 +377,123 @@ describe("AutocanonizerViz", () => {
     const mainSpan = mainEnd - inner.layouts[0].x;
     const otherSpan = otherEnd - inner.otherLayouts[0].x;
     expect(otherSpan / mainSpan).toBeCloseTo(0.5, 2);
+  });
+
+  it("renders downward gold arcs and finish-out cursors in single-song 3-voice trio mode", () => {
+    const container = createContainer();
+    const viz = new AutocanonizerViz(container);
+    viz.setVisible(true);
+
+    const beats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(255, 255, 255)",
+      section: which,
+      otherGain: 1,
+      goldGain: which === 1 ? 0 : 1,
+    })) as any[];
+    beats[0].other = beats[0];
+    beats[1].other = beats[2];
+    beats[2].other = beats[3];
+    beats[3].other = beats[1];
+    beats[0].gold = beats[2];
+    beats[1].gold = beats[1];
+    beats[2].gold = beats[0];
+    beats[3].gold = beats[2];
+
+    viz.setData(
+      beats,
+      4,
+      beats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+      true,
+    );
+
+    const inner = viz as unknown as {
+      connections: Array<{ startY: number; cy: number } | null>;
+      goldConnections: Array<{ startY: number; cy: number } | null>;
+      forcedOtherIndex: number | null;
+      forcedGoldIndex: number | null;
+      inFinishOut: boolean;
+    };
+    const greenArc = inner.connections.find(Boolean);
+    const goldArc = inner.goldConnections.find(Boolean);
+    expect(greenArc).toBeTruthy();
+    expect(goldArc).toBeTruthy();
+    expect(goldArc!.cy).toBeGreaterThan(goldArc!.startY);
+    // Muted beat 1 suppresses gold arcs touching it.
+    expect(inner.goldConnections[0]).toBeNull();
+    expect(inner.goldConnections[1]).toBeNull();
+
+    viz.setFinishOutIndices(2, 3);
+    expect(inner.inFinishOut).toBe(true);
+    expect(inner.forcedOtherIndex).toBe(2);
+    expect(inner.forcedGoldIndex).toBe(3);
+
+    viz.setFinishOutIndices(null, 3);
+    expect(inner.forcedOtherIndex).toBeNull();
+    expect(inner.forcedGoldIndex).toBe(3);
+  });
+
+  it("renders downward pink arcs and finish-out cursors in single-song 4-voice mode", () => {
+    const container = createContainer();
+    const viz = new AutocanonizerViz(container);
+    viz.setVisible(true);
+
+    const beats = Array.from({ length: 4 }, (_, which) => ({
+      which,
+      start: which,
+      duration: 1,
+      volume: 1,
+      median_volume: 1,
+      color: "rgb(255, 255, 255)",
+      section: which,
+      otherGain: 1,
+      goldGain: 1,
+      pinkGain: which === 1 ? 0 : 1,
+    })) as any[];
+    beats[0].other = beats[0];
+    beats[1].other = beats[2];
+    beats[2].other = beats[3];
+    beats[3].other = beats[1];
+    beats[0].gold = beats[2];
+    beats[1].gold = beats[0];
+    beats[2].gold = beats[3];
+    beats[3].gold = beats[1];
+    beats[0].pink = beats[3];
+    beats[1].pink = beats[1];
+    beats[2].pink = beats[0];
+    beats[3].pink = beats[2];
+
+    viz.setData(
+      beats,
+      4,
+      beats.map((beat) => ({ start: beat.start, duration: beat.duration })),
+      4,
+    );
+
+    const inner = viz as unknown as {
+      goldConnections: Array<{ startY: number; cy: number } | null>;
+      pinkConnections: Array<{ startY: number; cy: number } | null>;
+      forcedOtherIndex: number | null;
+      forcedGoldIndex: number | null;
+      forcedPinkIndex: number | null;
+      inFinishOut: boolean;
+    };
+    const pinkArc = inner.pinkConnections.find(Boolean);
+    expect(inner.goldConnections.find(Boolean)).toBeTruthy();
+    expect(pinkArc).toBeTruthy();
+    expect(pinkArc!.cy).toBeGreaterThan(pinkArc!.startY);
+    // Muted pink on beat 1 suppresses pink arcs touching beat 1.
+    expect(inner.pinkConnections[0]).toBeNull();
+    expect(inner.pinkConnections[1]).toBeNull();
+
+    viz.setFinishOutIndices(2, 3, 1);
+    expect(inner.inFinishOut).toBe(true);
+    expect(inner.forcedOtherIndex).toBe(2);
+    expect(inner.forcedGoldIndex).toBe(3);
+    expect(inner.forcedPinkIndex).toBe(1);
   });
 });

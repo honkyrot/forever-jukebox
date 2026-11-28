@@ -75,6 +75,8 @@ export interface LyricsVoiceCursor {
 export interface AutocanonizerLyricsState {
   main: LyricsVoiceCursor;
   other: LyricsVoiceCursor;
+  gold: LyricsVoiceCursor;
+  pink: LyricsVoiceCursor;
   inUnison: boolean;
   fallbackNextLine: LyricsLine | null;
   fallbackNextLineIndex: number;

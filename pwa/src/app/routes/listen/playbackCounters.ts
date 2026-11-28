@@ -9,8 +9,8 @@ export type PlaybackCounterValues = {
   bpmTrend: BpmTrend;
   autocanonizerMainSeconds: number;
   autocanonizerOtherSeconds: number;
-  autocanonizerPinkSeconds: number;
-  autocanonizerGoldSeconds: number;
+  autocanonizerPinkSeconds: number | null;
+  autocanonizerGoldSeconds: number | null;
   songSyncTrackSeconds: number[];
   wubMachineSeconds: number;
 };

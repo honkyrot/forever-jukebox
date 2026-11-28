@@ -51,10 +51,22 @@ export function VizInfo() {
     (s) => s.autocanonizerMixEnabled,
   );
   const autocanonizerQuadMode = useAppStore((s) => s.autocanonizerQuadMode);
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
   const autocanonizerOtherDurationSec = useAppStore(
     (s) => s.autocanonizerOtherDurationSec,
   );
+  const singleVoiceCount =
+    autocanonizerSingleVoiceCount > 2
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
   const isQuadMix = autocanonizerMixEnabled && autocanonizerQuadMode;
+  const isSingleMulti = !autocanonizerMixEnabled && singleVoiceCount >= 3;
+  const isSingleQuad = !autocanonizerMixEnabled && singleVoiceCount === 4;
   const wubMachineDurationSec = useAppStore((s) => s.wubMachineDurationSec);
   const songSyncTracks = useAppStore((s) => s.songSyncTracks);
   const titleRef = useRef<HTMLDivElement | null>(null);
@@ -121,14 +133,16 @@ export function VizInfo() {
       );
     }
     if (pinkCursorTimeRef.current) {
-      pinkCursorTimeRef.current.textContent = formatCursorTime(
-        seed.autocanonizerPinkSeconds,
-      );
+      pinkCursorTimeRef.current.textContent =
+        seed.autocanonizerPinkSeconds === null
+          ? "—"
+          : formatCursorTime(seed.autocanonizerPinkSeconds);
     }
     if (goldCursorTimeRef.current) {
-      goldCursorTimeRef.current.textContent = formatCursorTime(
-        seed.autocanonizerGoldSeconds,
-      );
+      goldCursorTimeRef.current.textContent =
+        seed.autocanonizerGoldSeconds === null
+          ? "—"
+          : formatCursorTime(seed.autocanonizerGoldSeconds);
     }
     if (wubCursorTimeRef.current) {
       wubCursorTimeRef.current.textContent = formatCursorTime(
@@ -202,17 +216,19 @@ export function VizInfo() {
         state.autocanonizerPinkSeconds !== prev.autocanonizerPinkSeconds &&
         pinkCursorTimeRef.current
       ) {
-        pinkCursorTimeRef.current.textContent = formatCursorTime(
-          state.autocanonizerPinkSeconds,
-        );
+        pinkCursorTimeRef.current.textContent =
+          state.autocanonizerPinkSeconds === null
+            ? "—"
+            : formatCursorTime(state.autocanonizerPinkSeconds);
       }
       if (
         state.autocanonizerGoldSeconds !== prev.autocanonizerGoldSeconds &&
         goldCursorTimeRef.current
       ) {
-        goldCursorTimeRef.current.textContent = formatCursorTime(
-          state.autocanonizerGoldSeconds,
-        );
+        goldCursorTimeRef.current.textContent =
+          state.autocanonizerGoldSeconds === null
+            ? "—"
+            : formatCursorTime(state.autocanonizerGoldSeconds);
       }
       if (
         state.wubMachineSeconds !== prev.wubMachineSeconds &&
@@ -233,7 +249,7 @@ export function VizInfo() {
         });
       }
     });
-  }, [isQuadMix, hideBpm, songSyncTracks.length]);
+  }, [isQuadMix, isSingleMulti, isSingleQuad, hideBpm, songSyncTracks.length]);
 
   const displayTitle =
     trackTitle || trackArtist
@@ -286,6 +302,26 @@ export function VizInfo() {
             ref={otherCursorTimeRef}
             style={{ color: AUTOCANONIZER_OTHER_COLOR }}
           ></span>
+          {isSingleMulti ? (
+            <>
+              <span aria-hidden="true">–</span>
+              <span
+                id="autocanonizer-gold-time"
+                ref={goldCursorTimeRef}
+                style={{ color: AUTOCANONIZER_GOLD_COLOR }}
+              ></span>
+              {isSingleQuad ? (
+                <>
+                  <span aria-hidden="true">–</span>
+                  <span
+                    id="autocanonizer-pink-time"
+                    ref={pinkCursorTimeRef}
+                    style={{ color: AUTOCANONIZER_PINK_COLOR }}
+                  ></span>
+                </>
+              ) : null}
+            </>
+          ) : null}
           <span aria-hidden="true">/</span>
           <span id="autocanonizer-total-time">
             {formatCursorTime(trackDurationSec ?? 0)}
@@ -356,9 +392,12 @@ export function VizInfo() {
             </span>
           ))}
         </span>
+        {/* Group each stat label/value pair so narrow screens wrap between stats rather than splitting a label from its number. */}
         <span className="viz-meta-stats">
-          <span>{t("playback.listenTime")}</span>
-          <span id="listen-time" ref={listenTimeRef}></span>
+          <span className="viz-meta-stat">
+            <span>{t("playback.listenTime")}</span>
+            <span id="listen-time" ref={listenTimeRef}></span>
+          </span>
           <span
             id="viz-beats-divider"
             className={hideBeats ? "viz-divider is-hidden" : "viz-divider"}
@@ -366,16 +405,20 @@ export function VizInfo() {
             ·
           </span>
           <span
-            id="viz-beats-label"
-            className={hideBeats ? "is-hidden" : undefined}
+            className={hideBeats ? "viz-meta-stat is-hidden" : "viz-meta-stat"}
           >
-            {beatsLabel}
+            <span
+              id="viz-beats-label"
+              className={hideBeats ? "is-hidden" : undefined}
+            >
+              {beatsLabel}
+            </span>
+            <span
+              id="beats-played"
+              className={hideBeats ? "is-hidden" : undefined}
+              ref={beatsPlayedRef}
+            ></span>
           </span>
-          <span
-            id="beats-played"
-            className={hideBeats ? "is-hidden" : undefined}
-            ref={beatsPlayedRef}
-          ></span>
           <span
             id="viz-branch-chance-divider"
             className={hideBeats ? "viz-divider is-hidden" : "viz-divider"}
@@ -383,22 +426,26 @@ export function VizInfo() {
             ·
           </span>
           <span
-            id="viz-branch-chance-label"
-            className={hideBeats ? "is-hidden" : undefined}
+            className={hideBeats ? "viz-meta-stat is-hidden" : "viz-meta-stat"}
           >
-            Branch Chance:
+            <span
+              id="viz-branch-chance-label"
+              className={hideBeats ? "is-hidden" : undefined}
+            >
+              Branch Chance:
+            </span>
+            <span
+              id="branch-chance"
+              className={
+                hideBeats
+                  ? "is-hidden"
+                  : bringItHomeMode && !shiftBranching
+                    ? "is-crossed"
+                    : undefined
+              }
+              ref={branchChanceRef}
+            ></span>
           </span>
-          <span
-            id="branch-chance"
-            className={
-              hideBeats
-                ? "is-hidden"
-                : bringItHomeMode && !shiftBranching
-                  ? "is-crossed"
-                  : undefined
-            }
-            ref={branchChanceRef}
-          ></span>
           <span
             id="viz-bpm-divider"
             className={hideBpm ? "viz-divider is-hidden" : "viz-divider"}

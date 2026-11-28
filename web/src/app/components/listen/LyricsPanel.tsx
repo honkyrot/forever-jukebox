@@ -40,6 +40,16 @@ export function LyricsPanel() {
   const playMode = useAppStore((s) => s.playMode);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const autocanonizerMixEnabled = useAppStore((s) => s.autocanonizerMixEnabled);
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
+  const singleVoiceCount =
+    autocanonizerSingleVoiceCount > 2
+      ? autocanonizerSingleVoiceCount
+      : autocanonizerTrioMode
+        ? 3
+        : 2;
   const audioLoaded = useAppStore((s) => s.audioLoaded);
   const analysisLoaded = useAppStore((s) => s.analysisLoaded);
   const lyricsPanelOpen = useAppStore((s) => s.lyricsPanelOpen);
@@ -54,6 +64,8 @@ export function LyricsPanel() {
 
   const sync = useLyricsSync();
   const isCanonizer = sync.mode === "autocanonizer";
+  const isMultiCanonizer = isCanonizer && singleVoiceCount >= 3;
+  const isQuadCanonizer = isCanonizer && singleVoiceCount === 4;
   const [collapsed, setCollapsed] = useState(false);
   const activeLineRef = useRef<HTMLButtonElement | null>(null);
   const manualScrollUntilRef = useRef<number>(0);
@@ -81,7 +93,13 @@ export function LyricsPanel() {
   const scrollTargetIndex = isCanonizer
     ? sync.canonizer.main.activeLineIndex >= 0
       ? sync.canonizer.main.activeLineIndex
-      : sync.canonizer.other.activeLineIndex
+      : sync.canonizer.other.activeLineIndex >= 0
+        ? sync.canonizer.other.activeLineIndex
+        : isMultiCanonizer && sync.canonizer.gold.activeLineIndex >= 0
+          ? sync.canonizer.gold.activeLineIndex
+          : isQuadCanonizer
+            ? sync.canonizer.pink.activeLineIndex
+            : -1
     : sync.karaoke.activeLineIndex;
 
   // Auto-scroll active lyric line into view unless the user scrolled recently.
@@ -302,6 +320,18 @@ export function LyricsPanel() {
             <span className="lyrics-voice-dot is-other" aria-hidden="true" />
             <span>{t("lyrics.canonOther")}</span>
           </span>
+          {isMultiCanonizer ? (
+            <span className="lyrics-legend-item">
+              <span className="lyrics-voice-dot is-gold" aria-hidden="true" />
+              <span>{t("lyrics.canonGold")}</span>
+            </span>
+          ) : null}
+          {isQuadCanonizer ? (
+            <span className="lyrics-legend-item">
+              <span className="lyrics-voice-dot is-pink" aria-hidden="true" />
+              <span>{t("lyrics.canonPink")}</span>
+            </span>
+          ) : null}
         </div>
       ) : null}
 
@@ -331,9 +361,22 @@ export function LyricsPanel() {
                 isTimed &&
                 isCanonizer &&
                 sync.canonizer.other.activeLineIndex === line.index;
+              const isGold =
+                isTimed &&
+                isMultiCanonizer &&
+                sync.canonizer.gold.activeLineIndex === line.index;
+              const isPink =
+                isTimed &&
+                isQuadCanonizer &&
+                sync.canonizer.pink.activeLineIndex === line.index;
               const isBoth = isMain && isOther;
+              const activeVoiceCount =
+                (isMain ? 1 : 0) +
+                (isOther ? 1 : 0) +
+                (isGold ? 1 : 0) +
+                (isPink ? 1 : 0);
               const isActive = isCanonizer
-                ? isMain || isOther
+                ? activeVoiceCount > 0
                 : isTimed && sync.karaoke.activeLineIndex === line.index;
               const isPast =
                 isTimed &&
@@ -346,13 +389,37 @@ export function LyricsPanel() {
                 sync.karaoke.isBranchPreview &&
                 sync.karaoke.nextLineIndex === line.index;
 
-              const voiceClass = isBoth
-                ? "is-canon-both lyrics-voice-main"
-                : isMain
-                  ? "is-canon-main lyrics-voice-main"
-                  : isOther
-                    ? "is-canon-other lyrics-voice-other"
-                    : "";
+              const leadVoiceClass = isMain
+                ? "lyrics-voice-main"
+                : isOther
+                  ? "lyrics-voice-other"
+                  : isGold
+                    ? "lyrics-voice-gold"
+                    : "lyrics-voice-pink";
+              const voiceClass =
+                activeVoiceCount >= 3
+                  ? `is-canon-all ${leadVoiceClass}`
+                  : isBoth
+                    ? "is-canon-both lyrics-voice-main"
+                    : isMain && isGold
+                      ? "is-canon-main-gold lyrics-voice-main"
+                      : isMain && isPink
+                        ? "is-canon-main-pink lyrics-voice-main"
+                        : isOther && isGold
+                          ? "is-canon-other-gold lyrics-voice-other"
+                          : isOther && isPink
+                            ? "is-canon-other-pink lyrics-voice-other"
+                            : isGold && isPink
+                              ? "is-canon-gold-pink lyrics-voice-gold"
+                              : isMain
+                                ? "is-canon-main lyrics-voice-main"
+                                : isOther
+                                  ? "is-canon-other lyrics-voice-other"
+                                  : isGold
+                                    ? "is-canon-gold lyrics-voice-gold"
+                                    : isPink
+                                      ? "is-canon-pink lyrics-voice-pink"
+                                      : "";
 
               const className = [
                 "lyrics-panel-line",
@@ -377,18 +444,30 @@ export function LyricsPanel() {
               const activeSylIndex = isCanonizer
                 ? isMain
                   ? sync.canonizer.main.activeSyllableIndex
-                  : sync.canonizer.other.activeSyllableIndex
+                  : isOther
+                    ? sync.canonizer.other.activeSyllableIndex
+                    : isGold
+                      ? sync.canonizer.gold.activeSyllableIndex
+                      : sync.canonizer.pink.activeSyllableIndex
                 : sync.karaoke.activeSyllableIndex;
               const activeSylProgress = isCanonizer
                 ? isMain
                   ? sync.canonizer.main.activeSyllableProgress
-                  : sync.canonizer.other.activeSyllableProgress
+                  : isOther
+                    ? sync.canonizer.other.activeSyllableProgress
+                    : isGold
+                      ? sync.canonizer.gold.activeSyllableProgress
+                      : sync.canonizer.pink.activeSyllableProgress
                 : sync.karaoke.activeSyllableProgress;
               const activeBgStates = isActive
                 ? isCanonizer
                   ? isMain
                     ? sync.canonizer.main.backgroundStates
-                    : sync.canonizer.other.backgroundStates
+                    : isOther
+                      ? sync.canonizer.other.backgroundStates
+                      : isGold
+                        ? sync.canonizer.gold.backgroundStates
+                        : sync.canonizer.pink.backgroundStates
                   : sync.karaoke.backgroundStates
                 : [];
 
@@ -410,10 +489,12 @@ export function LyricsPanel() {
                       ↳
                     </span>
                   ) : null}
-                  {isMain || isOther ? (
+                  {activeVoiceCount > 0 ? (
                     <span className="lyrics-voice-dots" aria-hidden="true">
                       {isMain ? <span className="lyrics-voice-dot is-main" /> : null}
                       {isOther ? <span className="lyrics-voice-dot is-other" /> : null}
+                      {isGold ? <span className="lyrics-voice-dot is-gold" /> : null}
+                      {isPink ? <span className="lyrics-voice-dot is-pink" /> : null}
                     </span>
                   ) : null}
                   <span className="lyrics-panel-line-content">

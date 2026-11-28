@@ -11,6 +11,7 @@ import type {
   AutocanonizerController,
   AutocanonizerMixAlignmentMode,
   AutocanonizerQuadBranchMode,
+  AutocanonizerSingleVoiceCount,
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import type { SongSyncController } from "@forever-jukebox/shared/songsync/SongSyncController";
 import type { WubMachineController } from "@forever-jukebox/shared/wubmachine/WubMachineController";
@@ -54,8 +55,8 @@ export type AppState = {
   lastBeatIndex: number | null;
   autocanonizerMainSeconds: number;
   autocanonizerOtherSeconds: number;
-  autocanonizerPinkSeconds: number;
-  autocanonizerGoldSeconds: number;
+  autocanonizerPinkSeconds: number | null;
+  autocanonizerGoldSeconds: number | null;
   autocanonizerMainPan: number;
   autocanonizerOtherPan: number;
   autocanonizerPinkPan: number;
@@ -68,6 +69,8 @@ export type AppState = {
   autocanonizerMixAlignment: AutocanonizerMixAlignmentMode;
   autocanonizerQuadMode: boolean;
   autocanonizerQuadBranchMode: AutocanonizerQuadBranchMode;
+  autocanonizerTrioMode: boolean;
+  autocanonizerSingleVoiceCount: AutocanonizerSingleVoiceCount;
   autocanonizerMixTrackTitles: [string, string] | null;
   autocanonizerOtherDurationSec: number | null;
   wubMachineSeconds: number;

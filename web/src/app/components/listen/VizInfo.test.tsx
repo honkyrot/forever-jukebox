@@ -411,4 +411,52 @@ describe("StatusPanel", () => {
     });
     expect(button.classList.contains("hidden")).toBe(true);
   });
+
+  it("renders and updates Gold timestamp (or em-dash when muted) in single-song 3-Voice trio mode", () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerTrioMode: true,
+        autocanonizerMainSeconds: 10,
+        autocanonizerOtherSeconds: 45,
+        autocanonizerGoldSeconds: 75,
+        trackDurationSec: 154,
+      });
+    });
+    render(<VizInfo />);
+    const goldTime = document.getElementById("autocanonizer-gold-time");
+    expect(goldTime?.textContent).toBe("1:15");
+    expect(document.getElementById("autocanonizer-pink-time")).toBeNull();
+
+    act(() => {
+      useAppStore.setState({ autocanonizerGoldSeconds: null });
+    });
+    expect(goldTime?.textContent).toBe("—");
+  });
+
+  it("renders Gold and Pink timestamps (or em-dash when muted) in single-song 4-Voice mode", () => {
+    act(() => {
+      useAppStore.setState({
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        autocanonizerSingleVoiceCount: 4,
+        autocanonizerMainSeconds: 10,
+        autocanonizerOtherSeconds: 45,
+        autocanonizerGoldSeconds: 75,
+        autocanonizerPinkSeconds: 92,
+        trackDurationSec: 154,
+      });
+    });
+    render(<VizInfo />);
+    const goldTime = document.getElementById("autocanonizer-gold-time");
+    const pinkTime = document.getElementById("autocanonizer-pink-time");
+    expect(goldTime?.textContent).toBe("1:15");
+    expect(pinkTime?.textContent).toBe("1:32");
+
+    act(() => {
+      useAppStore.setState({ autocanonizerPinkSeconds: null });
+    });
+    expect(pinkTime?.textContent).toBe("—");
+  });
 });

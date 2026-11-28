@@ -48,6 +48,10 @@ export function VizContainer() {
   const bpmBarBeatOffset = useAppStore((s) => s.bpmBarBeatOffset);
   const multiTrackEnabled = useAppStore((s) => s.multiTrackEnabled);
   const autocanonizerMixEnabled = useAppStore((s) => s.autocanonizerMixEnabled);
+  const autocanonizerTrioMode = useAppStore((s) => s.autocanonizerTrioMode);
+  const autocanonizerSingleVoiceCount = useAppStore(
+    (s) => s.autocanonizerSingleVoiceCount,
+  );
   const coverSyncEnabled = useAppStore((s) => s.coverSyncEnabled);
   const timeSignatureBranchingEnabled = useAppStore(
     (s) => s.timeSignatureBranchingEnabled,
@@ -171,6 +175,15 @@ export function VizContainer() {
       if (vizLayerRef.current) {
         observer.observe(vizLayerRef.current);
       }
+      if (canonizerLayerRef.current) {
+        observer.observe(canonizerLayerRef.current);
+      }
+      if (songSyncLayerRef.current) {
+        observer.observe(songSyncLayerRef.current);
+      }
+      if (wubMachineLayerRef.current) {
+        observer.observe(wubMachineLayerRef.current);
+      }
       return () => observer.disconnect();
     }
     window.addEventListener("resize", handleResize);
@@ -287,7 +300,13 @@ export function VizContainer() {
     } else {
       ctx.jukebox?.resizeActive();
     }
-  }, [visible, playMode]);
+  }, [
+    visible,
+    playMode,
+    showKaraokeLyrics,
+    autocanonizerTrioMode,
+    autocanonizerSingleVoiceCount,
+  ]);
 
   /**
    * Renders the BPM bar beat segments either standalone or overlaid on the smooth bar.

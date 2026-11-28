@@ -2,6 +2,12 @@ import type { CanonizerBeat } from "./AutocanonizerViz";
 
 // Share of the mix given to the main voice; the other voice gets the rest.
 export const CANONIZER_MASTER_BLEND = 0.55;
+// Voice blend weights in 3-voice single-song trio mode (Blue + Green + Gold).
+export const TRIO_MAIN_BLEND = 0.4;
+export const TRIO_BRANCH_BLEND = 0.3;
+// Voice blend weights in 4-voice single-song quad mode (Blue + Green + Gold + Pink).
+export const SINGLE_QUAD_MAIN_BLEND = 0.31;
+export const SINGLE_QUAD_BRANCH_BLEND = 0.23;
 // Voice blend weights in 4-voice quad mode (Song 1 Blue/Green + Song 2 Pink/Gold).
 export const QUAD_MAIN_BLEND = 0.28;
 export const QUAD_BRANCH_BLEND = 0.22;
@@ -41,6 +47,8 @@ export type PlanCanonizerRenderOptions = {
   goldGain?: number;
   isDual?: boolean;
   quadMode?: boolean;
+  trioMode?: boolean;
+  singleVoiceCount?: 2 | 3 | 4;
   otherBeats?: CanonizerBeat[];
 };
 
@@ -70,13 +78,36 @@ export function planCanonizerRender(
   const mainOffset = beats[0].start;
   const quadMode = Boolean(options.quadMode);
   const isDual = Boolean(options.isDual);
+  const singleVoiceCount: 2 | 3 | 4 =
+    quadMode || isDual
+      ? 2
+      : (options.singleVoiceCount ?? (options.trioMode ? 3 : 2));
+  const isSingleMultiVoice = singleVoiceCount >= 3;
   const mainGainScale = clampStreamGain(options.mainGain);
   const otherGainScale = clampStreamGain(options.otherGain);
   const pinkGainScale = clampStreamGain(options.pinkGain);
   const goldGainScale = clampStreamGain(options.goldGain);
 
-  const mainWeight = quadMode ? QUAD_MAIN_BLEND : CANONIZER_MASTER_BLEND;
-  const otherWeight = quadMode ? QUAD_BRANCH_BLEND : 1 - CANONIZER_MASTER_BLEND;
+  const mainWeight = quadMode
+    ? QUAD_MAIN_BLEND
+    : singleVoiceCount === 4
+      ? SINGLE_QUAD_MAIN_BLEND
+      : singleVoiceCount === 3
+        ? TRIO_MAIN_BLEND
+        : CANONIZER_MASTER_BLEND;
+  const otherWeight = quadMode
+    ? QUAD_BRANCH_BLEND
+    : singleVoiceCount === 4
+      ? SINGLE_QUAD_BRANCH_BLEND
+      : singleVoiceCount === 3
+        ? TRIO_BRANCH_BLEND
+        : 1 - CANONIZER_MASTER_BLEND;
+  const goldWeight = quadMode
+    ? QUAD_BRANCH_BLEND
+    : singleVoiceCount === 4
+      ? SINGLE_QUAD_BRANCH_BLEND
+      : TRIO_BRANCH_BLEND;
+  const pinkWeight = quadMode ? QUAD_MAIN_BLEND : SINGLE_QUAD_BRANCH_BLEND;
 
   const other: CanonizerRenderSegment[] = [];
   const pink: CanonizerRenderSegment[] = [];
@@ -84,9 +115,9 @@ export function planCanonizerRender(
   const otherGain = (beat: CanonizerBeat) =>
     otherWeight * otherGainScale * clamp01(beat.otherGain);
   const pinkGain = (beat: CanonizerBeat) =>
-    QUAD_MAIN_BLEND * pinkGainScale * clamp01(beat.pinkGain);
+    pinkWeight * pinkGainScale * clamp01(beat.pinkGain);
   const goldGain = (beat: CanonizerBeat) =>
-    QUAD_BRANCH_BLEND * goldGainScale * clamp01(beat.goldGain);
+    goldWeight * goldGainScale * clamp01(beat.goldGain);
 
   let time = 0;
   let otherOffset = 0;
@@ -95,6 +126,8 @@ export function planCanonizerRender(
   let skew = 0;
   let pinkSkew = 0;
   let goldSkew = 0;
+  let pinkWasActive = false;
+  let goldWasActive = false;
   let previous: CanonizerBeat | null = null;
 
   for (let index = 0; index <= finalIndex; index += 1) {
@@ -152,6 +185,66 @@ export function planCanonizerRender(
         sourceOffset: goldOffset,
         gain: goldGain(beat),
       });
+    } else if (isSingleMultiVoice) {
+      const beatGoldGain = clamp01(beat.goldGain, 0);
+      if (!beat.gold || beatGoldGain === 0) {
+        goldSkew = 0;
+        goldWasActive = false;
+        gold.push({
+          outputStart: time,
+          duration,
+          sourceOffset: 0,
+          gain: 0,
+        });
+      } else {
+        if (
+          !goldWasActive ||
+          previous?.gold?.next !== beat.gold ||
+          Math.abs(goldSkew) > CANONIZER_MAX_SKEW_DELTA
+        ) {
+          goldSkew = 0;
+          goldOffset = beat.gold.start - time;
+        }
+        goldSkew += beat.duration - beat.gold.duration;
+        goldWasActive = true;
+        gold.push({
+          outputStart: time,
+          duration,
+          sourceOffset: goldOffset,
+          gain: goldGain(beat),
+        });
+      }
+
+      if (singleVoiceCount === 4) {
+        const beatPinkGain = clamp01(beat.pinkGain, 0);
+        if (!beat.pink || beatPinkGain === 0) {
+          pinkSkew = 0;
+          pinkWasActive = false;
+          pink.push({
+            outputStart: time,
+            duration,
+            sourceOffset: 0,
+            gain: 0,
+          });
+        } else {
+          if (
+            !pinkWasActive ||
+            previous?.pink?.next !== beat.pink ||
+            Math.abs(pinkSkew) > CANONIZER_MAX_SKEW_DELTA
+          ) {
+            pinkSkew = 0;
+            pinkOffset = beat.pink.start - time;
+          }
+          pinkSkew += beat.duration - beat.pink.duration;
+          pinkWasActive = true;
+          pink.push({
+            outputStart: time,
+            duration,
+            sourceOffset: pinkOffset,
+            gain: pinkGain(beat),
+          });
+        }
+      }
     }
 
     time += duration;
@@ -168,30 +261,154 @@ export function planCanonizerRender(
   ];
 
   if (options.finishOutSong) {
-    // The other voice alone plays on from the final beat's partner to the end.
-    const secondaryBeats =
-      !quadMode && isDual && options.otherBeats?.length
-        ? options.otherBeats
-        : beats;
-    let current: CanonizerBeat | undefined = beats[finalIndex];
-    const startIndex = current?.other?.which ?? 0;
-    for (let index = startIndex; index < secondaryBeats.length; index += 1) {
-      const beat = secondaryBeats[index];
-      if (current?.other?.next !== beat) {
-        otherOffset = beat.start - time;
+    if (isSingleMultiVoice) {
+      const finalBeat = beats[finalIndex];
+      const rawOtherIdx = finalBeat?.other ? finalBeat.other.which : 0;
+      let otherIdx: number | null =
+        rawOtherIdx >= 0 && rawOtherIdx < beats.length ? rawOtherIdx : null;
+      const rawGoldIdx =
+        finalBeat?.gold && clamp01(finalBeat.goldGain, 0) > 0
+          ? finalBeat.gold.which
+          : null;
+      let goldIdx: number | null =
+        rawGoldIdx !== null && rawGoldIdx >= 0 && rawGoldIdx < beats.length
+          ? rawGoldIdx
+          : null;
+      const rawPinkIdx =
+        singleVoiceCount === 4 &&
+        finalBeat?.pink &&
+        clamp01(finalBeat.pinkGain, 0) > 0
+          ? finalBeat.pink.which
+          : null;
+      let pinkIdx: number | null =
+        rawPinkIdx !== null && rawPinkIdx >= 0 && rawPinkIdx < beats.length
+          ? rawPinkIdx
+          : null;
+      let prevOtherBeat: CanonizerBeat | undefined = previous?.other;
+      let prevGoldBeat: CanonizerBeat | undefined = goldWasActive
+        ? previous?.gold
+        : undefined;
+      let prevPinkBeat: CanonizerBeat | undefined = pinkWasActive
+        ? previous?.pink
+        : undefined;
+
+      // Play all active canon branches (Green, Gold, Pink) out to the end of the track.
+      while (otherIdx !== null || goldIdx !== null || pinkIdx !== null) {
+        const otherBeat = otherIdx !== null ? beats[otherIdx] : null;
+        const goldBeat = goldIdx !== null ? beats[goldIdx] : null;
+        const pinkBeat = pinkIdx !== null ? beats[pinkIdx] : null;
+        const clockBeat = otherBeat ?? goldBeat ?? pinkBeat;
+        if (!clockBeat) {
+          break;
+        }
+
+        let duration = 0;
+        if (otherBeat) {
+          if (prevOtherBeat?.next !== otherBeat) {
+            otherOffset = otherBeat.start - time;
+          }
+          duration = Math.max(
+            0,
+            otherBeat.start + otherBeat.duration - (time + otherOffset),
+          );
+          other.push({
+            outputStart: time,
+            duration,
+            sourceOffset: otherOffset,
+            gain: otherGain(otherBeat),
+          });
+        } else if (goldBeat) {
+          if (prevGoldBeat?.next !== goldBeat) {
+            goldOffset = goldBeat.start - time;
+          }
+          duration = Math.max(
+            0,
+            goldBeat.start + goldBeat.duration - (time + goldOffset),
+          );
+        } else if (pinkBeat) {
+          if (prevPinkBeat?.next !== pinkBeat) {
+            pinkOffset = pinkBeat.start - time;
+          }
+          duration = Math.max(
+            0,
+            pinkBeat.start + pinkBeat.duration - (time + pinkOffset),
+          );
+        }
+
+        if (goldBeat) {
+          if (otherBeat) {
+            if (
+              prevGoldBeat?.next !== goldBeat ||
+              Math.abs(goldSkew) > CANONIZER_MAX_SKEW_DELTA
+            ) {
+              goldSkew = 0;
+              goldOffset = goldBeat.start - time;
+            }
+            goldSkew += clockBeat.duration - goldBeat.duration;
+          }
+          gold.push({
+            outputStart: time,
+            duration,
+            sourceOffset: goldOffset,
+            gain: goldWeight * goldGainScale,
+          });
+          prevGoldBeat = goldBeat;
+          goldIdx = goldIdx! + 1 < beats.length ? goldIdx! + 1 : null;
+        }
+
+        if (pinkBeat) {
+          if (otherBeat || goldBeat) {
+            if (
+              prevPinkBeat?.next !== pinkBeat ||
+              Math.abs(pinkSkew) > CANONIZER_MAX_SKEW_DELTA
+            ) {
+              pinkSkew = 0;
+              pinkOffset = pinkBeat.start - time;
+            }
+            pinkSkew += clockBeat.duration - pinkBeat.duration;
+          }
+          pink.push({
+            outputStart: time,
+            duration,
+            sourceOffset: pinkOffset,
+            gain: pinkWeight * pinkGainScale,
+          });
+          prevPinkBeat = pinkBeat;
+          pinkIdx = pinkIdx! + 1 < beats.length ? pinkIdx! + 1 : null;
+        }
+
+        if (otherBeat) {
+          prevOtherBeat = otherBeat;
+          otherIdx = otherIdx! + 1 < beats.length ? otherIdx! + 1 : null;
+        }
+        time += duration;
       }
-      const duration = Math.max(
-        0,
-        beat.start + beat.duration - (time + otherOffset),
-      );
-      other.push({
-        outputStart: time,
-        duration,
-        sourceOffset: otherOffset,
-        gain: otherGain(beat),
-      });
-      time += duration;
-      current = beat;
+    } else {
+      // The other voice alone plays on from the final beat's partner to the end.
+      const secondaryBeats =
+        !quadMode && isDual && options.otherBeats?.length
+          ? options.otherBeats
+          : beats;
+      let current: CanonizerBeat | undefined = beats[finalIndex];
+      const startIndex = current?.other?.which ?? 0;
+      for (let index = startIndex; index < secondaryBeats.length; index += 1) {
+        const beat = secondaryBeats[index];
+        if (current?.other?.next !== beat) {
+          otherOffset = beat.start - time;
+        }
+        const duration = Math.max(
+          0,
+          beat.start + beat.duration - (time + otherOffset),
+        );
+        other.push({
+          outputStart: time,
+          duration,
+          sourceOffset: otherOffset,
+          gain: otherGain(beat),
+        });
+        time += duration;
+        current = beat;
+      }
     }
   }
 
@@ -209,6 +426,11 @@ export function planCanonizerRender(
       { pan: options.pinkPan ?? 0, sourceIndex: 1, segments: pink },
       { pan: options.goldPan ?? 0, sourceIndex: 1, segments: gold },
     );
+  } else if (isSingleMultiVoice) {
+    voices.push({ pan: options.goldPan ?? 0, sourceIndex: 0, segments: gold });
+    if (singleVoiceCount === 4) {
+      voices.push({ pan: options.pinkPan ?? 0, sourceIndex: 0, segments: pink });
+    }
   }
 
   return {

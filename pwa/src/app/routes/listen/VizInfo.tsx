@@ -10,6 +10,7 @@ import {
 } from "@forever-jukebox/shared/autocanonizer/AutocanonizerViz";
 import type { PlaybackCounters, PlaybackCounterValues } from "./playbackCounters";
 import type { PlayMode } from "@forever-jukebox/shared/constants/playback";
+import type { AutocanonizerSingleVoiceCount } from "@forever-jukebox/shared/autocanonizer/AutocanonizerController";
 import type { BpmTrend } from "./liveBpm";
 
 function setText(node: HTMLSpanElement | null, text: string) {
@@ -47,6 +48,8 @@ export function VizInfo({
   bringItHomeMode,
   forceBranchActive = false,
   isQuadMix = false,
+  isTrioSingle = false,
+  singleVoiceCount,
   autocanonizerOtherDurationSeconds = null,
   songSyncTrackTimes = [],
 }: {
@@ -59,10 +62,20 @@ export function VizInfo({
   bringItHomeMode: boolean;
   forceBranchActive?: boolean;
   isQuadMix?: boolean;
+  isTrioSingle?: boolean;
+  singleVoiceCount?: AutocanonizerSingleVoiceCount;
   autocanonizerOtherDurationSeconds?: number | null;
   songSyncTrackTimes?: readonly { title: string; color: string; durationSec: number }[];
 }) {
   const { t } = useTranslation();
+  const resolvedSingleVoiceCount: AutocanonizerSingleVoiceCount =
+    singleVoiceCount !== undefined
+      ? singleVoiceCount
+      : isTrioSingle
+        ? 3
+        : 2;
+  const singleMultiActive = !isQuadMix && resolvedSingleVoiceCount >= 3;
+  const singleQuadActive = !isQuadMix && resolvedSingleVoiceCount === 4;
   const jukeboxTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const mainTimeRef = React.useRef<HTMLSpanElement | null>(null);
   const otherTimeRef = React.useRef<HTMLSpanElement | null>(null);
@@ -84,8 +97,18 @@ export function VizInfo({
       setText(jukeboxTimeRef.current, formatTime(values.jukeboxCurrentSeconds));
       setText(mainTimeRef.current, formatTime(values.autocanonizerMainSeconds));
       setText(otherTimeRef.current, formatTime(values.autocanonizerOtherSeconds));
-      setText(pinkTimeRef.current, formatTime(values.autocanonizerPinkSeconds));
-      setText(goldTimeRef.current, formatTime(values.autocanonizerGoldSeconds));
+      setText(
+        pinkTimeRef.current,
+        values.autocanonizerPinkSeconds === null
+          ? "—"
+          : formatTime(values.autocanonizerPinkSeconds),
+      );
+      setText(
+        goldTimeRef.current,
+        values.autocanonizerGoldSeconds === null
+          ? "—"
+          : formatTime(values.autocanonizerGoldSeconds),
+      );
       values.songSyncTrackSeconds.forEach((sec, idx) => {
         setText(songSyncTimeRefs.current[idx] ?? null, formatTime(sec));
       });
@@ -106,7 +129,14 @@ export function VizInfo({
     };
     write(counters.get());
     return counters.subscribe(write);
-  }, [counters, forceBranchActive, isQuadMix, songSyncTrackTimes.length]);
+  }, [
+    counters,
+    forceBranchActive,
+    isQuadMix,
+    singleMultiActive,
+    singleQuadActive,
+    songSyncTrackTimes.length,
+  ]);
 
   const isJukebox = playMode === "jukebox";
   const isCanonizer = playMode === "autocanonizer";
@@ -142,6 +172,26 @@ export function VizInfo({
             ref={otherTimeRef}
             style={{ color: AUTOCANONIZER_OTHER_COLOR }}
           ></span>
+          {singleMultiActive ? (
+            <>
+              <span aria-hidden="true">–</span>
+              <span
+                id="autocanonizer-gold-time"
+                ref={goldTimeRef}
+                style={{ color: AUTOCANONIZER_GOLD_COLOR }}
+              ></span>
+              {singleQuadActive ? (
+                <>
+                  <span aria-hidden="true">–</span>
+                  <span
+                    id="autocanonizer-pink-time"
+                    ref={pinkTimeRef}
+                    style={{ color: AUTOCANONIZER_PINK_COLOR }}
+                  ></span>
+                </>
+              ) : null}
+            </>
+          ) : null}
           <span aria-hidden="true">/</span>
           <span id="autocanonizer-total-time">
             {formatTime(trackDurationSeconds)}

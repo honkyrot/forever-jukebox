@@ -375,6 +375,8 @@ const EMPTY_VOICE_CURSOR: LyricsVoiceCursor = {
 export const EMPTY_AUTOCANONIZER_LYRICS_STATE: AutocanonizerLyricsState = {
   main: EMPTY_VOICE_CURSOR,
   other: EMPTY_VOICE_CURSOR,
+  gold: EMPTY_VOICE_CURSOR,
+  pink: EMPTY_VOICE_CURSOR,
   inUnison: false,
   fallbackNextLine: null,
   fallbackNextLineIndex: -1,
@@ -385,6 +387,8 @@ export interface ResolveAutocanonizerLyricsInput {
   lyrics: NormalizedLyrics | null;
   mainTimeSec: number | null;
   otherTimeSec: number | null;
+  goldTimeSec?: number | null;
+  pinkTimeSec?: number | null;
   offsetSec?: number;
   inUnison?: boolean;
   leadInSec?: number;
@@ -442,8 +446,9 @@ function resolveVoiceCursor(
 }
 
 /**
- * Resolves independent lyric cursors for Autocanonizer's Blue (main) and Green
- * (canon/other) voices, including per-lane in-place upcoming line previews.
+ * Resolves independent lyric cursors for Autocanonizer's Blue (main), Green
+ * (canon/other), and optional Gold / Pink voices, including per-lane in-place
+ * upcoming line previews.
  */
 export function resolveAutocanonizerLyricsState(
   input: ResolveAutocanonizerLyricsInput,
@@ -452,6 +457,8 @@ export function resolveAutocanonizerLyricsState(
     lyrics,
     mainTimeSec,
     otherTimeSec,
+    goldTimeSec = null,
+    pinkTimeSec = null,
     offsetSec = 0,
     inUnison = false,
     leadInSec = 2.5,
@@ -466,8 +473,17 @@ export function resolveAutocanonizerLyricsState(
   const other = exactUnison
     ? main
     : resolveVoiceCursor(lyrics, otherTimeSec, offsetSec, leadInSec);
+  const gold = resolveVoiceCursor(lyrics, goldTimeSec, offsetSec, leadInSec);
+  const pink = resolveVoiceCursor(lyrics, pinkTimeSec, offsetSec, leadInSec);
 
-  const primaryCursor = mainTimeSec !== null ? main : other;
+  const primaryCursor =
+    mainTimeSec !== null
+      ? main
+      : otherTimeSec !== null
+        ? other
+        : goldTimeSec !== null
+          ? gold
+          : pink;
 
   // Keep offset voices inside the same lyric line in separate lanes unless the
   // controller reports true beat unison (`inUnison`), so their staggered timing
@@ -475,6 +491,8 @@ export function resolveAutocanonizerLyricsState(
   return {
     main,
     other,
+    gold,
+    pink,
     inUnison: exactUnison,
     fallbackNextLine: primaryCursor.upcomingLine,
     fallbackNextLineIndex: primaryCursor.upcomingLineIndex,
