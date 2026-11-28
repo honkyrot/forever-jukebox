@@ -25,6 +25,7 @@ import {
   extractTrackBeatFeatures,
 } from "../engine/coverSync";
 import { clampVolume } from "../audio/volume";
+import { createSafetyLimiter } from "../audio/audioModes";
 
 type BeatWithSim = CanonizerBeat & {
   sim?: CanonizerBeat;
@@ -82,6 +83,7 @@ class AutocanonizerPlayer {
   private readonly otherPanner: StereoPannerNode | null;
   private readonly pinkPanner: StereoPannerNode | null;
   private readonly goldPanner: StereoPannerNode | null;
+  private readonly limiter: DynamicsCompressorNode | null;
   private readonly masterBlend: number;
   private quadMode = false;
   private singleVoiceCount: AutocanonizerSingleVoiceCount = 2;
@@ -140,10 +142,17 @@ class AutocanonizerPlayer {
     this.otherPanner?.connect(this.otherGain);
     this.pinkPanner?.connect(this.pinkGain);
     this.goldPanner?.connect(this.goldGain);
-    this.mainGain.connect(this.context.destination);
-    this.otherGain.connect(this.context.destination);
-    this.pinkGain.connect(this.context.destination);
-    this.goldGain.connect(this.context.destination);
+    // Route all four voices through a 0 dBFS safety limiter when supported so
+    // equal-power 3/4-voice blends never clip on in-phase peaks.
+    this.limiter = createSafetyLimiter(this.context);
+    const output: AudioNode = this.limiter ?? this.context.destination;
+    if (this.limiter) {
+      this.limiter.connect(this.context.destination);
+    }
+    this.mainGain.connect(output);
+    this.otherGain.connect(output);
+    this.pinkGain.connect(output);
+    this.goldGain.connect(output);
     this.applyGains();
     this.applyPans();
   }

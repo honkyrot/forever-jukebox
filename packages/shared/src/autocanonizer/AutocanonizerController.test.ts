@@ -576,11 +576,11 @@ describe("AutocanonizerController", () => {
       quadBranchMode: "synced",
     });
 
-    // Quad gain scaling: 0.28 / 0.22 / 0.28 / 0.22
-    expect(gains[0].gain.value).toBeCloseTo(0.28);
-    expect(gains[1].gain.value).toBeCloseTo(0.22);
-    expect(gains[2].gain.value).toBeCloseTo(0.28);
-    expect(gains[3].gain.value).toBeCloseTo(0.22);
+    // Quad gain scaling: 0.40 / 0.31 / 0.40 / 0.31
+    expect(gains[0].gain.value).toBeCloseTo(0.4);
+    expect(gains[1].gain.value).toBeCloseTo(0.31);
+    expect(gains[2].gain.value).toBeCloseTo(0.4);
+    expect(gains[3].gain.value).toBeCloseTo(0.31);
 
     const onBeat = vi.fn();
     controller.setOnBeat(onBeat);
@@ -696,7 +696,7 @@ describe("AutocanonizerController", () => {
     expect(controller.getLiveCursorTimes()).toBeNull();
   });
 
-  it("supports 3-voice single-song trio mode with runner-up matching, muted sections, and 0.4/0.3/0.3 gains", () => {
+  it("supports 3-voice single-song trio mode with runner-up matching, muted sections, and 0.48/0.36/0.36 gains", () => {
     const pA = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     const pB = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     const pC = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -772,11 +772,11 @@ describe("AutocanonizerController", () => {
     controller.setAnalysis(raw, raw.track.duration);
     controller.setTrioMode(true);
 
-    // Trio gains: Blue 0.4, Green 0.3, Pink 0, Gold 0.3 (on active beats).
-    expect(gains[0].gain.value).toBeCloseTo(0.4);
-    expect(gains[1].gain.value).toBeCloseTo(0.3);
+    // Trio gains: Blue 0.48, Green 0.36, Pink 0, Gold 0.36 (on active beats).
+    expect(gains[0].gain.value).toBeCloseTo(0.48);
+    expect(gains[1].gain.value).toBeCloseTo(0.36);
     expect(gains[2].gain.value).toBe(0);
-    expect(gains[3].gain.value).toBeCloseTo(0.3);
+    expect(gains[3].gain.value).toBeCloseTo(0.36);
 
     const inner = controller as unknown as {
       beats: Array<CanonizerBeat & { gold?: CanonizerBeat; goldGain?: number }>;
@@ -871,8 +871,8 @@ describe("AutocanonizerController", () => {
       otherSeconds: 0.2,
       goldSeconds: 0.1,
     });
-    expect(gains[1].gain.value).toBeCloseTo(0.3);
-    expect(gains[3].gain.value).toBeCloseTo(0.3);
+    expect(gains[1].gain.value).toBeCloseTo(0.36);
+    expect(gains[3].gain.value).toBeCloseTo(0.36);
 
     // Step 2: other=3 (0.3), gold=2 (0.2)
     (context as unknown as { currentTime: number }).currentTime = 0.1;
@@ -892,7 +892,7 @@ describe("AutocanonizerController", () => {
       goldSeconds: 0.3,
     });
     expect(gains[1].gain.value).toBe(0);
-    expect(gains[3].gain.value).toBeCloseTo(0.3);
+    expect(gains[3].gain.value).toBeCloseTo(0.36);
     expect(onEnded).not.toHaveBeenCalled();
 
     // Step 4: both finished -> stops and fires onEnded
@@ -952,7 +952,7 @@ describe("AutocanonizerController", () => {
     controller.stop();
   });
 
-  it("supports 4-voice single-song mode with distinct Pink matches, muted sections, and 0.31/0.23/0.23/0.23 gains", () => {
+  it("supports 4-voice single-song mode with distinct Pink matches, muted sections, and 0.44/0.32/0.32/0.32 gains", () => {
     const pA = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     const pB = [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     const pC = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -1028,10 +1028,10 @@ describe("AutocanonizerController", () => {
     controller.setAnalysis(raw, raw.track.duration);
     controller.setSingleSongVoiceCount(4);
 
-    expect(gains[0].gain.value).toBeCloseTo(0.31);
-    expect(gains[1].gain.value).toBeCloseTo(0.23);
-    expect(gains[2].gain.value).toBeCloseTo(0.23);
-    expect(gains[3].gain.value).toBeCloseTo(0.23);
+    expect(gains[0].gain.value).toBeCloseTo(0.44);
+    expect(gains[1].gain.value).toBeCloseTo(0.32);
+    expect(gains[2].gain.value).toBeCloseTo(0.32);
+    expect(gains[3].gain.value).toBeCloseTo(0.32);
 
     const inner = controller as unknown as {
       beats: Array<
@@ -1177,11 +1177,38 @@ describe("AutocanonizerController", () => {
     });
     expect(gains[1].gain.value).toBe(0);
     expect(gains[3].gain.value).toBe(0);
-    expect(gains[2].gain.value).toBeCloseTo(0.23);
+    expect(gains[2].gain.value).toBeCloseTo(0.32);
     expect(onEnded).not.toHaveBeenCalled();
 
     (context as unknown as { currentTime: number }).currentTime = 0.4;
     vi.advanceTimersByTime(100);
     expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes all four voice gains through the 0 dBFS safety limiter when supported", () => {
+    const controller = new AutocanonizerController({} as HTMLElement);
+    const { context, gains } = createAudioContext();
+    const limiter = {
+      threshold: { value: 0 },
+      knee: { value: 0 },
+      ratio: { value: 1 },
+      attack: { value: 0 },
+      release: { value: 0 },
+      connect: vi.fn(),
+    } as unknown as DynamicsCompressorNode;
+    (
+      context as unknown as {
+        createDynamicsCompressor: () => DynamicsCompressorNode;
+      }
+    ).createDynamicsCompressor = () => limiter;
+
+    controller.setAudio({ duration: 10 } as AudioBuffer, context);
+
+    expect(limiter.threshold.value).toBe(0);
+    expect(limiter.ratio.value).toBe(20);
+    expect(limiter.connect).toHaveBeenCalledWith(context.destination);
+    for (const gain of gains) {
+      expect(gain.connect).toHaveBeenCalledWith(limiter);
+    }
   });
 });

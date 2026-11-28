@@ -2,15 +2,18 @@ import type { CanonizerBeat } from "./AutocanonizerViz";
 
 // Share of the mix given to the main voice; the other voice gets the rest.
 export const CANONIZER_MASTER_BLEND = 0.55;
-// Voice blend weights in 3-voice single-song trio mode (Blue + Green + Gold).
-export const TRIO_MAIN_BLEND = 0.4;
-export const TRIO_BRANCH_BLEND = 0.3;
-// Voice blend weights in 4-voice single-song quad mode (Blue + Green + Gold + Pink).
-export const SINGLE_QUAD_MAIN_BLEND = 0.31;
-export const SINGLE_QUAD_BRANCH_BLEND = 0.23;
-// Voice blend weights in 4-voice quad mode (Song 1 Blue/Green + Song 2 Pink/Gold).
-export const QUAD_MAIN_BLEND = 0.28;
-export const QUAD_BRANCH_BLEND = 0.22;
+// Equal-power (~0.71 RMS, matching 2-voice loudness) blend weights in 3-voice
+// single-song trio mode (Blue + Green + Gold), preserving Main's slight lead.
+export const TRIO_MAIN_BLEND = 0.48;
+export const TRIO_BRANCH_BLEND = 0.36;
+// Equal-power (~0.71 RMS) blend weights in 4-voice single-song quad mode
+// (Blue + Green + Gold + Pink), preserving Main's slight lead.
+export const SINGLE_QUAD_MAIN_BLEND = 0.44;
+export const SINGLE_QUAD_BRANCH_BLEND = 0.32;
+// Equal-power (~0.72 RMS) blend weights in 4-voice quad mode
+// (Song 1 Blue/Green + Song 2 Pink/Gold), preserving each song's main lead.
+export const QUAD_MAIN_BLEND = 0.4;
+export const QUAD_BRANCH_BLEND = 0.31;
 // Seconds the other voice may drift from the main beats before it resyncs.
 export const CANONIZER_MAX_SKEW_DELTA = 0.05;
 // Tighter resync threshold for Song 2's structurally synced Pink stream.
