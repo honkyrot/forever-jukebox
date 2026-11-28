@@ -1,4 +1,5 @@
 import type {
+  LyricsBackgroundVocal,
   LyricsLine,
   LyricsSyllable,
   NormalizedLyrics,
@@ -174,12 +175,39 @@ export function normalizeSpicyLyrics(raw: unknown): NormalizedLyrics | null {
         continue;
       }
       let backgroundText: string | undefined;
+      const backgroundVocals: LyricsBackgroundVocal[] = [];
+      let lineStartTime = lead.startTime;
+      let lineEndTime = lead.endTime;
+
       if (Array.isArray(item.Background) && item.Background.length > 0) {
         const parts: string[] = [];
         for (const bgItem of item.Background) {
           const parsedBg = parseSyllableGroup(bgItem);
-          if (parsedBg?.text) {
-            parts.push(parsedBg.text);
+          if (!parsedBg) {
+            continue;
+          }
+          parts.push(parsedBg.text);
+          backgroundVocals.push({
+            text: parsedBg.text,
+            ...(parsedBg.transliteratedText
+              ? { transliteratedText: parsedBg.transliteratedText }
+              : {}),
+            startTime: parsedBg.startTime,
+            endTime: parsedBg.endTime,
+            syllables: parsedBg.syllables,
+          });
+          // Extend the parent line span so trailing/leading background vocals remain active.
+          if (parsedBg.startTime !== null) {
+            lineStartTime =
+              lineStartTime !== null
+                ? Math.min(lineStartTime, parsedBg.startTime)
+                : parsedBg.startTime;
+          }
+          if (parsedBg.endTime !== null) {
+            lineEndTime =
+              lineEndTime !== null
+                ? Math.max(lineEndTime, parsedBg.endTime)
+                : parsedBg.endTime;
           }
         }
         if (parts.length > 0) {
@@ -192,11 +220,12 @@ export function normalizeSpicyLyrics(raw: unknown): NormalizedLyrics | null {
         ...(lead.transliteratedText
           ? { transliteratedText: lead.transliteratedText }
           : {}),
-        startTime: lead.startTime,
-        endTime: lead.endTime,
+        startTime: lineStartTime,
+        endTime: lineEndTime,
         ...(item.OppositeAligned === true ? { oppositeAligned: true } : {}),
         syllables: lead.syllables,
         ...(backgroundText ? { backgroundText } : {}),
+        ...(backgroundVocals.length > 0 ? { backgroundVocals } : {}),
       });
     }
   } else if (rawType === "Line") {
@@ -270,7 +299,14 @@ export function normalizeSpicyLyrics(raw: unknown): NormalizedLyrics | null {
   const hasTransliterations = lines.some(
     (line) =>
       Boolean(line.transliteratedText) ||
-      Boolean(line.syllables?.some((s) => Boolean(s.transliteratedText))),
+      Boolean(line.syllables?.some((s) => Boolean(s.transliteratedText))) ||
+      Boolean(
+        line.backgroundVocals?.some(
+          (bg) =>
+            Boolean(bg.transliteratedText) ||
+            Boolean(bg.syllables?.some((s) => Boolean(s.transliteratedText))),
+        ),
+      ),
   );
 
   return {

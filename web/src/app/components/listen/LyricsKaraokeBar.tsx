@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type {
+  LyricsBackgroundSyncState,
+  LyricsLine,
+} from "@forever-jukebox/shared/lyrics";
 import { useLyricsSync } from "../../hooks/useLyricsSync";
 import {
   adjustLyricsOffset,
@@ -190,6 +194,62 @@ export function LyricsKaraokeBar() {
     return null;
   }
 
+  const renderBackgroundVocals = (
+    line: LyricsLine,
+    bgStates: readonly LyricsBackgroundSyncState[],
+    variant: "jukebox" | "canon",
+  ) => {
+    const bgList = line.backgroundVocals;
+    if (!bgList || bgList.length === 0) {
+      return null;
+    }
+    if (variant === "canon") {
+      return (
+        <span className="lyrics-karaoke-lane-bg">
+          {"("}
+          {bgList.map((bg, idx) => {
+            const bgState = bgStates[idx];
+            return (
+              <span
+                key={idx}
+                className={`lyrics-karaoke-bg-phrase${bgState?.isActive ? " is-bg-active" : ""}`}
+              >
+                {idx > 0 ? " " : null}
+                {renderSyncedLyricsLine(
+                  bg,
+                  bgState?.activeSyllableIndex ?? -1,
+                  bgState?.activeSyllableProgress ?? 0,
+                  useRomanized,
+                )}
+              </span>
+            );
+          })}
+          {")"}
+        </span>
+      );
+    }
+    return (
+      <div className="lyrics-karaoke-bg">
+        {bgList.map((bg, idx) => {
+          const bgState = bgStates[idx];
+          return (
+            <span
+              key={idx}
+              className={`lyrics-karaoke-bg-phrase${bgState?.isActive ? " is-bg-active" : ""}`}
+            >
+              {renderSyncedLyricsLine(
+                bg,
+                bgState?.activeSyllableIndex ?? -1,
+                bgState?.activeSyllableProgress ?? 0,
+                useRomanized,
+              )}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderPrimaryLine = () => {
     if (lyricsStatus === "loading") {
       return <span className="lyrics-karaoke-status">{t("lyrics.loading")}</span>;
@@ -232,6 +292,11 @@ export function LyricsKaraokeBar() {
                 row1SylProgress,
                 useRomanized,
               )}
+              {renderBackgroundVocals(
+                row1Line,
+                sync.canonizer.main.backgroundStates,
+                "canon",
+              )}
             </span>
           </div>
         );
@@ -259,15 +324,19 @@ export function LyricsKaraokeBar() {
 
     if (row1Line) {
       return (
-        <div
-          key={`jukebox-${row1Index}`}
-          className="lyrics-karaoke-line lyrics-karaoke-active"
-        >
-          {renderSyncedLyricsLine(
+        <div key={`jukebox-${row1Index}`} className="lyrics-karaoke-active-group">
+          <div className="lyrics-karaoke-line lyrics-karaoke-active">
+            {renderSyncedLyricsLine(
+              row1Line,
+              row1SylIndex,
+              row1SylProgress,
+              useRomanized,
+            )}
+          </div>
+          {renderBackgroundVocals(
             row1Line,
-            row1SylIndex,
-            row1SylProgress,
-            useRomanized,
+            sync.karaoke.backgroundStates,
+            "jukebox",
           )}
         </div>
       );
@@ -322,6 +391,11 @@ export function LyricsKaraokeBar() {
                   sync.canonizer.other.activeSyllableIndex,
                   sync.canonizer.other.activeSyllableProgress,
                   useRomanized,
+                )}
+                {renderBackgroundVocals(
+                  row2CanonLine,
+                  sync.canonizer.other.backgroundStates,
+                  "canon",
                 )}
               </span>
             </div>

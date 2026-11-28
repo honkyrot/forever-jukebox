@@ -267,6 +267,54 @@ describe("LyricsKaraokeBar", () => {
     expect(bar.querySelector(".is-canon-other-lane .is-canonizer-other-exit")).toBeNull();
   });
 
+  it("keeps Blue and Green in separate lanes with independent syllable sweep when offset within the same line", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Syllable",
+        Content: [
+          {
+            Type: "Vocal",
+            Lead: {
+              StartTime: 4.0,
+              EndTime: 6.0,
+              Syllables: [
+                { Text: "Wait", IsPartOfWord: false, StartTime: 4.0, EndTime: 5.0 },
+                { Text: "here", IsPartOfWord: false, StartTime: 5.0, EndTime: 6.0 },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    h.canonizerCursor = { mainSeconds: 5.2, otherSeconds: 4.5, inUnison: false };
+
+    act(() => {
+      useAppStore.setState({
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "autocanonizer",
+        autocanonizerMixEnabled: false,
+        lyricsKaraokeEnabled: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        isRunning: true,
+      });
+    });
+
+    render(<LyricsKaraokeBar />);
+    const bar = document.getElementById("lyrics-karaoke-bar")!;
+    const mainLane = bar.querySelector(".lyrics-karaoke-current .lyrics-voice-main");
+    const otherLane = bar.querySelector(".is-canon-other-lane .lyrics-voice-other");
+    expect(mainLane).not.toBeNull();
+    expect(otherLane).not.toBeNull();
+    expect(bar.querySelectorAll(".lyrics-voice-main .lyrics-voice-dot")).toHaveLength(1);
+
+    const mainSyllables = mainLane!.querySelectorAll(".lyrics-syllable");
+    const otherSyllables = otherLane!.querySelectorAll(".lyrics-syllable");
+    expect((mainSyllables[0] as HTMLElement).style.getPropertyValue("--syllable-progress")).toBe("100%");
+    expect((otherSyllables[0] as HTMLElement).style.getPropertyValue("--syllable-progress")).toBe("50%");
+  });
+
   it("renders romanized active syllables and preview lines when romanization is enabled", () => {
     const lyrics = normalizeSpicyLyrics({
       Body: {
@@ -345,6 +393,61 @@ describe("LyricsKaraokeBar", () => {
     expect(bar.querySelector(".lyrics-karaoke-active")?.textContent).toBe("Hoshi miru");
     expect(bar.querySelectorAll(".lyrics-karaoke-active .lyrics-word")).toHaveLength(2);
     expect(bar.querySelector(".lyrics-karaoke-next-line")?.textContent).toBe("Yoru ni");
+  });
+
+  it("renders concurrent background vocals with independent syllable progress in the karaoke bar", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Syllable",
+        Content: [
+          {
+            Type: "Vocal",
+            Lead: {
+              StartTime: 4.0,
+              EndTime: 6.5,
+              Syllables: [
+                { Text: "I", IsPartOfWord: false, StartTime: 4.0, EndTime: 4.5 },
+                { Text: "banged", IsPartOfWord: false, StartTime: 4.5, EndTime: 5.5 },
+                { Text: "drums", IsPartOfWord: false, StartTime: 5.5, EndTime: 6.5 },
+              ],
+            },
+            Background: [
+              {
+                StartTime: 4.0,
+                EndTime: 6.5,
+                Syllables: [
+                  { Text: "威", IsPartOfWord: true, StartTime: 4.0, EndTime: 5.0 },
+                  { Text: "武", IsPartOfWord: false, StartTime: 5.0, EndTime: 6.5 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    h.playbackTime = 4.5;
+    act(() => {
+      useAppStore.setState({
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "jukebox",
+        multiTrackEnabled: false,
+        lyricsKaraokeEnabled: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        lyricsOffsetSec: 0,
+      });
+    });
+
+    render(<LyricsKaraokeBar />);
+    const bar = document.getElementById("lyrics-karaoke-bar")!;
+    expect(bar.querySelector(".lyrics-karaoke-active")?.textContent).toBe("I banged drums");
+    const bgEl = bar.querySelector(".lyrics-karaoke-bg-phrase");
+    expect(bgEl?.textContent).toBe("威武");
+    expect(bgEl?.classList.contains("is-bg-active")).toBe(true);
+    const bgSyllables = bgEl?.querySelectorAll(".lyrics-syllable");
+    expect(bgSyllables).toHaveLength(2);
+    expect((bgSyllables?.[0] as HTMLElement).style.getPropertyValue("--syllable-progress")).toBe("50%");
   });
 
   it("hides outside supported modes", () => {

@@ -384,6 +384,13 @@ export function LyricsPanel() {
                   ? sync.canonizer.main.activeSyllableProgress
                   : sync.canonizer.other.activeSyllableProgress
                 : sync.karaoke.activeSyllableProgress;
+              const activeBgStates = isActive
+                ? isCanonizer
+                  ? isMain
+                    ? sync.canonizer.main.backgroundStates
+                    : sync.canonizer.other.backgroundStates
+                  : sync.karaoke.backgroundStates
+                : [];
 
               return (
                 <button
@@ -409,15 +416,39 @@ export function LyricsPanel() {
                       {isOther ? <span className="lyrics-voice-dot is-other" /> : null}
                     </span>
                   ) : null}
-                  <span>
-                    {isActive
-                      ? renderSyncedLyricsLine(
-                          line,
-                          activeSylIndex,
-                          activeSylProgress,
-                          useRomanized,
-                        )
-                      : getDisplayLineText(line, useRomanized)}
+                  <span className="lyrics-panel-line-content">
+                    <span className="lyrics-panel-lead">
+                      {isActive
+                        ? renderSyncedLyricsLine(
+                            line,
+                            activeSylIndex,
+                            activeSylProgress,
+                            useRomanized,
+                          )
+                        : getDisplayLineText(line, useRomanized)}
+                    </span>
+                    {line.backgroundVocals && line.backgroundVocals.length > 0 ? (
+                      <span className="lyrics-panel-bg-group">
+                        {line.backgroundVocals.map((bg, bgIdx) => {
+                          const bgState = activeBgStates[bgIdx];
+                          return (
+                            <span
+                              key={bgIdx}
+                              className={`lyrics-panel-bg${bgState?.isActive ? " is-bg-active" : ""}`}
+                            >
+                              {isActive
+                                ? renderSyncedLyricsLine(
+                                    bg,
+                                    bgState?.activeSyllableIndex ?? -1,
+                                    bgState?.activeSyllableProgress ?? 0,
+                                    useRomanized,
+                                  )
+                                : getDisplayLineText(bg, useRomanized)}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               );

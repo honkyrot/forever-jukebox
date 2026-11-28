@@ -279,7 +279,10 @@ class AutocanonizerPlayer {
       this.otherSource && this.otherBeatGain > 0
         ? clampTime(now - this.otherDeltaTime, otherBuf.duration)
         : null;
-    const inUnison = !secondaryOnly && this.currentBeat.other === this.currentBeat;
+    const inUnison =
+      !secondaryOnly &&
+      this.currentBeat.other === this.currentBeat &&
+      otherSeconds !== null;
     return { mainSeconds, otherSeconds, inUnison };
   }
 

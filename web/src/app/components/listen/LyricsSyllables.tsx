@@ -9,11 +9,19 @@ interface SyllableWordGroup {
   }>;
 }
 
+export type SyncedVocalLine = Pick<
+  LyricsLine,
+  "text" | "transliteratedText" | "syllables"
+>;
+
 /**
  * Returns the line text in either romanized form (when requested and available)
  * or its original script.
  */
-export function getDisplayLineText(line: LyricsLine, romanized = false): string {
+export function getDisplayLineText(
+  line: SyncedVocalLine,
+  romanized = false,
+): string {
   if (romanized && line.transliteratedText) {
     return line.transliteratedText;
   }
@@ -27,7 +35,7 @@ export function getDisplayLineText(line: LyricsLine, romanized = false): string 
  * is true so romanized word boundaries are preserved accurately.
  */
 function groupSyllablesIntoWords(
-  line: LyricsLine,
+  line: SyncedVocalLine,
   activeSyllableIndex: number,
   activeSyllableProgress: number,
   romanized = false,
@@ -87,7 +95,7 @@ function groupSyllablesIntoWords(
  * syllable tokens (or per-syllable transliterations in romanized mode) are absent.
  */
 export function renderSyncedLyricsLine(
-  line: LyricsLine,
+  line: SyncedVocalLine,
   activeSyllableIndex: number,
   activeSyllableProgress: number,
   romanized = false,

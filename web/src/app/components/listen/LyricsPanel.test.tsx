@@ -288,4 +288,64 @@ describe("LyricsPanel", () => {
     expect(panel.textContent).toContain("English only");
     expect(useAppStore.getState().lyricsRomanizationEnabled).toBe(true);
   });
+
+  it("renders concurrent background vocals with independent syllable sweep in the side panel", () => {
+    const lyrics = normalizeSpicyLyrics({
+      Body: {
+        Type: "Syllable",
+        Content: [
+          {
+            Type: "Vocal",
+            Lead: {
+              StartTime: 2.0,
+              EndTime: 4.5,
+              Syllables: [
+                { Text: "I", IsPartOfWord: false, StartTime: 2.0, EndTime: 2.2 },
+                { Text: "banged", IsPartOfWord: false, StartTime: 2.2, EndTime: 2.6 },
+                { Text: "the", IsPartOfWord: false, StartTime: 2.6, EndTime: 2.8 },
+                { Text: "drums", IsPartOfWord: false, StartTime: 2.8, EndTime: 4.5 },
+              ],
+            },
+            Background: [
+              {
+                StartTime: 2.0,
+                EndTime: 4.5,
+                Syllables: [
+                  { Text: "威", IsPartOfWord: true, StartTime: 2.0, EndTime: 3.0 },
+                  { Text: "武", IsPartOfWord: false, StartTime: 3.0, EndTime: 4.5 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    h.playbackTime = 2.5;
+    act(() => {
+      useAppStore.setState({
+        activeTabId: "play",
+        appConfig: { allow_user_upload: false, allow_user_url: false, allow_lyrics: true },
+        playMode: "jukebox",
+        multiTrackEnabled: false,
+        audioLoaded: true,
+        analysisLoaded: true,
+        lyricsPanelOpen: true,
+        lyricsStatus: "loaded",
+        lyricsData: lyrics,
+        lyricsOffsetSec: 0,
+      });
+    });
+
+    render(<LyricsPanel />);
+    const panel = document.getElementById("lyrics-side-panel")!;
+    const leadEl = panel.querySelector(".lyrics-panel-line.is-active .lyrics-panel-lead");
+    const bgEl = panel.querySelector(".lyrics-panel-line.is-active .lyrics-panel-bg");
+    expect(leadEl?.textContent).toBe("I banged the drums");
+    expect(bgEl?.textContent).toBe("威武");
+    expect(bgEl?.classList.contains("is-bg-active")).toBe(true);
+    const bgSyllables = bgEl?.querySelectorAll(".lyrics-syllable");
+    expect(bgSyllables).toHaveLength(2);
+    expect((bgSyllables?.[0] as HTMLElement).style.getPropertyValue("--syllable-progress")).toBe("50%");
+  });
 });

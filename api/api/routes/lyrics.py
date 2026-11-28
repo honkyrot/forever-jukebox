@@ -83,11 +83,17 @@ def get_job_lyrics(
                 resolved_duration = float(track_meta["duration"])
 
     try:
+        youtube_id = (
+            getattr(job, "source_id", None)
+            if getattr(job, "source_provider", None) == "youtube"
+            else None
+        )
         resolved = resolve_track_lyrics(
             api_key,
             title=job.track_title,
             artist=job.track_artist,
             duration=resolved_duration,
+            youtube_id=youtube_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

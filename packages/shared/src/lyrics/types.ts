@@ -9,6 +9,20 @@ export interface LyricsSyllable {
   transliteratedIsPartOfWord?: boolean;
 }
 
+export interface LyricsBackgroundVocal {
+  text: string;
+  transliteratedText?: string;
+  startTime: number | null;
+  endTime: number | null;
+  syllables?: LyricsSyllable[];
+}
+
+export interface LyricsBackgroundSyncState {
+  isActive: boolean;
+  activeSyllableIndex: number;
+  activeSyllableProgress: number;
+}
+
 export interface LyricsLine {
   index: number;
   text: string;
@@ -18,6 +32,7 @@ export interface LyricsLine {
   oppositeAligned?: boolean;
   syllables?: LyricsSyllable[];
   backgroundText?: string;
+  backgroundVocals?: LyricsBackgroundVocal[];
 }
 
 export interface NormalizedLyrics {
@@ -38,6 +53,7 @@ export interface KaraokeDisplayState {
   activeLineIndex: number;
   activeSyllableIndex: number;
   activeSyllableProgress: number;
+  backgroundStates: LyricsBackgroundSyncState[];
   nextLine: LyricsLine | null;
   nextLineIndex: number;
   nextLineVisible: boolean;
@@ -50,6 +66,7 @@ export interface LyricsVoiceCursor {
   activeLineIndex: number;
   activeSyllableIndex: number;
   activeSyllableProgress: number;
+  backgroundStates: LyricsBackgroundSyncState[];
   upcomingLine: LyricsLine | null;
   upcomingLineIndex: number;
   upcomingLineVisible: boolean;

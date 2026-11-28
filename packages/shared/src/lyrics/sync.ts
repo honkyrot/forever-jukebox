@@ -2,6 +2,7 @@ import type { PredictedJump, QuantumBase } from "../engine/types";
 import type {
   AutocanonizerLyricsState,
   KaraokeDisplayState,
+  LyricsBackgroundSyncState,
   LyricsLine,
   LyricsVoiceCursor,
   NormalizedLyrics,
@@ -108,10 +109,10 @@ export function findNextLineIndex(
 
 /**
  * Computes the active syllable index and `[0, 1]` sweep progress within that
- * syllable for a `Syllable`-timed line.
+ * syllable for a `Syllable`-timed vocal group.
  */
 export function resolveSyllableProgress(
-  line: LyricsLine,
+  line: Pick<LyricsLine, "syllables">,
   timeSec: number,
 ): { activeSyllableIndex: number; progress: number } {
   const syllables = line.syllables;
@@ -160,12 +161,39 @@ const EMPTY_KARAOKE_STATE: KaraokeDisplayState = {
   activeLineIndex: -1,
   activeSyllableIndex: -1,
   activeSyllableProgress: 0,
+  backgroundStates: [],
   nextLine: null,
   nextLineIndex: -1,
   nextLineVisible: false,
   isBranchPreview: false,
   branchBeatsRemaining: null,
 };
+
+/**
+ * Resolves syllable progress and active window status for each concurrent
+ * `Background` vocal phrase attached to `line`.
+ */
+function resolveBackgroundStates(
+  line: LyricsLine | null,
+  timeSec: number,
+): LyricsBackgroundSyncState[] {
+  if (!line?.backgroundVocals || line.backgroundVocals.length === 0) {
+    return [];
+  }
+  return line.backgroundVocals.map((bg) => {
+    const { activeSyllableIndex, progress } = resolveSyllableProgress(bg, timeSec);
+    const isActive =
+      bg.startTime !== null && bg.endTime !== null
+        ? timeSec >= bg.startTime && timeSec <= bg.endTime
+        : activeSyllableIndex >= 0 &&
+          activeSyllableIndex < (bg.syllables?.length ?? 0);
+    return {
+      isActive,
+      activeSyllableIndex,
+      activeSyllableProgress: progress,
+    };
+  });
+}
 
 /**
  * Resolves the two-line karaoke display state for the current playback cursor,
@@ -196,6 +224,7 @@ export function resolveKaraokeState(
   const { activeSyllableIndex, progress: activeSyllableProgress } = activeLine
     ? resolveSyllableProgress(activeLine, adjustedTime)
     : { activeSyllableIndex: -1, progress: 0 };
+  const backgroundStates = resolveBackgroundStates(activeLine, adjustedTime);
 
   const linearNextIndex =
     activeLineIndex >= 0
@@ -263,6 +292,7 @@ export function resolveKaraokeState(
             activeLineIndex,
             activeSyllableIndex,
             activeSyllableProgress,
+            backgroundStates,
             nextLine: lyrics.lines[destActiveIndex],
             nextLineIndex: destActiveIndex,
             nextLineVisible: true,
@@ -283,6 +313,7 @@ export function resolveKaraokeState(
               activeLineIndex,
               activeSyllableIndex,
               activeSyllableProgress,
+              backgroundStates,
               nextLine: lyrics.lines[destNextIndex],
               nextLineIndex: destNextIndex,
               nextLineVisible: true,
@@ -298,6 +329,7 @@ export function resolveKaraokeState(
           activeLineIndex,
           activeSyllableIndex,
           activeSyllableProgress,
+          backgroundStates,
           nextLine: null,
           nextLineIndex: -1,
           nextLineVisible: false,
@@ -320,6 +352,7 @@ export function resolveKaraokeState(
     activeLineIndex,
     activeSyllableIndex,
     activeSyllableProgress,
+    backgroundStates,
     nextLine,
     nextLineIndex: linearNextIndex,
     nextLineVisible,
@@ -333,6 +366,7 @@ const EMPTY_VOICE_CURSOR: LyricsVoiceCursor = {
   activeLineIndex: -1,
   activeSyllableIndex: -1,
   activeSyllableProgress: 0,
+  backgroundStates: [],
   upcomingLine: null,
   upcomingLineIndex: -1,
   upcomingLineVisible: false,
@@ -379,6 +413,7 @@ function resolveVoiceCursor(
       activeLineIndex,
       activeSyllableIndex,
       activeSyllableProgress,
+      backgroundStates: resolveBackgroundStates(activeLine, adjusted),
       upcomingLine: null,
       upcomingLineIndex: -1,
       upcomingLineVisible: false,
@@ -399,6 +434,7 @@ function resolveVoiceCursor(
     activeLineIndex: -1,
     activeSyllableIndex: -1,
     activeSyllableProgress: 0,
+    backgroundStates: [],
     upcomingLine,
     upcomingLineIndex,
     upcomingLineVisible,
@@ -426,20 +462,20 @@ export function resolveAutocanonizerLyricsState(
   }
 
   const main = resolveVoiceCursor(lyrics, mainTimeSec, offsetSec, leadInSec);
-  const other = inUnison
+  const exactUnison = Boolean(inUnison);
+  const other = exactUnison
     ? main
     : resolveVoiceCursor(lyrics, otherTimeSec, offsetSec, leadInSec);
-  const sameLine =
-    Boolean(inUnison) ||
-    (main.activeLineIndex >= 0 &&
-      main.activeLineIndex === other.activeLineIndex);
 
   const primaryCursor = mainTimeSec !== null ? main : other;
 
+  // Keep offset voices inside the same lyric line in separate lanes unless the
+  // controller reports true beat unison (`inUnison`), so their staggered timing
+  // remains visible.
   return {
     main,
     other,
-    inUnison: sameLine,
+    inUnison: exactUnison,
     fallbackNextLine: primaryCursor.upcomingLine,
     fallbackNextLineIndex: primaryCursor.upcomingLineIndex,
     fallbackNextLineVisible: primaryCursor.upcomingLineVisible,

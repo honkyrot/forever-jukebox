@@ -66,8 +66,57 @@ describe("normalizeSpicyLyrics", () => {
     expect(normalized?.lines).toHaveLength(1);
     expect(normalized?.lines[0].text).toBe("Mum-mum-mah yeah");
     expect(normalized?.lines[0].backgroundText).toBe("ooh");
+    expect(normalized?.lines[0].backgroundVocals).toHaveLength(1);
+    expect(normalized?.lines[0].backgroundVocals?.[0].syllables?.[0].text).toBe("ooh");
     expect(normalized?.lines[0].syllables).toHaveLength(4);
     expect(normalized?.lines[0].syllables?.[0].isPartOfWord).toBe(true);
+  });
+
+  it("extends line span and syncs concurrent Background vocals even after Lead syllables finish", () => {
+    const normalized = normalizeSpicyLyrics({
+      Body: {
+        Type: "Syllable",
+        Content: [
+          {
+            Type: "Vocal",
+            Lead: {
+              StartTime: 109.585,
+              EndTime: 113.059,
+              Syllables: [
+                { Text: "De", IsPartOfWord: true, StartTime: 109.585, EndTime: 109.8 },
+                { Text: "mand", IsPartOfWord: true, StartTime: 109.85, EndTime: 110.2 },
+                { Text: "ing", IsPartOfWord: false, StartTime: 110.2, EndTime: 113.059 },
+              ],
+            },
+            Background: [
+              {
+                StartTime: 109.85,
+                EndTime: 114.365,
+                Syllables: [
+                  { Text: "威", IsPartOfWord: true, StartTime: 109.85, EndTime: 111.73 },
+                  { Text: "武", IsPartOfWord: false, StartTime: 111.73, EndTime: 114.365 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })!;
+
+    expect(normalized.lines[0].startTime).toBe(109.585);
+    expect(normalized.lines[0].endTime).toBe(114.365);
+
+    const state = resolveKaraokeState({
+      lyrics: normalized,
+      playbackTimeSec: 113.5,
+      beats: [],
+      currentBeatIndex: -1,
+    });
+    expect(state.activeLineIndex).toBe(0);
+    expect(state.backgroundStates).toHaveLength(1);
+    expect(state.backgroundStates[0].isActive).toBe(true);
+    expect(state.backgroundStates[0].activeSyllableIndex).toBe(1);
+    expect(state.backgroundStates[0].activeSyllableProgress).toBeGreaterThan(0.5);
   });
 
   it("normalizes Line lyrics and infers missing EndTime from the next line", () => {
@@ -448,6 +497,19 @@ describe("lyrics sync & branch-aware karaoke", () => {
     expect(resting.other.activeLine).toBeNull();
     expect(resting.other.upcomingLine?.text).toBe("Branch target");
     expect(resting.other.upcomingLineVisible).toBe(true);
+
+    // Offset voices overlapping inside the same lyric line must remain separate (not unison).
+    const offsetSameLine = resolveAutocanonizerLyricsState({
+      lyrics: sample,
+      mainTimeSec: 4.8,
+      otherTimeSec: 4.2,
+      inUnison: false,
+    });
+    expect(offsetSameLine.inUnison).toBe(false);
+    expect(offsetSameLine.main.activeLineIndex).toBe(0);
+    expect(offsetSameLine.other.activeLineIndex).toBe(0);
+    expect(offsetSameLine.main.activeSyllableProgress).toBeCloseTo(0.8);
+    expect(offsetSameLine.other.activeSyllableProgress).toBeCloseTo(0.2);
 
     // Finish-out tail: mainTimeSec is null while Canon continues.
     const tail = resolveAutocanonizerLyricsState({

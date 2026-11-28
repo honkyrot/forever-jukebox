@@ -3610,7 +3610,7 @@ body.theme-light .viz-bpm.is-bpm-changed {
   height: 86px;
   flex: 0 0 86px;
   overflow: hidden;
-  padding: 10px 92px 10px 20px;
+  padding: 6px 92px 6px 20px;
   background: linear-gradient(
     to bottom,
     transparent,
@@ -3626,7 +3626,7 @@ body.theme-light .viz-bpm.is-bpm-changed {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 3px;
   width: 100%;
   min-width: 0;
   max-width: min(860px, 100%);
@@ -3636,10 +3636,12 @@ body.theme-light .viz-bpm.is-bpm-changed {
 .lyrics-karaoke-current {
   position: relative;
   width: 100%;
-  height: 34px;
+  height: 46px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 1px;
   font-size: clamp(16px, 2vw, 22px);
   font-weight: 600;
   line-height: 1.3;
@@ -3654,8 +3656,40 @@ body.theme-light .viz-bpm.is-bpm-changed {
   text-overflow: ellipsis;
 }
 
-.lyrics-karaoke-active {
+.lyrics-karaoke-active-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
   animation: lyrics-push-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lyrics-karaoke-bg {
+  font-size: clamp(11px, 1.3vw, 13px);
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--muted);
+  opacity: 0.78;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: inline-flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.lyrics-karaoke-bg-phrase.is-bg-active {
+  opacity: 1;
+}
+
+.lyrics-karaoke-lane-bg {
+  margin-left: 8px;
+  font-size: 0.72em;
+  font-weight: 500;
+  opacity: 0.82;
 }
 
 .lyrics-karaoke-exiting {
@@ -4105,6 +4139,35 @@ body.theme-light .viz-bpm.is-bpm-changed {
   justify-content: flex-end;
 }
 
+.lyrics-panel-line-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.lyrics-panel-line.is-opposite .lyrics-panel-line-content {
+  align-items: flex-end;
+}
+
+.lyrics-panel-bg-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lyrics-panel-bg {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0.72;
+}
+
+.lyrics-panel-bg.is-bg-active {
+  opacity: 0.96;
+}
+
 .lyrics-panel-line.is-active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text);
@@ -4325,7 +4388,7 @@ body.theme-light .viz-bpm.is-bpm-changed {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lyrics-karaoke-active,
+  .lyrics-karaoke-active-group,
   .lyrics-karaoke-exiting,
   .lyrics-karaoke-next-line,
   .lyrics-karaoke-lane-line.is-lane-preview {

@@ -149,6 +149,133 @@ class LyricsResolutionTests(unittest.TestCase):
         self.assertEqual(calls[1]["artist"], "Hourhand")
         self.assertEqual(calls[1]["title"], "Suzie")
 
+    def test_prefers_syllable_sync_over_line_sync_within_same_tier(self) -> None:
+        fetched: list[str] = []
+
+        def handler(url: str, params, headers):
+            if url.endswith("/tracks/search"):
+                return _FakeResponse(
+                    200,
+                    {
+                        "Body": {
+                            "results": [
+                                {
+                                    "id": "single-line-id",
+                                    "title": "Iron Lotus",
+                                    "artists": ["Mili"],
+                                    "duration": 237.85,
+                                    "tier": "exact",
+                                    "variants": [],
+                                },
+                                {
+                                    "id": "album-syllable-id",
+                                    "title": "Iron Lotus",
+                                    "artists": ["Mili"],
+                                    "duration": 240.092,
+                                    "tier": "exact",
+                                    "variants": [],
+                                },
+                                {
+                                    "id": "version-id",
+                                    "title": "Iron Lotus - Key Ingredient ver.",
+                                    "artists": ["Mili"],
+                                    "duration": 234.812,
+                                    "tier": "version",
+                                    "variants": [],
+                                },
+                            ]
+                        }
+                    },
+                )
+            track_id = url.rsplit("/", 1)[-1]
+            fetched.append(track_id)
+            if track_id == "single-line-id":
+                return _FakeResponse(
+                    200,
+                    {
+                        "Body": {
+                            "Type": "Line",
+                            "source": "apple_music",
+                            "Content": [{"Type": "Vocal", "Text": "Line", "StartTime": 1.0}],
+                        }
+                    },
+                )
+            if track_id == "album-syllable-id":
+                return _FakeResponse(
+                    200,
+                    {
+                        "Body": {
+                            "Type": "Syllable",
+                            "source": "spicy_lyrics",
+                            "Content": [],
+                        }
+                    },
+                )
+            raise AssertionError(f"Should not probe lower tier candidate {track_id}")
+
+        fake_client = _FakeHttpClient(handler)
+        with patch.object(lyrics_service, "get_client", return_value=fake_client):
+            result = lyrics_service.resolve_track_lyrics(
+                "sl_pk_secret",
+                title="Iron Lotus",
+                artist="Mili",
+                duration=238.0,
+            )
+
+        self.assertEqual(result["status"], "found")
+        self.assertEqual(result["track_id"], "album-syllable-id")
+        self.assertEqual(result["lyrics"]["Type"], "Syllable")
+        self.assertEqual(fetched, ["single-line-id", "album-syllable-id"])
+
+    def test_promotes_candidate_matching_youtube_id(self) -> None:
+        def handler(url: str, params, headers):
+            if url.endswith("/tracks/search"):
+                return _FakeResponse(
+                    200,
+                    {
+                        "Body": {
+                            "results": [
+                                {
+                                    "id": "other-release",
+                                    "ids": {"youtube": "other123"},
+                                    "title": "Iron Lotus",
+                                    "artists": ["Mili"],
+                                    "duration": 239.9,
+                                    "tier": "exact",
+                                    "variants": [],
+                                },
+                                {
+                                    "id": "yt-release",
+                                    "ids": {"youtube": "XvnbBx9hb60"},
+                                    "title": "Iron Lotus",
+                                    "artists": ["Mili"],
+                                    "duration": 240.1,
+                                    "tier": "exact",
+                                    "variants": [],
+                                },
+                            ]
+                        }
+                    },
+                )
+            track_id = url.rsplit("/", 1)[-1]
+            return _FakeResponse(
+                200,
+                {"Body": {"Type": "Syllable", "source": "spicy_lyrics", "id": track_id, "Content": []}},
+            )
+
+        fake_client = _FakeHttpClient(handler)
+        with patch.object(lyrics_service, "get_client", return_value=fake_client):
+            result = lyrics_service.resolve_track_lyrics(
+                "sl_pk_secret",
+                title="Iron Lotus",
+                artist="Mili",
+                duration=240.0,
+                youtube_id="XvnbBx9hb60",
+            )
+
+        self.assertEqual(result["status"], "found")
+        self.assertEqual(result["track_id"], "yt-release")
+
 
 class LyricsRouteCacheTests(unittest.TestCase):
     def test_returns_503_when_key_missing(self) -> None:

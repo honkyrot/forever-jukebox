@@ -5,6 +5,7 @@ import {
   resolveKaraokeState,
   type AutocanonizerLyricsState,
   type KaraokeDisplayState,
+  type LyricsBackgroundSyncState,
   type LyricsVoiceCursor,
 } from "@forever-jukebox/shared/lyrics";
 import { isLyricsSupportedMode, loadLyricsForCurrentTrack } from "../lyrics";
@@ -16,6 +17,7 @@ const INITIAL_KARAOKE_STATE: KaraokeDisplayState = {
   activeLineIndex: -1,
   activeSyllableIndex: -1,
   activeSyllableProgress: 0,
+  backgroundStates: [],
   nextLine: null,
   nextLineIndex: -1,
   nextLineVisible: false,
@@ -39,6 +41,26 @@ function quantizeProgress(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function backgroundStatesMatch(
+  a: readonly LyricsBackgroundSyncState[],
+  b: readonly LyricsBackgroundSyncState[],
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].isActive !== b[i].isActive ||
+      a[i].activeSyllableIndex !== b[i].activeSyllableIndex ||
+      quantizeProgress(a[i].activeSyllableProgress) !==
+        quantizeProgress(b[i].activeSyllableProgress)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function karaokeStatesMatch(
   a: KaraokeDisplayState,
   b: KaraokeDisplayState,
@@ -48,6 +70,7 @@ function karaokeStatesMatch(
     a.activeSyllableIndex === b.activeSyllableIndex &&
     quantizeProgress(a.activeSyllableProgress) ===
       quantizeProgress(b.activeSyllableProgress) &&
+    backgroundStatesMatch(a.backgroundStates, b.backgroundStates) &&
     a.nextLineIndex === b.nextLineIndex &&
     a.nextLineVisible === b.nextLineVisible &&
     a.isBranchPreview === b.isBranchPreview &&
@@ -63,6 +86,7 @@ function voiceCursorsMatch(a: LyricsVoiceCursor, b: LyricsVoiceCursor): boolean 
     a.activeSyllableIndex === b.activeSyllableIndex &&
     quantizeProgress(a.activeSyllableProgress) ===
       quantizeProgress(b.activeSyllableProgress) &&
+    backgroundStatesMatch(a.backgroundStates, b.backgroundStates) &&
     a.activeLine === b.activeLine &&
     a.upcomingLineIndex === b.upcomingLineIndex &&
     a.upcomingLineVisible === b.upcomingLineVisible &&
